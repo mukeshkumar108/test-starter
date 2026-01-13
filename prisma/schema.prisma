@@ -14,10 +14,112 @@ datasource db {
   directUrl = env("POSTGRES_URL_NON_POOLING")
 }
 
+enum MessageRole {
+  user
+  assistant
+}
+
+enum MemoryType {
+  PROFILE
+  PEOPLE  
+  PROJECT
+  OPEN_LOOP
+}
+
 model User {
   id          String   @id @default(cuid())
   clerkUserId String   @unique
   email       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  
+  userSeed      UserSeed?
+  messages      Message[]
+  memories      Memory[]
+  summarySpines SummarySpine[]
+  sessionStates SessionState[]
+}
+
+model PersonaProfile {
+  id          String @id @default(cuid())
+  slug        String @unique
+  name        String
+  description String
+  promptPath  String
+  llmModel    String
+  ttsVoiceId  String
+  language    String @default("en")
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  
+  sessionStates SessionState[]
+}
+
+model UserSeed {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SessionState {
+  id        String   @id @default(cuid())
+  userId    String
+  personaId String
+  state     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  persona PersonaProfile @relation(fields: [personaId], references: [id])
+  
+  @@unique([userId, personaId])
+}
+
+model Message {
+  id         String      @id @default(cuid())
+  userId     String
+  personaId  String?
+  role       MessageRole
+  content    String
+  audioUrl   String?
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, createdAt])
+}
+
+model Memory {
+  id          String                         @id @default(cuid())
+  userId      String
+  type        MemoryType
+  content     String
+  embedding   Unsupported("vector(1536)")?
+  metadata    Json?
+  createdAt   DateTime                       @default(now())
+  updatedAt   DateTime                       @updatedAt
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, type])
+}
+
+model SummarySpine {
+  id              String   @id @default(cuid())
+  userId          String
+  conversationId  String   @default("default")
+  version         Int      @default(1)
+  content         String
+  messageCount    Int
+  createdAt       DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, conversationId, version])
+  @@index([userId, conversationId])
 }

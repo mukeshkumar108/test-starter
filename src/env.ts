@@ -12,6 +12,13 @@ const envSchema = z.object({
   POSTGRES_URL_NON_POOLING: z.string().min(1),
   BLOB_READ_WRITE_TOKEN: z.string().min(1),
   CLERK_WEBHOOK_SECRET: z.string().min(1),
+  
+  // Voice pipeline
+  OPENROUTER_API_KEY: z.string().min(1),
+  ELEVENLABS_API_KEY: z.string().min(1),
+  ELEVENLABS_DEFAULT_VOICE_ID: z.string().min(1),
+  LEMONFOX_API_KEY: z.string().min(1),
+  OPENAI_API_KEY: z.string().min(1), // For embeddings
 });
 
 export const env = envSchema.parse(process.env);
