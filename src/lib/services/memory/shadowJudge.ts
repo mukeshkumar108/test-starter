@@ -66,11 +66,13 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
 
 async function extractMemories(userMessage: string, assistantResponse: string) {
   try {
+    const requestId = crypto.randomUUID();
     const prompt = `Analyze this conversation exchange and extract any memories that should be stored.
 
 User: ${userMessage}
 Assistant: ${assistantResponse}
 
+Return ONLY valid JSON. Do not include any commentary, markdown, code fences, or extra text.
 Extract memories in JSON format:
 {
   "memories": [
@@ -103,7 +105,29 @@ Only extract clear, factual information. Return empty array if nothing significa
     if (!response.ok) return [];
 
     const data = await response.json();
-    const result = JSON.parse(data.choices?.[0]?.message?.content || '{"memories": []}');
+    const content = data.choices?.[0]?.message?.content ?? "";
+    let result: { memories?: any[] } | null = null;
+
+    try {
+      result = JSON.parse(content);
+    } catch {
+      const start = content.indexOf("{");
+      const end = content.lastIndexOf("}");
+      if (start !== -1 && end !== -1 && end > start) {
+        const slice = content.slice(start, end + 1);
+        try {
+          result = JSON.parse(slice);
+        } catch {
+          const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
+          console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
+          return [];
+        }
+      } else {
+        const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
+        console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
+        return [];
+      }
+    }
     
     return result.memories || [];
   } catch (error) {
