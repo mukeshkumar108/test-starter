@@ -66,6 +66,16 @@ export default function AppPage() {
             setVoiceState("idle");
             return;
           }
+          if (data?.error === "Audio too short") {
+            setError("Try holding the mic a bit longer.");
+            setVoiceState("idle");
+            return;
+          }
+          if (data?.error === "No speech detected") {
+            setError("I couldn’t hear you—try again in a quieter spot.");
+            setVoiceState("idle");
+            return;
+          }
         }
         throw new Error("Chat request failed");
       }

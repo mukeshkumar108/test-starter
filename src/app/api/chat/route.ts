@@ -58,6 +58,13 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    const minAudioBytes = parseInt(process.env.MIN_AUDIO_BYTES ?? "8000", 10);
+    if (audioFile.size < minAudioBytes) {
+      return NextResponse.json(
+        { error: "Audio too short", requestId },
+        { status: 400 }
+      );
+    }
 
     // Verify persona exists
     const persona = await prisma.personaProfile.findUnique({
@@ -79,7 +86,7 @@ export async function POST(request: NextRequest) {
     const sttResult = await transcribeAudio(audioFile);
     stt_ms = sttResult.duration_ms;
 
-    if (!sttResult.transcript.trim()) {
+    if (!sttResult.transcript || sttResult.transcript.trim().length < 2) {
       return NextResponse.json(
         { error: "No speech detected", requestId },
         { status: 400 }
