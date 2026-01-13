@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { MemoryType } from "@prisma/client";
 import { MODELS } from "@/lib/providers/models";
 import { env } from "@/env";
 
@@ -12,15 +13,35 @@ interface ShadowProcessingParams {
 
 export async function processShadowPath(params: ShadowProcessingParams): Promise<void> {
   try {
+    const requestId = crypto.randomUUID();
     const { userId, personaId, userMessage, assistantResponse, currentSessionState } = params;
+    const allowedTypes = new Set(Object.values(MemoryType));
 
     // Extract memories using judge model
     const memories = await extractMemories(userMessage, assistantResponse);
 
     // Store memories if any
     if (memories.length > 0) {
+      const normalizedMemories = memories
+        .map((memory) => {
+          const rawType = memory.type ?? "";
+          const normalized = rawType.split("|")[0].trim().toUpperCase();
+          if (!allowedTypes.has(normalized as MemoryType)) {
+            if (process.env.NODE_ENV !== "production") {
+              console.warn("Shadow memory skipped (invalid type):", {
+                requestId,
+                rawType,
+                normalized,
+              });
+            }
+            return null;
+          }
+          return { ...memory, type: normalized as MemoryType };
+        })
+        .filter((memory) => memory !== null);
+
       await Promise.all(
-        memories.map(memory =>
+        normalizedMemories.map(memory =>
           prisma.memory.create({
             data: {
               userId,
