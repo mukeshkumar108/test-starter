@@ -52,6 +52,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    if (audioFile.size === 0) {
+      return NextResponse.json(
+        { error: "Empty audio", requestId },
+        { status: 400 }
+      );
+    }
 
     // Verify persona exists
     const persona = await prisma.personaProfile.findUnique({

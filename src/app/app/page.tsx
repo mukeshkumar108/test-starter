@@ -59,6 +59,14 @@ export default function AppPage() {
       });
       
       if (!response.ok) {
+        if (response.status === 400) {
+          const data = await response.json().catch(() => null);
+          if (data?.error === "Empty audio") {
+            setError("No audio captured. Try speaking a bit longer.");
+            setVoiceState("idle");
+            return;
+          }
+        }
         throw new Error("Chat request failed");
       }
       
