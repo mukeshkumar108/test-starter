@@ -2,8 +2,9 @@
 
 import { PersonaPicker } from "@/components/persona/PersonaPicker";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export default function PersonaPickerPage() {
+function PersonaPickerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const handlePersonaSelect = (personaId: string) => {
@@ -20,5 +21,13 @@ export default function PersonaPickerPage() {
         />
       </div>
     </div>
+  );
+}
+
+export default function PersonaPickerPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900" />}>
+      <PersonaPickerContent />
+    </Suspense>
   );
 }

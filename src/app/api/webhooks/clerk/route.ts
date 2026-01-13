@@ -1,11 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { verifyWebhook } from "@clerk/nextjs/webhooks";
 import { env } from "@/env";
 import { upsertUser } from "@/lib/user";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
 
   let event: Awaited<ReturnType<typeof verifyWebhook>>;

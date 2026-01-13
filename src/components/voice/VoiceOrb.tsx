@@ -18,7 +18,7 @@ export function VoiceOrb({
   disabled = false 
 }: VoiceOrbProps) {
   const [isPressed, setIsPressed] = useState(false);
-  const pressTimeoutRef = useRef<NodeJS.Timeout>();
+  const pressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const handlePressStart = () => {
     if (disabled || state !== "idle") return;

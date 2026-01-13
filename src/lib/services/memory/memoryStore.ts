@@ -52,15 +52,17 @@ export async function storeMemory(
     // Generate embedding
     const embedding = await generateEmbedding(content);
 
-    await prisma.memory.create({
-      data: {
-        userId,
-        type,
-        content,
-        embedding,
-        metadata,
-      },
-    });
+    const data: any = {
+      userId,
+      type,
+      content,
+      metadata,
+    };
+    if (embedding) {
+      data.embedding = embedding;
+    }
+
+    await prisma.memory.create({ data });
   } catch (error) {
     console.error("Memory storage failed:", error);
     throw error;

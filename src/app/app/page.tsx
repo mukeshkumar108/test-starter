@@ -1,12 +1,12 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { VoiceOrb, VoiceState } from "@/components/voice/VoiceOrb";
 import { useAudioManager } from "@/components/voice/AudioManager";
 
-export default function AppPage() {
+function AppContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const personaId = searchParams.get("personaId");
@@ -181,5 +181,13 @@ export default function AppPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function AppPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900" />}>
+      <AppContent />
+    </Suspense>
   );
 }

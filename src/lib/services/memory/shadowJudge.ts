@@ -150,6 +150,7 @@ Only extract clear, factual information. Return empty array if nothing significa
       }
     }
     
+    if (!result) return [];
     return result.memories || [];
   } catch (error) {
     console.error("Memory extraction failed:", error);
