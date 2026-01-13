@@ -4,15 +4,15 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "anthropic/claude-3-5-sonnet",
-    SUPPORTIVE: "anthropic/claude-3-5-sonnet", 
-    COACH: "anthropic/claude-3-5-sonnet",
-    CREATIVE: "anthropic/claude-3-5-sonnet",
-    ANALYTICAL: "anthropic/claude-3-5-sonnet",
+    MENTOR: "sao10k/l3.1-euryale-70b",
+    SUPPORTIVE: "sao10k/l3.1-euryale-70b", 
+    COACH: "sao10k/l3.1-euryale-70b",
+    CREATIVE: "sao10k/l3.1-euryale-70b",
+    ANALYTICAL: "sao10k/l3.1-euryale-70b",
   },
   
   // Cheap model for shadow processing/judging
-  JUDGE: "anthropic/claude-3-haiku",
+  JUDGE: "meta-llama/llama-3-8b-instruct",
   
   // Embeddings model
   EMBEDDINGS: "openai/text-embedding-3-small",
