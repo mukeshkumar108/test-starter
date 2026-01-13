@@ -1,14 +1,14 @@
+"use client";
+
 import { PersonaPicker } from "@/components/persona/PersonaPicker";
-import { redirect } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
-interface PersonaPickerPageProps {
-  searchParams: { personaId?: string };
-}
-
-export default function PersonaPickerPage({ searchParams }: PersonaPickerPageProps) {
+export default function PersonaPickerPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const handlePersonaSelect = (personaId: string) => {
     // Redirect to main app with selected persona
-    redirect(`/app?personaId=${personaId}`);
+    router.push(`/app?personaId=${personaId}`);
   };
 
   return (
@@ -16,7 +16,7 @@ export default function PersonaPickerPage({ searchParams }: PersonaPickerPagePro
       <div className="max-w-6xl mx-auto py-12">
         <PersonaPicker 
           onPersonaSelect={handlePersonaSelect}
-          selectedPersonaId={searchParams.personaId}
+          selectedPersonaId={searchParams.get("personaId") ?? undefined}
         />
       </div>
     </div>

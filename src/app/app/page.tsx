@@ -15,8 +15,6 @@ export default function AppPage() {
   const [currentPersona, setCurrentPersona] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   
-  const { audioManager, createAudioManager } = useAudioManager();
-
   // Redirect to persona picker if no persona selected
   useEffect(() => {
     if (!personaId) {
@@ -92,24 +90,18 @@ export default function AppPage() {
     setVoiceState("idle");
   }, []);
 
-  // Initialize audio manager
-  useEffect(() => {
-    if (!audioManager) {
-      createAudioManager(handleRecordingComplete, handleError);
-    }
-  }, [audioManager, createAudioManager, handleRecordingComplete, handleError]);
+  const audioManager = useAudioManager({
+    onRecordingComplete: handleRecordingComplete,
+    onError: handleError,
+  });
 
   const handleStartRecording = () => {
-    if (audioManager) {
-      setVoiceState("listening");
-      audioManager.startRecording();
-    }
+    setVoiceState("listening");
+    audioManager.startRecording();
   };
 
   const handleStopRecording = () => {
-    if (audioManager) {
-      audioManager.stopRecording();
-    }
+    audioManager.stopRecording();
   };
 
   if (!currentPersona) {
@@ -155,7 +147,7 @@ export default function AppPage() {
           state={voiceState}
           onStartRecording={handleStartRecording}
           onStopRecording={handleStopRecording}
-          disabled={!audioManager}
+          disabled={voiceState === "thinking" || voiceState === "speaking"}
         />
 
         {error && (

@@ -6,7 +6,7 @@ import { generateResponse } from "@/lib/services/voice/llmService";
 import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
 import { buildContext } from "@/lib/services/memory/contextBuilder";
 import { processShadowPath } from "@/lib/services/memory/shadowJudge";
-import { getUserByClerkId } from "@/lib/user";
+import { ensureUserByClerkId } from "@/lib/user";
 
 export const runtime = "nodejs";
 
@@ -30,11 +30,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user from database
-    const user = await getUserByClerkId(clerkUserId);
-    if (!user) {
+    let user;
+    try {
+      user = await ensureUserByClerkId(clerkUserId);
+    } catch (error) {
+      console.error("User upsert failed:", { requestId, error });
       return NextResponse.json(
-        { error: "User not found", requestId },
-        { status: 404 }
+        { error: "User upsert failed", requestId },
+        { status: 500 }
       );
     }
 

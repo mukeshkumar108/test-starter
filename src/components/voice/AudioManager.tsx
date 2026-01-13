@@ -1,30 +1,26 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 
-interface AudioManagerProps {
+interface AudioManagerOptions {
   onRecordingComplete: (audioBlob: Blob) => void;
   onError: (error: string) => void;
 }
 
-export function AudioManager({ onRecordingComplete, onError }: AudioManagerProps) {
+export function useAudioManager({ onRecordingComplete, onError }: AudioManagerOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  // Initialize audio context for iOS Safari
   const initializeAudioContext = useCallback(async () => {
     if (audioContextRef.current) return true;
 
     try {
-      // Create AudioContext and unlock it with user gesture
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      
       if (audioContext.state === "suspended") {
         await audioContext.resume();
       }
-      
       audioContextRef.current = audioContext;
       return true;
     } catch (error) {
@@ -36,11 +32,10 @@ export function AudioManager({ onRecordingComplete, onError }: AudioManagerProps
 
   const startRecording = useCallback(async () => {
     try {
-      // Initialize audio context first (iOS Safari requirement)
+      // Unlock audio context on user gesture (iOS Safari requirement).
       const audioInitialized = await initializeAudioContext();
       if (!audioInitialized) return;
 
-      // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: 44100,
@@ -50,10 +45,9 @@ export function AudioManager({ onRecordingComplete, onError }: AudioManagerProps
         },
       });
 
-      // Setup MediaRecorder
       const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus") 
-          ? "audio/webm;codecs=opus" 
+        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
           : "audio/mp4",
       });
 
@@ -66,19 +60,16 @@ export function AudioManager({ onRecordingComplete, onError }: AudioManagerProps
       };
 
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(chunksRef.current, { 
-          type: mediaRecorder.mimeType 
+        const audioBlob = new Blob(chunksRef.current, {
+          type: mediaRecorder.mimeType,
         });
         onRecordingComplete(audioBlob);
-        
-        // Cleanup
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
       };
 
       mediaRecorderRef.current = mediaRecorder;
-      mediaRecorder.start(100); // Collect data every 100ms
+      mediaRecorder.start(100);
       setIsRecording(true);
-
     } catch (error) {
       console.error("Recording start failed:", error);
       onError("Could not access microphone");
@@ -92,28 +83,12 @@ export function AudioManager({ onRecordingComplete, onError }: AudioManagerProps
     }
   }, [isRecording]);
 
-  return {
-    isRecording,
-    startRecording,
-    stopRecording,
-  };
-}
-
-// Hook for easier usage
-export function useAudioManager() {
-  const [audioManager, setAudioManager] = useState<ReturnType<typeof AudioManager> | null>(null);
-  
-  const createAudioManager = useCallback((
-    onRecordingComplete: (audioBlob: Blob) => void,
-    onError: (error: string) => void
-  ) => {
-    const manager = AudioManager({ onRecordingComplete, onError });
-    setAudioManager(manager);
-    return manager;
-  }, []);
-
-  return {
-    audioManager,
-    createAudioManager,
-  };
+  return useMemo(
+    () => ({
+      isRecording,
+      startRecording,
+      stopRecording,
+    }),
+    [isRecording, startRecording, stopRecording]
+  );
 }
