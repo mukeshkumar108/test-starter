@@ -48,6 +48,11 @@ function AppContent() {
     
     try {
       setVoiceState("thinking");
+
+      console.log("[chat] outgoing audio", {
+        mimeType: audioBlob.type || "<unknown>",
+        bytes: audioBlob.size,
+      });
       
       const formData = new FormData();
       formData.append("personaId", personaId);
@@ -59,25 +64,47 @@ function AppContent() {
       });
       
       if (!response.ok) {
-        if (response.status === 400) {
-          const data = await response.json().catch(() => null);
-          if (data?.error === "Empty audio") {
+        let payload: any = null;
+        let text = "";
+        try {
+          payload = await response.json();
+        } catch {
+          text = await response.text().catch(() => "");
+        }
+
+        const status = response.status;
+        const error = payload?.error || (text ? text.slice(0, 200) : "Unknown error");
+        const requestId = payload?.requestId;
+
+        console.error("[chat] request failed", {
+          status,
+          error,
+          requestId,
+          clerkReason: response.headers.get("x-clerk-auth-reason"),
+        });
+
+        if (status === 400) {
+          if (payload?.error === "Empty audio") {
             setError("No audio captured. Try speaking a bit longer.");
             setVoiceState("idle");
             return;
           }
-          if (data?.error === "Audio too short") {
+          if (payload?.error === "Audio too short") {
             setError("Try holding the mic a bit longer.");
             setVoiceState("idle");
             return;
           }
-          if (data?.error === "No speech detected") {
+          if (payload?.error === "No speech detected") {
             setError("I couldn’t hear you—try again in a quieter spot.");
             setVoiceState("idle");
             return;
           }
         }
-        throw new Error("Chat request failed");
+
+        const details = requestId ? `${error} (requestId: ${requestId})` : error;
+        setError(`Request failed (${status}): ${details}`);
+        setVoiceState("idle");
+        return;
       }
       
       const data = await response.json();
