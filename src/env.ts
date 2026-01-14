@@ -17,6 +17,10 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().min(1),
   ELEVENLABS_API_KEY: z.string().min(1),
   ELEVENLABS_DEFAULT_VOICE_ID: z.string().min(1),
+  ELEVENLABS_VOICE_WILLIAM: z.string().min(1).optional(),
+  ELEVENLABS_VOICE_ISABELLA: z.string().min(1).optional(),
+  ELEVENLABS_VOICE_SOPHIE: z.string().min(1).optional(),
+  ELEVENLABS_VOICE_ALEXANDER: z.string().min(1).optional(),
   LEMONFOX_API_KEY: z.string().min(1),
   OPENAI_API_KEY: z.string().min(1), // For embeddings
 });
