@@ -14,6 +14,8 @@ function AppContent() {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [currentPersona, setCurrentPersona] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [needsManualPlay, setNeedsManualPlay] = useState(false);
+  const [manualAudioUrl, setManualAudioUrl] = useState<string | null>(null);
   
   // Redirect to persona picker if no persona selected
   useEffect(() => {
@@ -48,6 +50,8 @@ function AppContent() {
     
     try {
       setVoiceState("thinking");
+      setNeedsManualPlay(false);
+      setManualAudioUrl(null);
 
       console.log("[chat] outgoing audio", {
         mimeType: audioBlob.type || "<unknown>",
@@ -107,7 +111,16 @@ function AppContent() {
         return;
       }
       
-      const data = await response.json();
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        const details = response.headers.get("x-request-id");
+        const requestId = details ? ` (requestId: ${details})` : "";
+        setError(`Request failed (${response.status}): Invalid JSON response${requestId}`);
+        setVoiceState("idle");
+        return;
+      }
       
       // Play response audio
       if (data.audioUrl) {
@@ -118,7 +131,18 @@ function AppContent() {
           setVoiceState("idle");
           setError("Audio playback failed");
         };
-        await audio.play();
+        try {
+          await audio.play();
+        } catch (error) {
+          const err = error as Error;
+          console.error("[chat] audio.play failed", {
+            name: err?.name,
+            message: err?.message,
+          });
+          setNeedsManualPlay(true);
+          setManualAudioUrl(data.audioUrl);
+          setVoiceState("idle");
+        }
       } else {
         setVoiceState("idle");
       }
@@ -194,6 +218,13 @@ function AppContent() {
           onStopRecording={handleStopRecording}
           disabled={voiceState === "thinking" || voiceState === "speaking"}
         />
+
+        {needsManualPlay && manualAudioUrl && (
+          <div className="mt-6 w-full max-w-md">
+            <p className="text-center text-gray-300 mb-2">Tap to play the response</p>
+            <audio className="w-full" controls src={manualAudioUrl} />
+          </div>
+        )}
 
         {error && (
           <div className="mt-6 p-4 bg-red-900/50 border border-red-500 rounded-lg">

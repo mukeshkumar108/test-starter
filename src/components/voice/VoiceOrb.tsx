@@ -76,14 +76,17 @@ export function VoiceOrb({
   return (
     <div className="flex flex-col items-center gap-4">
       <button
-        className={getOrbStyle()}
+        className={`${getOrbStyle()} select-none`}
         onMouseDown={handlePressStart}
         onMouseUp={handlePressEnd}
         onMouseLeave={handlePressEnd}
+        onPointerUp={handlePressEnd}
         onTouchStart={handlePressStart}
         onTouchEnd={handlePressEnd}
+        onTouchCancel={handlePressEnd}
+        onContextMenu={(event) => event.preventDefault()}
         disabled={disabled}
-        style={{ touchAction: "manipulation" }}
+        style={{ touchAction: "none", userSelect: "none" }}
       >
         <div className="w-full h-full flex items-center justify-center">
           <div className="w-8 h-8 bg-white rounded-full opacity-80" />
