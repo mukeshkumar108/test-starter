@@ -18,7 +18,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const allowedTypes = new Set(Object.values(MemoryType));
 
     // Extract memories using judge model
-    const memories = await extractMemories(userMessage, assistantResponse);
+    const memories = await extractMemories(userMessage);
 
     // Store memories if any
     if (memories.length > 0) {
@@ -40,8 +40,18 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         })
         .filter((memory) => memory !== null);
 
+      const filteredMemories = normalizedMemories
+        .filter((memory) => (memory.confidence ?? 0) >= 0.85)
+        .slice(0, 2)
+        .filter(
+          (memory) =>
+            !/testing|frustrat|grateful|supportive|assistant|conversation|ready to help/i.test(
+              memory.content
+            )
+        );
+
       await Promise.all(
-        normalizedMemories.map(memory =>
+        filteredMemories.map(memory =>
           prisma.memory.create({
             data: {
               userId,
@@ -85,27 +95,45 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
   }
 }
 
-async function extractMemories(userMessage: string, assistantResponse: string) {
+async function extractMemories(userMessage: string) {
   try {
     const requestId = crypto.randomUUID();
-    const prompt = `Analyze this conversation exchange and extract any memories that should be stored.
+    const prompt = `You are a strict memory extractor for a personal assistant.
 
-User: ${userMessage}
-Assistant: ${assistantResponse}
+RULES (MUST FOLLOW):
+- Only extract memories that are explicitly stated by the USER in their message.
+- Do NOT infer, guess, generalize, or interpret.
+- Do NOT store temporary states (testing, mood, emotions, “working late”, “frustrated”, etc.).
+- Do NOT store meta commentary about the conversation or assistant
+  (e.g. “user is testing”, “assistant is supportive”, “user said thanks”).
+- Do NOT store safety, policy, or consent statements.
+- Only store durable facts that will remain true in 30+ days OR long-running projects/goals.
+- If the USER corrects a fact (e.g. “my name is Mukesh, not Bella”), store ONLY the corrected fact.
 
-Return ONLY valid JSON. Do not include any commentary, markdown, code fences, or extra text.
-Extract memories in JSON format:
+ALLOWED TYPES:
+- PROFILE: stable identity or preferences
+- PEOPLE: stable relationships explicitly stated by the user
+- PROJECT: ongoing products, companies, or systems the user is building
+- OPEN_LOOP: durable commitments the user explicitly intends to revisit
+
+OUTPUT REQUIREMENTS:
+- Return ONLY valid JSON.
+- No markdown, no explanations, no extra text.
+- If nothing qualifies, return {"memories": []}.
+
+USER MESSAGE:
+${userMessage}
+
+JSON SCHEMA:
 {
   "memories": [
     {
-      "type": "PROFILE|PEOPLE|PROJECT|OPEN_LOOP", 
-      "content": "factual statement about the user",
-      "confidence": 0.8
+      "type": "PROFILE|PEOPLE|PROJECT|OPEN_LOOP",
+      "content": "short factual memory",
+      "confidence": 0.0
     }
   ]
-}
-
-Only extract clear, factual information. Return empty array if nothing significant.`;
+}`;
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
