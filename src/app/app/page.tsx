@@ -14,8 +14,6 @@ function AppContent() {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [currentPersona, setCurrentPersona] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
-  const [needsManualPlay, setNeedsManualPlay] = useState(false);
-  const [manualAudioUrl, setManualAudioUrl] = useState<string | null>(null);
   
   // Redirect to persona picker if no persona selected
   useEffect(() => {
@@ -50,8 +48,6 @@ function AppContent() {
     
     try {
       setVoiceState("thinking");
-      setNeedsManualPlay(false);
-      setManualAudioUrl(null);
 
       console.log("[chat] outgoing audio", {
         mimeType: audioBlob.type || "<unknown>",
@@ -122,26 +118,12 @@ function AppContent() {
         return;
       }
       
-      // Play response audio
+      // Play response audio using gesture-primed audio element
       if (data.audioUrl) {
         setVoiceState("speaking");
-        const audio = new Audio(data.audioUrl);
-        audio.onended = () => setVoiceState("idle");
-        audio.onerror = () => {
-          setVoiceState("idle");
-          setError("Audio playback failed");
-        };
-        try {
-          await audio.play();
-        } catch (error) {
-          const err = error as Error;
-          console.error("[chat] audio.play failed", {
-            name: err?.name,
-            message: err?.message,
-          });
-          setNeedsManualPlay(true);
-          setManualAudioUrl(data.audioUrl);
-          setVoiceState("idle");
+        const success = await audioManager.playResponseAudio(data.audioUrl);
+        if (!success) {
+          setError("Audio playback failed - try again");
         }
       } else {
         setVoiceState("idle");
@@ -159,18 +141,62 @@ function AppContent() {
     setVoiceState("idle");
   }, []);
 
+  const [recordingStartTime, setRecordingStartTime] = useState<number | null>(null);
+
   const audioManager = useAudioManager({
     onRecordingComplete: handleRecordingComplete,
     onError: handleError,
+    onAutoplaySuccess: () => {
+      // Set up audio end handler for seamless voice loop
+      if (audioManager.persistentAudio) {
+        audioManager.persistentAudio.onended = () => setVoiceState("idle");
+        audioManager.persistentAudio.onerror = () => {
+          setVoiceState("idle");
+          setError("Audio playback interrupted");
+        };
+      }
+    },
+    onAutoplayFailed: () => {
+      setVoiceState("idle");
+      setError("Autoplay failed - iOS may require manual interaction");
+    },
   });
 
-  const handleStartRecording = () => {
-    setVoiceState("listening");
-    audioManager.startRecording();
-  };
-
-  const handleStopRecording = () => {
-    audioManager.stopRecording();
+  const handleVoiceOrbTap = () => {
+    const now = Date.now();
+    
+    switch (voiceState) {
+      case "idle":
+        // First tap: Prime audio and start recording
+        audioManager.primeAudioForSession();
+        setVoiceState("listening");
+        setRecordingStartTime(now);
+        // Start recording after priming completes
+        setTimeout(() => {
+          audioManager.startRecording();
+        }, 100);
+        break;
+        
+      case "listening":
+        // Second tap: Stop recording (with debounce)
+        if (recordingStartTime && (now - recordingStartTime) < 400) {
+          // Too soon - ignore tap to prevent MediaRecorder errors
+          return;
+        }
+        audioManager.stopRecording();
+        setRecordingStartTime(null);
+        break;
+        
+      case "speaking":
+        // Interrupt tap: Stop audio and return to idle
+        audioManager.interruptPlayback();
+        setVoiceState("idle");
+        break;
+        
+      case "thinking":
+        // No-op: taps disabled during processing
+        break;
+    }
   };
 
   if (!currentPersona) {
@@ -214,17 +240,9 @@ function AppContent() {
 
         <VoiceOrb
           state={voiceState}
-          onStartRecording={handleStartRecording}
-          onStopRecording={handleStopRecording}
-          disabled={voiceState === "thinking" || voiceState === "speaking"}
+          onTap={handleVoiceOrbTap}
+          isPriming={audioManager.isPriming}
         />
-
-        {needsManualPlay && manualAudioUrl && (
-          <div className="mt-6 w-full max-w-md">
-            <p className="text-center text-gray-300 mb-2">Tap to play the response</p>
-            <audio className="w-full" controls src={manualAudioUrl} />
-          </div>
-        )}
 
         {error && (
           <div className="mt-6 p-4 bg-red-900/50 border border-red-500 rounded-lg">
