@@ -4,11 +4,11 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "sao10k/l3.1-euryale-70b",
-    SUPPORTIVE: "sao10k/l3.1-euryale-70b", 
-    COACH: "sao10k/l3.1-euryale-70b",
-    CREATIVE: "sao10k/l3.1-euryale-70b",
-    ANALYTICAL: "sao10k/l3.1-euryale-70b",
+    MENTOR: "gryphe/mythomax-l2-13b",
+    SUPPORTIVE: "gryphe/mythomax-l2-13b", 
+    COACH: "gryphe/mythomax-l2-13b",
+    CREATIVE: "gryphe/mythomax-l2-13b",
+    ANALYTICAL: "gryphe/mythomax-l2-13b",
   },
   
   // Cheap model for shadow processing/judging
