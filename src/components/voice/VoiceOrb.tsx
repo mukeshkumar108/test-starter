@@ -43,7 +43,7 @@ export function VoiceOrb({
 
   const getStateText = () => {
     if (isPriming) {
-      return "Starting...";
+      return "Starting... (tap to cancel)";
     }
     
     switch (state) {

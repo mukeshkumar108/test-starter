@@ -165,6 +165,14 @@ function AppContent() {
   const handleVoiceOrbTap = () => {
     const now = Date.now();
     
+    // Handle recovery during priming
+    if (audioManager.isPriming) {
+      audioManager.resetAudio();
+      setVoiceState("idle");
+      setRecordingStartTime(null);
+      return;
+    }
+    
     switch (voiceState) {
       case "idle":
         // First tap: Prime audio and start recording

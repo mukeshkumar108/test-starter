@@ -44,7 +44,7 @@ export function useAudioManager({ onRecordingComplete, onError, onAutoplaySucces
     
     setIsPriming(true);
     
-    try {
+    const primingOperation = async () => {
       // Initialize audio context
       await initializeAudioContext();
       
@@ -61,20 +61,33 @@ export function useAudioManager({ onRecordingComplete, onError, onAutoplaySucces
       audio.src = SILENT_MP3;
       audio.muted = true;
       
-      try {
-        await audio.play();
-        isAudioPrimedRef.current = true;
-        console.log("[AudioManager] iOS audio primed successfully");
-      } catch (error) {
-        console.warn("[AudioManager] Silent prime failed:", error);
-        // Continue anyway - might still work
-      }
+      // Fire-and-forget audio.play() - don't await to avoid hangs
+      audio.play()
+        .then(() => {
+          // Only mark as primed if playback actually resolves
+          isAudioPrimedRef.current = true;
+          console.log("[AudioManager] iOS audio primed successfully");
+        })
+        .catch((error) => {
+          console.warn("[AudioManager] Silent prime failed:", error);
+          // Leave isAudioPrimedRef.current = false for retry
+        });
       
       // Unmute for future playback
       audio.muted = false;
+    };
+
+    try {
+      await Promise.race([
+        primingOperation(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Priming timeout after 1200ms')), 1200)
+        )
+      ]);
+      console.log("[AudioManager] Priming operation completed");
     } catch (error) {
-      console.error("[AudioManager] Audio priming failed:", error);
-      onError("Audio initialization failed");
+      console.warn("[AudioManager] Priming timed out or failed:", error);
+      // Continue anyway - audio element still created during gesture
     } finally {
       setIsPriming(false);
     }
