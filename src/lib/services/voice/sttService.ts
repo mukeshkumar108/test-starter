@@ -6,7 +6,10 @@ export interface STTResult {
   duration_ms: number;
 }
 
-export async function transcribeAudio(audioBlob: Blob): Promise<STTResult> {
+export async function transcribeAudio(
+  audioBlob: Blob,
+  preferredLanguage?: string
+): Promise<STTResult> {
   const startTime = Date.now();
   
   try {
@@ -28,7 +31,9 @@ export async function transcribeAudio(audioBlob: Blob): Promise<STTResult> {
     formData.append("audio", audioBlob);
     formData.append("file", audioBlob, "audio.webm");
     const model = "whisper-1";
+    const language = preferredLanguage || "en";
     formData.append("model", model);
+    formData.append("language", language);
     
     const response = await fetch("https://api.lemonfox.ai/v1/audio/transcriptions", {
       method: "POST",
@@ -53,9 +58,10 @@ export async function transcribeAudio(audioBlob: Blob): Promise<STTResult> {
     }
 
     const data = await response.json();
+    const sanitized = sanitizeTranscript(data.text || "");
     
     return {
-      transcript: data.text || "",
+      transcript: sanitized,
       confidence: data.confidence || 0.9,
       duration_ms: Date.now() - startTime,
     };
@@ -63,4 +69,20 @@ export async function transcribeAudio(audioBlob: Blob): Promise<STTResult> {
     console.error("STT Service Error:", error);
     throw new Error("Speech transcription failed");
   }
+}
+
+function sanitizeTranscript(text: string) {
+  if (!text) return text;
+
+  const asciiLetters = (text.match(/[A-Za-z]/g) || []).length;
+  const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
+  let cleaned = text;
+
+  if (asciiLetters >= nonAscii) {
+    cleaned = cleaned.replace(/[\u0080-\uFFFF]+/g, " ");
+  } else {
+    cleaned = cleaned.replace(/([\u0080-\uFFFF]{2,})\1+/g, "$1");
+  }
+
+  return cleaned.replace(/\s+/g, " ").trim();
 }

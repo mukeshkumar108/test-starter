@@ -18,7 +18,10 @@ export async function generateResponse(
   const startTime = Date.now();
   
   try {
+    const isSophie = personaSlug === "creative";
     const model = getChatModelForPersona(personaSlug);
+    const maxTokens = isSophie ? 120 : 1000;
+    const temperature = isSophie ? 0.55 : 0.7;
     
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -31,8 +34,9 @@ export async function generateResponse(
       body: JSON.stringify({
         model,
         messages,
-        max_tokens: 1000,
-        temperature: 0.7,
+        max_tokens: maxTokens,
+        temperature,
+        ...(isSophie ? { top_p: 0.9, presence_penalty: 0.3 } : {}),
         stream: false, // For v0.1, use non-streaming
       }),
     });
@@ -43,12 +47,29 @@ export async function generateResponse(
 
     const data = await response.json();
     
+    const content = data.choices?.[0]?.message?.content || "I'm having trouble responding right now.";
+    const trimmed = isSophie ? applyBrevityGovernor(content, messages) : content;
+
     return {
-      content: data.choices?.[0]?.message?.content || "I'm having trouble responding right now.",
+      content: trimmed,
       duration_ms: Date.now() - startTime,
     };
   } catch (error) {
     console.error("LLM Service Error:", error);
     throw new Error("Language model response failed");
   }
+}
+
+function applyBrevityGovernor(content: string, messages: LLMMessage[]) {
+  const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content || "";
+  const isExplain = /\b(explain|how|why)\b/i.test(lastUser);
+  if (isExplain) return content;
+
+  const minCut = 200;
+  const maxCut = 380;
+  const window = content.slice(minCut, maxCut + 1);
+  const match = window.match(/[.!?](\s|$)/);
+  const matchIndex = match?.index;
+  const cutIndex = matchIndex !== undefined ? minCut + matchIndex + 1 : maxCut;
+  return content.slice(0, cutIndex).trim();
 }

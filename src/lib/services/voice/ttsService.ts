@@ -13,6 +13,7 @@ export async function synthesizeSpeech(
   const startTime = Date.now();
   
   try {
+    const hasLaugh = /\bhaha\b/i.test(text);
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: "POST",
       headers: {
@@ -25,8 +26,8 @@ export async function synthesizeSpeech(
         model_id: "eleven_monolingual_v1",
         voice_settings: {
           stability: 0.5,
-          similarity_boost: 0.5,
-          style: 0.0,
+          similarity_boost: 0.85,
+          style: hasLaugh ? 0.4 : 0.2,
           use_speaker_boost: true,
         },
       }),

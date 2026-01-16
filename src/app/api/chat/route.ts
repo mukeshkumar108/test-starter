@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const personaId = formData.get("personaId") as string;
     const audioFile = formData.get("audioBlob") as File;
+    const preferredLanguage = formData.get("language") as string | null;
 
     if (!personaId || !audioFile) {
       return NextResponse.json(
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
     let tts_ms = 0;
 
     // Step 1: Speech-to-Text
-    const sttResult = await transcribeAudio(audioFile);
+    const sttResult = await transcribeAudio(audioFile, preferredLanguage || undefined);
     stt_ms = sttResult.duration_ms;
 
     if (!sttResult.transcript || sttResult.transcript.trim().length < 2) {

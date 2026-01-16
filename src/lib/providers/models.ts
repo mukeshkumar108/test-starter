@@ -4,11 +4,11 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "nousresearch/hermes-4-70b",
-    SUPPORTIVE: "nousresearch/hermes-4-70b", 
-    COACH: "nousresearch/hermes-4-70b",
-    CREATIVE: "nousresearch/hermes-4-70b",
-    ANALYTICAL: "nousresearch/hermes-4-70b",
+    MENTOR: "x-ai/grok-4.1-fast",
+    SUPPORTIVE: "x-ai/grok-4.1-fast", 
+    COACH: "x-ai/grok-4.1-fast",
+    CREATIVE: "x-ai/grok-4.1-fast",
+    ANALYTICAL: "x-ai/grok-4.1-fast",
   },
   
   // Cheap model for shadow processing/judging
