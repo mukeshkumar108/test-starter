@@ -12,7 +12,7 @@ export const MODELS = {
   },
   
   // Cheap model for shadow processing/judging
-  JUDGE: "meta-llama/llama-3-8b-instruct",
+  JUDGE: "openai/gpt-4o-mini",
   
   // Embeddings model
   EMBEDDINGS: "openai/text-embedding-3-small",
