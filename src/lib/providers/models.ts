@@ -4,11 +4,11 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "x-ai/grok-4.1-fast",
-    SUPPORTIVE: "x-ai/grok-4.1-fast", 
-    COACH: "x-ai/grok-4.1-fast",
-    CREATIVE: "x-ai/grok-4.1-fast",
-    ANALYTICAL: "x-ai/grok-4.1-fast",
+    MENTOR: "openai/gpt-4o-mini",
+    SUPPORTIVE: "openai/gpt-4o-mini", 
+    COACH: "openai/gpt-4o-mini",
+    CREATIVE: "openai/gpt-4o-mini",
+    ANALYTICAL: "openai/gpt-4o-mini",
   },
   
   // Cheap model for shadow processing/judging
