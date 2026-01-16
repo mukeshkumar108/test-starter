@@ -15,6 +15,38 @@ interface ChatRequestBody {
   audioBlob: File;
 }
 
+function getCurrentContext(params: { lastMessageAt?: Date | null }) {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    weekday: "long",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  const formatted = formatter.format(now);
+  const location = "Cambridge, UK";
+  const weather = "Grey/Overcast"; // TODO: wire real weather API
+
+  let lastInteraction = "No prior messages";
+  if (params.lastMessageAt) {
+    const diffMs = now.getTime() - params.lastMessageAt.getTime();
+    const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
+    if (diffMinutes < 60) {
+      lastInteraction = `${diffMinutes} minutes ago`;
+    } else {
+      const diffHours = Math.floor(diffMinutes / 60);
+      lastInteraction = `${diffHours} hours ago`;
+    }
+  }
+
+  return `[REAL-TIME CONTEXT] Time: ${formatted} Location: ${location} Weather: ${weather} Last Interaction: ${lastInteraction}`;
+}
+
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   const totalStartTime = Date.now();
@@ -95,11 +127,21 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 2: Build conversation context
-    const context = await buildContext(user.id, personaId);
+    const context = await buildContext(user.id, personaId, sttResult.transcript);
+    const lastMessage = await prisma.message.findFirst({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
 
     // Step 3: Generate LLM response
+    const memoryStrings = context.relevantMemories.join("\n");
     const messages = [
+      { role: "system" as const, content: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }) },
       { role: "system" as const, content: context.persona },
+      ...(memoryStrings
+        ? [{ role: "system" as const, content: `[RELEVANT MEMORIES OF USER]:\n${memoryStrings}` }]
+        : []),
       ...(context.userSeed ? [{ role: "system" as const, content: `User context: ${context.userSeed}` }] : []),
       ...(context.summarySpine ? [{ role: "system" as const, content: `Conversation summary: ${context.summarySpine}` }] : []),
       ...context.recentMessages,

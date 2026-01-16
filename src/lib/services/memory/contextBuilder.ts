@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { searchMemories } from "@/lib/services/memory/memoryStore";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
@@ -14,6 +15,7 @@ export interface ConversationContext {
 export async function buildContext(
   userId: string,
   personaId: string,
+  userMessage: string,
 ): Promise<ConversationContext> {
   try {
     // Get persona profile and prompt
@@ -61,16 +63,14 @@ export async function buildContext(
       orderBy: { version: "desc" },
     });
 
-    // TODO: Get relevant memories via vector search
-    // For v0.1, return empty array
-    const relevantMemories: string[] = [];
+    const relevantMemories = await searchMemories(userId, userMessage);
 
     return {
       persona: personaPrompt,
       userSeed: userSeed?.content,
       sessionState: sessionState?.state,
       recentMessages: messages.reverse(), // Chronological order
-      relevantMemories,
+      relevantMemories: relevantMemories.map((memory) => memory.content),
       summarySpine: summarySpine?.content,
     };
   } catch (error) {
