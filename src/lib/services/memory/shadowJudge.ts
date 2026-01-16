@@ -20,15 +20,9 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     // Extract memories using judge model
     const memories = await extractMemories(userMessage);
 
-    const fallbackMemories = memories.length === 0
-      ? extractFallbackMemories(userMessage)
-      : [];
-
-    const memoriesToStore = memories.length > 0 ? memories : fallbackMemories;
-
     // Store memories if any
-    if (memoriesToStore.length > 0) {
-      const normalizedMemories = memoriesToStore
+    if (memories.length > 0) {
+      const normalizedMemories = memories
         .map((memory) => {
           const rawType = memory.type ?? "";
           const normalized = rawType.split("|")[0].trim().toUpperCase();
@@ -63,10 +57,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
               userId,
               type: memory.type,
               content: memory.content,
-              metadata: {
-                source: memories.length > 0 ? "shadow_extraction" : "shadow_fallback",
-                confidence: memory.confidence,
-              },
+              metadata: { source: "shadow_extraction", confidence: memory.confidence },
             },
           })
         )
@@ -104,71 +95,6 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
   }
 }
 
-function extractFallbackMemories(userMessage: string) {
-  const memories: Array<{ type: MemoryType; content: string; confidence: number }> = [];
-  const text = userMessage.trim();
-
-  const nameMatch =
-    text.match(/\bmy name is\s+([A-Za-z][A-Za-z'\- ]{1,40})/i) ||
-    text.match(/\bcall me\s+([A-Za-z][A-Za-z'\- ]{1,40})/i) ||
-    text.match(/\bi'?m\s+([A-Za-z][A-Za-z'\-]{1,40})\b/i);
-  const nameCandidate = nameMatch?.[1]?.trim() || "";
-  const nameLower = nameCandidate.toLowerCase();
-  const nameBlocklist = new Set([
-    "tired",
-    "sad",
-    "down",
-    "okay",
-    "ok",
-    "fine",
-    "good",
-    "great",
-    "here",
-    "back",
-    "testing",
-    "unmotivated",
-    "demotivated",
-  ]);
-  if (nameCandidate && !nameBlocklist.has(nameLower)) {
-    memories.push({
-      type: MemoryType.PROFILE,
-      content: `User name is ${nameCandidate}`,
-      confidence: 0.95,
-    });
-  }
-
-  const accountabilityIndex = text.toLowerCase().indexOf("hold me accountable");
-  if (accountabilityIndex !== -1) {
-    const sentence = extractSentence(text, accountabilityIndex);
-    const cadenceMatch = /\b(daily|every day|each day)\b/i.test(sentence);
-    memories.push({
-      type: MemoryType.OPEN_LOOP,
-      content: cadenceMatch ? sentence : sentence,
-      confidence: 0.9,
-    });
-  }
-
-  const reminderMatch = text.match(/\b(remind me|don't let me forget|do not let me forget)\b/i);
-  if (reminderMatch?.index !== undefined) {
-    const sentence = extractSentence(text, reminderMatch.index);
-    memories.push({
-      type: MemoryType.OPEN_LOOP,
-      content: sentence,
-      confidence: 0.9,
-    });
-  }
-
-  return memories;
-}
-
-function extractSentence(text: string, index: number) {
-  const start = text.lastIndexOf(".", index) + 1;
-  const endMatch = text.slice(index).match(/[.!?]/);
-  const endIndex = endMatch?.index;
-  const end = endIndex !== undefined ? index + endIndex + 1 : text.length;
-  return text.slice(start, end).trim();
-}
-
 async function extractMemories(userMessage: string) {
   try {
     const requestId = crypto.randomUUID();
@@ -183,7 +109,8 @@ RULES (MUST FOLLOW):
 - Do NOT store safety, policy, or consent statements.
 - Only store durable facts that will remain true in 30+ days OR long-running projects/goals.
 - If the USER corrects a fact (e.g. “my name is Mukesh, not Bella”), store ONLY the corrected fact.
-- If the USER states their name or a recurring commitment/reminder, you MUST capture it.
+- If the user explicitly states their name (e.g., “my name is X” / “call me X”) you MUST store it as PROFILE.
+- If the user explicitly asks for daily accountability / steps / workout commitments, you MUST store it as OPEN_LOOP.
 
 ALLOWED TYPES:
 - PROFILE: stable identity or preferences
