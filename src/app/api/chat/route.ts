@@ -47,6 +47,36 @@ function getCurrentContext(params: { lastMessageAt?: Date | null }) {
   return `[REAL-TIME CONTEXT] Time: ${formatted} Location: ${location} Weather: ${weather} Last Interaction: ${lastInteraction}`;
 }
 
+function getSessionContext(sessionState?: any) {
+  if (!sessionState) return null;
+
+  const lastInteractionIso = sessionState.lastInteraction as string | undefined;
+  let timeSince = "unknown";
+  if (lastInteractionIso) {
+    const last = new Date(lastInteractionIso);
+    if (!Number.isNaN(last.getTime())) {
+      const diffMs = Date.now() - last.getTime();
+      const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
+      if (diffMinutes < 60) {
+        timeSince = `${diffMinutes} minutes`;
+      } else if (diffMinutes < 1440) {
+        const diffHours = Math.floor(diffMinutes / 60);
+        timeSince = `${diffHours} hours`;
+      } else {
+        const diffDays = Math.floor(diffMinutes / 1440);
+        timeSince = `${diffDays} days`;
+      }
+    }
+  }
+
+  const messageCount =
+    typeof sessionState.messageCount === "number"
+      ? sessionState.messageCount
+      : "unknown";
+
+  return `[SESSION STATE] Time Since Last Interaction: ${timeSince} Message Count: ${messageCount}`;
+}
+
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   const totalStartTime = Date.now();
@@ -136,8 +166,10 @@ export async function POST(request: NextRequest) {
 
     // Step 3: Generate LLM response
     const memoryStrings = context.relevantMemories.join("\n");
+    const sessionContext = getSessionContext(context.sessionState);
     const messages = [
       { role: "system" as const, content: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }) },
+      ...(sessionContext ? [{ role: "system" as const, content: sessionContext }] : []),
       { role: "system" as const, content: context.persona },
       ...(memoryStrings
         ? [{ role: "system" as const, content: `[RELEVANT MEMORIES OF USER]:\n${memoryStrings}` }]
