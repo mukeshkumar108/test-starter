@@ -64,13 +64,20 @@ export async function buildContext(
     });
 
     const relevantMemories = await searchMemories(userId, userMessage);
+    const memoryStrings = relevantMemories.map((memory) => {
+      const source = memory.metadata?.source;
+      const sourceLabel =
+        source === "seeded_profile" ? "GOSPEL" : "OBSERVATION";
+      const sourceTag = source ? `${sourceLabel}:${source}` : `${sourceLabel}:unknown`;
+      return `[${sourceTag}] ${memory.content}`;
+    });
 
     return {
       persona: personaPrompt,
       userSeed: userSeed?.content,
       sessionState: sessionState?.state,
       recentMessages: messages.reverse(), // Chronological order
-      relevantMemories: relevantMemories.map((memory) => memory.content),
+      relevantMemories: memoryStrings,
       summarySpine: summarySpine?.content,
     };
   } catch (error) {
