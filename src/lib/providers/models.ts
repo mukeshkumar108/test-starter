@@ -4,18 +4,18 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "allenai/olmo-3.1-32b-think",
-    SUPPORTIVE: "allenai/olmo-3.1-32b-think", 
-    COACH: "allenai/olmo-3.1-32b-think",
-    CREATIVE: "allenai/olmo-3.1-32b-think",
-    ANALYTICAL: "allenai/olmo-3.1-32b-think",
+    MENTOR: "allenai/olmo-3.1-32b-instruct",
+    SUPPORTIVE: "allenai/olmo-3.1-32b-instruct", 
+    COACH: "allenai/olmo-3.1-32b-instruct",
+    CREATIVE: "allenai/olmo-3.1-32b-instruct",
+    ANALYTICAL: "allenai/olmo-3.1-32b-instruct",
   },
   
   // Cheap model for shadow processing/judging
   JUDGE: "openai/gpt-4o-mini",
   
   // Embeddings model
-  EMBEDDINGS: "openai/text-embedding-3-small",
+  EMBEDDINGS: "text-embedding-3-small",
 } as const;
 
 // Type helpers
