@@ -4,11 +4,11 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "openai/gpt-4o-mini",
-    SUPPORTIVE: "openai/gpt-4o-mini", 
-    COACH: "openai/gpt-4o-mini",
-    CREATIVE: "openai/gpt-4o-mini",
-    ANALYTICAL: "openai/gpt-4o-mini",
+    MENTOR: "allenai/olmo-3.1-32b-think",
+    SUPPORTIVE: "allenai/olmo-3.1-32b-think", 
+    COACH: "allenai/olmo-3.1-32b-think",
+    CREATIVE: "allenai/olmo-3.1-32b-think",
+    ANALYTICAL: "allenai/olmo-3.1-32b-think",
   },
   
   // Cheap model for shadow processing/judging
