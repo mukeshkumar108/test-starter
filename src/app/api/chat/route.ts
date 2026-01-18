@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { auth, verifyToken } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { transcribeAudio } from "@/lib/services/voice/sttService";
 import { generateResponse } from "@/lib/services/voice/llmService";
@@ -7,6 +7,7 @@ import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
 import { buildContext } from "@/lib/services/memory/contextBuilder";
 import { processShadowPath } from "@/lib/services/memory/shadowJudge";
 import { ensureUserByClerkId } from "@/lib/user";
+import { env } from "@/env";
 
 export const runtime = "nodejs";
 
@@ -83,7 +84,28 @@ export async function POST(request: NextRequest) {
   
   try {
     // Auth check
-    const { userId: clerkUserId } = await auth();
+    const { userId: cookieUserId } = await auth();
+    let clerkUserId = cookieUserId;
+
+    if (!clerkUserId) {
+      const authHeader =
+        request.headers.get("authorization") || request.headers.get("Authorization");
+      const bearerToken = authHeader?.startsWith("Bearer ")
+        ? authHeader.slice("Bearer ".length)
+        : null;
+
+      if (bearerToken) {
+        try {
+          const verified = await verifyToken(bearerToken, {
+            secretKey: env.CLERK_SECRET_KEY,
+          });
+          clerkUserId = verified.data?.sub ?? null;
+        } catch (error) {
+          console.warn("Bearer token verification failed:", error);
+        }
+      }
+    }
+
     if (!clerkUserId) {
       return NextResponse.json(
         { error: "Unauthorized", requestId },
