@@ -18,10 +18,12 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const allowedTypes = new Set(Object.values(MemoryType));
 
     // Extract memories using judge model
+    console.log("Shadow Judge user message:", { requestId, userMessage });
     const memories = await extractMemories(userMessage);
 
     // Store memories if any
     if (memories.length > 0) {
+      console.log("Shadow Judge parsed memories:", { requestId, memories });
       const normalizedMemories = memories
         .map((memory) => {
           const rawType = memory.type ?? "";
@@ -51,16 +53,27 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         );
 
       await Promise.all(
-        filteredMemories.map(memory =>
-          prisma.memory.create({
-            data: {
-              userId,
+        filteredMemories.map(async (memory) => {
+          try {
+            console.log("Shadow Judge memory write attempt:", {
+              requestId,
               type: memory.type,
               content: memory.content,
-              metadata: { source: "shadow_extraction", confidence: memory.confidence },
-            },
-          })
-        )
+              confidence: memory.confidence,
+            });
+            await prisma.memory.create({
+              data: {
+                userId,
+                type: memory.type,
+                content: memory.content,
+                metadata: { source: "shadow_extraction", confidence: memory.confidence },
+              },
+            });
+            console.log("Shadow Judge memory write success:", { requestId, content: memory.content });
+          } catch (error) {
+            console.error("Shadow Judge memory write failed:", { requestId, error });
+          }
+        })
       );
 
       const openLoopTodos = filteredMemories.filter(
@@ -68,15 +81,21 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
       );
       if (openLoopTodos.length > 0) {
         await Promise.all(
-          openLoopTodos.map((memory) =>
-            prisma.todo.create({
-              data: {
-                userId,
-                personaId,
-                content: memory.content,
-              },
-            })
-          )
+          openLoopTodos.map(async (memory) => {
+            try {
+              console.log("Shadow Judge todo write attempt:", { requestId, content: memory.content });
+              await prisma.todo.create({
+                data: {
+                  userId,
+                  personaId,
+                  content: memory.content,
+                },
+              });
+              console.log("Shadow Judge todo write success:", { requestId, content: memory.content });
+            } catch (error) {
+              console.error("Shadow Judge todo write failed:", { requestId, error });
+            }
+          })
         );
       }
     }
@@ -191,11 +210,13 @@ JSON SCHEMA:
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content ?? "";
+    console.log("Shadow Judge raw response:", { requestId, content });
     const repaired = repairJsonContent(content);
     let result: { memories?: any[] } | null = null;
 
     try {
       result = JSON.parse(repaired);
+      console.log("Shadow Judge parsed JSON:", { requestId, result });
     } catch {
       const start = repaired.indexOf("{");
       const end = repaired.lastIndexOf("}");
@@ -216,7 +237,12 @@ JSON SCHEMA:
     }
     
     if (!result) return [];
-    return result.memories || [];
+    return (result.memories || []).map((memory) => {
+      if (memory?.type === "OPEN_LOOP") {
+        return { ...memory, confidence: 1.0 };
+      }
+      return memory;
+    });
   } catch (error) {
     console.error("Memory extraction failed:", error);
     return [];

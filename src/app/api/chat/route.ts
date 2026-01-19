@@ -191,18 +191,20 @@ export async function POST(request: NextRequest) {
     const sessionContext = getSessionContext(context.sessionState);
     const activeTodos = context.activeTodos;
     const activeTodoStrings = activeTodos.join("\n");
-    const personaPrompt = activeTodos.length === 0
-      ? `${context.persona}\n\nIf the [ACTIVE COMMITMENTS] block is empty, explicitly acknowledge the slate is clean and ask Mukesh to lock in one specific task (e.g., "Mukesh, your list is wide open right now. Give me one promise we're keeping today.").`
-      : context.persona;
     const messages = [
       { role: "system" as const, content: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }) },
       ...(sessionContext ? [{ role: "system" as const, content: sessionContext }] : []),
-      { role: "system" as const, content: personaPrompt },
+      { role: "system" as const, content: context.persona },
       ...(memoryStrings
         ? [{ role: "system" as const, content: `[RELEVANT MEMORIES OF USER]:\n${memoryStrings}` }]
         : []),
       ...(activeTodoStrings
-        ? [{ role: "system" as const, content: `[ACTIVE COMMITMENTS]:\n${activeTodoStrings}` }]
+        ? [
+            {
+              role: "system" as const,
+              content: `Things Mukesh said he would do:\n${activeTodoStrings}`,
+            },
+          ]
         : []),
       ...(context.userSeed ? [{ role: "system" as const, content: `User context: ${context.userSeed}` }] : []),
       ...(context.summarySpine ? [{ role: "system" as const, content: `Conversation summary: ${context.summarySpine}` }] : []),
