@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
           const verified = await verifyToken(bearerToken, {
             secretKey: env.CLERK_SECRET_KEY,
           });
-          clerkUserId = verified.data?.sub ?? null;
+          clerkUserId = verified?.sub ?? null;
         } catch (error) {
           console.warn("Bearer token verification failed:", error);
         }
