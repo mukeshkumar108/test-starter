@@ -26,6 +26,12 @@ enum MemoryType {
   OPEN_LOOP
 }
 
+enum TodoStatus {
+  PENDING
+  COMPLETED
+  SKIPPED
+}
+
 model User {
   id          String   @id @default(cuid())
   clerkUserId String   @unique
@@ -38,6 +44,7 @@ model User {
   memories      Memory[]
   summarySpines SummarySpine[]
   sessionStates SessionState[]
+  todos         Todo[]
 }
 
 model PersonaProfile {
@@ -53,6 +60,7 @@ model PersonaProfile {
   createdAt   DateTime @default(now())
   
   sessionStates SessionState[]
+  todos         Todo[]
 }
 
 model UserSeed {
@@ -77,6 +85,21 @@ model SessionState {
   persona PersonaProfile @relation(fields: [personaId], references: [id])
   
   @@unique([userId, personaId])
+}
+
+model Todo {
+  id          String     @id @default(cuid())
+  userId      String
+  personaId   String
+  content     String
+  status      TodoStatus @default(PENDING)
+  createdAt   DateTime   @default(now())
+  completedAt DateTime?
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  persona PersonaProfile @relation(fields: [personaId], references: [id], onDelete: Cascade)
+
+  @@index([userId, personaId, status])
 }
 
 model Message {

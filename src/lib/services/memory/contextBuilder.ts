@@ -9,6 +9,7 @@ export interface ConversationContext {
   sessionState?: any;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
   relevantMemories: string[];
+  activeTodos: string[];
   summarySpine?: string;
 }
 
@@ -72,12 +73,23 @@ export async function buildContext(
       return `[${sourceTag}] ${memory.content}`;
     });
 
+    const todos = await prisma.todo.findMany({
+      where: {
+        userId,
+        personaId,
+        status: "PENDING",
+      },
+      orderBy: { createdAt: "asc" },
+      select: { content: true },
+    });
+
     return {
       persona: personaPrompt,
       userSeed: userSeed?.content,
       sessionState: sessionState?.state,
       recentMessages: messages.reverse(), // Chronological order
       relevantMemories: memoryStrings,
+      activeTodos: todos.map((todo) => todo.content),
       summarySpine: summarySpine?.content,
     };
   } catch (error) {

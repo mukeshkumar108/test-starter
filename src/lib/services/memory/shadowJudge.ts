@@ -41,8 +41,8 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         .filter((memory) => memory !== null);
 
       const filteredMemories = normalizedMemories
-        .filter((memory) => (memory.confidence ?? 0) >= 0.85)
-        .slice(0, 2)
+        .filter((memory) => (memory.confidence ?? 0) >= 0.75)
+        .slice(0, 5)
         .filter(
           (memory) =>
             !/testing|frustrat|grateful|supportive|assistant|conversation|ready to help/i.test(
@@ -62,6 +62,23 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
           })
         )
       );
+
+      const openLoopTodos = filteredMemories.filter(
+        (memory) => memory.type === MemoryType.OPEN_LOOP
+      );
+      if (openLoopTodos.length > 0) {
+        await Promise.all(
+          openLoopTodos.map((memory) =>
+            prisma.todo.create({
+              data: {
+                userId,
+                personaId,
+                content: memory.content,
+              },
+            })
+          )
+        );
+      }
     }
 
     // Update session state
@@ -98,25 +115,32 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
 async function extractMemories(userMessage: string) {
   try {
     const requestId = crypto.randomUUID();
-    const prompt = `You are a strict memory extractor for a personal assistant.
+    const prompt = `You are a memory extractor for a personal assistant.
+
+GOAL:
+Capture any statement of intent, recurring habit, or specific life-context mentioned by the user.
 
 RULES (MUST FOLLOW):
-- Only extract memories that are explicitly stated by the USER in their message.
-- Do NOT infer, guess, generalize, or interpret.
-- Do NOT store temporary states (testing, mood, emotions, “working late”, “frustrated”, etc.).
-- Do NOT store meta commentary about the conversation or assistant
-  (e.g. “user is testing”, “assistant is supportive”, “user said thanks”).
+- Only extract memories explicitly stated by the USER.
+- Do NOT infer, guess, or interpret.
+- Do NOT store meta commentary about the conversation or assistant.
 - Do NOT store safety, policy, or consent statements.
-- Only store durable facts that will remain true in 30+ days OR long-running projects/goals.
 - If the USER corrects a fact (e.g. “my name is Mukesh, not Bella”), store ONLY the corrected fact.
 - If the user explicitly states their name (e.g., “my name is X” / “call me X”) you MUST store it as PROFILE.
-- If the user explicitly asks for daily accountability / steps / workout commitments, you MUST store it as OPEN_LOOP.
+- If the user states intent or commitment (near-term or recurring), you MUST store it as OPEN_LOOP.
+- FORCE RULE: Any sentence starting with "I'm going to..." or "I will..." must be extracted as OPEN_LOOP, even if it is a small task (e.g., shower, walk).
+
+OPEN_LOOP EXPANSION (examples you must capture):
+- “I will tidy the sink tonight.”
+- “Walking at 7:30 tomorrow.”
+- “Morning walk before noon every day.”
+- “I’ll do 30 minutes of exercise daily.”
 
 ALLOWED TYPES:
-- PROFILE: stable identity or preferences
-- PEOPLE: stable relationships explicitly stated by the user
-- PROJECT: ongoing products, companies, or systems the user is building
-- OPEN_LOOP: durable commitments the user explicitly intends to revisit
+- PROFILE: identity or preferences explicitly stated by the user
+- PEOPLE: relationships explicitly stated by the user
+- PROJECT: products, companies, or systems the user is building
+- OPEN_LOOP: intentions, commitments, habits, or near-term plans
 
 OUTPUT REQUIREMENTS:
 - Return ONLY valid JSON.
@@ -153,28 +177,39 @@ JSON SCHEMA:
       }),
     });
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "<no body>");
+      const truncated = errText.length > 500 ? `${errText.slice(0, 500)}…` : errText;
+      console.error("Shadow Judge request failed:", {
+        requestId,
+        status: response.status,
+        statusText: response.statusText,
+        body: truncated,
+      });
+      return [];
+    }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content ?? "";
+    const repaired = repairJsonContent(content);
     let result: { memories?: any[] } | null = null;
 
     try {
-      result = JSON.parse(content);
+      result = JSON.parse(repaired);
     } catch {
-      const start = content.indexOf("{");
-      const end = content.lastIndexOf("}");
+      const start = repaired.indexOf("{");
+      const end = repaired.lastIndexOf("}");
       if (start !== -1 && end !== -1 && end > start) {
-        const slice = content.slice(start, end + 1);
+        const slice = repaired.slice(start, end + 1);
         try {
           result = JSON.parse(slice);
         } catch {
-          const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
+          const truncated = repaired.length > 500 ? `${repaired.slice(0, 500)}…` : repaired;
           console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
           return [];
         }
       } else {
-        const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
+        const truncated = repaired.length > 500 ? `${repaired.slice(0, 500)}…` : repaired;
         console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
         return [];
       }
@@ -186,6 +221,27 @@ JSON SCHEMA:
     console.error("Memory extraction failed:", error);
     return [];
   }
+}
+
+function repairJsonContent(content: string) {
+  let cleaned = content.trim();
+  cleaned = cleaned.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  if (cleaned.startsWith("[") && cleaned.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (Array.isArray(parsed)) {
+        if (parsed.length === 1 && typeof parsed[0] === "object" && parsed[0] !== null) {
+          return JSON.stringify(parsed[0]);
+        }
+        if (parsed.every((item) => typeof item === "object" && item !== null && "content" in item)) {
+          return JSON.stringify({ memories: parsed });
+        }
+      }
+    } catch {
+      // Fall through to return cleaned content.
+    }
+  }
+  return cleaned;
 }
 
 async function updateSessionState(
