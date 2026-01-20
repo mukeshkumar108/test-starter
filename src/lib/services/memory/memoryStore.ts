@@ -8,6 +8,7 @@ export interface Memory {
   type: MemoryType;
   content: string;
   similarity?: number;
+  operator?: string;
   metadata?: any;
 }
 
@@ -27,15 +28,17 @@ export async function searchMemories(
     // Vector similarity search using pgvector
     const memories = await prisma.$queryRaw<Memory[]>`
       SELECT id, type, content, metadata,
-             1 - (embedding <=> ${queryEmbedding}::vector) as similarity
+             1 - (embedding <=> ${queryEmbedding}::vector) as similarity,
+             '<=>' as operator
       FROM "Memory"
       WHERE "userId" = ${userId}
+        AND "type" IN ('PROFILE', 'PEOPLE', 'PROJECT')
         AND embedding IS NOT NULL
       ORDER BY embedding <=> ${queryEmbedding}::vector
       LIMIT ${limit}
     `;
 
-    return memories.filter(m => (m.similarity || 0) > 0.7); // Similarity threshold
+    return memories;
   } catch (error) {
     console.error("Memory search failed:", error);
     return [];
@@ -58,11 +61,16 @@ export async function storeMemory(
       content,
       metadata,
     };
-    if (embedding) {
-      data.embedding = embedding;
-    }
 
-    await prisma.memory.create({ data });
+    const created = await prisma.memory.create({ data });
+    if (embedding) {
+      const embeddingLiteral = `[${embedding.join(",")}]`;
+      await prisma.$executeRaw`
+        UPDATE "Memory"
+        SET embedding = ${embeddingLiteral}::vector
+        WHERE id = ${created.id}
+      `;
+    }
   } catch (error) {
     console.error("Memory storage failed:", error);
     throw error;

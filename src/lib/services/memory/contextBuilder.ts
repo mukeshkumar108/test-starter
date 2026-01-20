@@ -8,9 +8,41 @@ export interface ConversationContext {
   userSeed?: string;
   sessionState?: any;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  foundationMemories: string[];
   relevantMemories: string[];
   activeTodos: string[];
+  recentWins: string[];
   summarySpine?: string;
+}
+
+function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
+  const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
+  const perTypeCaps: Record<string, number> = {
+    PROFILE: 2,
+    PEOPLE: 3,
+    PROJECT: 3,
+  };
+  const counts: Record<string, number> = {
+    PROFILE: 0,
+    PEOPLE: 0,
+    PROJECT: 0,
+  };
+  const seen = new Set<string>();
+  const selected: Array<{ type: string; content: string }> = [];
+
+  for (const memory of memories) {
+    if (!allowedTypes.has(memory.type)) continue;
+    const normalizedContent = memory.content.trim().toLowerCase();
+    if (seen.has(normalizedContent)) continue;
+    if (counts[memory.type] >= perTypeCaps[memory.type]) continue;
+    if (selected.length >= 8) break;
+
+    selected.push(memory);
+    seen.add(normalizedContent);
+    counts[memory.type] += 1;
+  }
+
+  return selected;
 }
 
 export async function buildContext(
@@ -64,14 +96,28 @@ export async function buildContext(
       orderBy: { version: "desc" },
     });
 
-    const relevantMemories = await searchMemories(userId, userMessage);
-    const memoryStrings = relevantMemories.map((memory) => {
+    const formatMemory = (memory: { content: string; metadata?: any }) => {
       const source = memory.metadata?.source;
       const sourceLabel =
         source === "seeded_profile" ? "GOSPEL" : "OBSERVATION";
       const sourceTag = source ? `${sourceLabel}:${source}` : `${sourceLabel}:unknown`;
       return `[${sourceTag}] ${memory.content}`;
+    };
+
+    const foundationMemories = await prisma.memory.findMany({
+      where: {
+        userId,
+        type: { in: ["PROFILE", "PEOPLE", "PROJECT"] },
+      },
+      orderBy: { createdAt: "asc" },
+      take: 12,
+      select: { content: true, metadata: true },
     });
+
+    const relevantMemories = await searchMemories(userId, userMessage, 12);
+    const selectedRelevant = selectRelevantMemories(relevantMemories);
+    const relevantMemoryStrings = selectedRelevant.map(formatMemory);
+    const foundationMemoryStrings = foundationMemories.map(formatMemory);
 
     const todos = await prisma.todo.findMany({
       where: {
@@ -80,6 +126,21 @@ export async function buildContext(
         status: "PENDING",
       },
       orderBy: { createdAt: "asc" },
+      take: 7,
+      select: { content: true },
+    });
+
+    const recentWins = await prisma.todo.findMany({
+      where: {
+        userId,
+        personaId,
+        status: "COMPLETED",
+        completedAt: {
+          gte: new Date(Date.now() - 48 * 60 * 60 * 1000),
+        },
+      },
+      orderBy: { completedAt: "desc" },
+      take: 3,
       select: { content: true },
     });
 
@@ -88,8 +149,10 @@ export async function buildContext(
       userSeed: userSeed?.content,
       sessionState: sessionState?.state,
       recentMessages: messages.reverse(), // Chronological order
-      relevantMemories: memoryStrings,
+      foundationMemories: foundationMemoryStrings,
+      relevantMemories: relevantMemoryStrings,
       activeTodos: todos.map((todo) => todo.content),
+      recentWins: recentWins.map((todo) => todo.content),
       summarySpine: summarySpine?.content,
     };
   } catch (error) {

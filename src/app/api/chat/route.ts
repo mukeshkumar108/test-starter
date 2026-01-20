@@ -187,24 +187,33 @@ export async function POST(request: NextRequest) {
     });
 
     // Step 3: Generate LLM response
-    const memoryStrings = context.relevantMemories.join("\n");
+    const foundationMemoryStrings = context.foundationMemories.join("\n");
+    const relevantMemoryStrings = context.relevantMemories.join("\n");
     const sessionContext = getSessionContext(context.sessionState);
     const activeTodos = context.activeTodos;
     const activeTodoStrings = activeTodos.join("\n");
+    const recentWins = context.recentWins;
+    const recentWinStrings = recentWins.join("\n");
     const messages = [
       { role: "system" as const, content: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }) },
       ...(sessionContext ? [{ role: "system" as const, content: sessionContext }] : []),
       { role: "system" as const, content: context.persona },
-      ...(memoryStrings
-        ? [{ role: "system" as const, content: `[RELEVANT MEMORIES OF USER]:\n${memoryStrings}` }]
+      ...(foundationMemoryStrings
+        ? [{ role: "system" as const, content: `[FOUNDATION MEMORIES]:\n${foundationMemoryStrings}` }]
+        : []),
+      ...(relevantMemoryStrings
+        ? [{ role: "system" as const, content: `[RELEVANT MEMORIES]:\n${relevantMemoryStrings}` }]
         : []),
       ...(activeTodoStrings
         ? [
             {
               role: "system" as const,
-              content: `Things Mukesh said he would do:\n${activeTodoStrings}`,
+              content: `OPEN LOOPS (pending):\n${activeTodoStrings}`,
             },
           ]
+        : []),
+      ...(recentWinStrings
+        ? [{ role: "system" as const, content: `Recent wins:\n${recentWinStrings}` }]
         : []),
       ...(context.userSeed ? [{ role: "system" as const, content: `User context: ${context.userSeed}` }] : []),
       ...(context.summarySpine ? [{ role: "system" as const, content: `Conversation summary: ${context.summarySpine}` }] : []),

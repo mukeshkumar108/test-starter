@@ -17,9 +17,22 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const { userId, personaId, userMessage, assistantResponse, currentSessionState } = params;
     const allowedTypes = new Set(Object.values(MemoryType));
 
-    // Extract memories using judge model
-    console.log("Shadow Judge user message:", { requestId, userMessage });
-    const memories = await extractMemories(userMessage);
+    // Extract memories using judge model (last 3-6 user-only turns)
+    const recentUserMessages = await prisma.message.findMany({
+      where: { userId, role: "user" },
+      orderBy: { createdAt: "desc" },
+      take: 6,
+      select: { content: true, createdAt: true },
+    });
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    const recentWindow = recentUserMessages
+      .filter((m) => m.createdAt.getTime() >= cutoff)
+      .map((m) => m.content);
+    const windowCandidates = [userMessage, ...recentWindow].filter(Boolean);
+    const deduped = windowCandidates.filter((content, index, arr) => arr.indexOf(content) === index);
+    const userWindow = deduped.slice(0, 4).reverse();
+    console.log("Shadow Judge user messages:", { requestId, userWindow });
+    const memories = await extractMemories(userWindow);
 
     // Store memories if any
     if (memories.length > 0) {
@@ -43,7 +56,6 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         .filter((memory) => memory !== null);
 
       const filteredMemories = normalizedMemories
-        .filter((memory) => (memory.confidence ?? 0) >= 0.75)
         .slice(0, 5)
         .filter(
           (memory) =>
@@ -52,8 +64,23 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
             )
         );
 
+      const profileStoplist = new Set([
+        "sophie",
+        "isabella",
+        "william",
+        "alexander",
+      ]);
+      const foundationMemories = filteredMemories.filter(
+        (memory) => memory.type !== MemoryType.OPEN_LOOP
+      );
+      const sanitizedFoundation = foundationMemories.filter((memory) => {
+        if (memory.type !== MemoryType.PROFILE) return true;
+        const normalized = memory.content.trim().toLowerCase();
+        return !profileStoplist.has(normalized);
+      });
+
       await Promise.all(
-        filteredMemories.map(async (memory) => {
+        sanitizedFoundation.map(async (memory) => {
           try {
             console.log("Shadow Judge memory write attempt:", {
               requestId,
@@ -100,6 +127,21 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
       }
     }
 
+    const activeTodos = await prisma.todo.findMany({
+      where: { userId, personaId, status: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+    if (
+      activeTodos.length === 1 &&
+      /\b(done|finished|completed)\b/i.test(userMessage)
+    ) {
+      await prisma.todo.update({
+        where: { id: activeTodos[0].id },
+        data: { status: "COMPLETED", completedAt: new Date() },
+      });
+    }
+
     // Update session state
     const updatedSessionState = await updateSessionState(
       userId,
@@ -131,52 +173,27 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
   }
 }
 
-async function extractMemories(userMessage: string) {
+async function extractMemories(userMessages: string[]) {
   try {
     const requestId = crypto.randomUUID();
-    const prompt = `You are a memory extractor for a personal assistant.
+    const prompt = `Extract explicit user facts and commitments. Return ONLY JSON.
 
-GOAL:
-Capture any statement of intent, recurring habit, or specific life-context mentioned by the user.
+MUST:
+- If the user states their name, capture it as PROFILE.
+- Capture commitments, habits, or plans as OPEN_LOOP (including implied intent).
 
-RULES (MUST FOLLOW):
-- Only extract memories explicitly stated by the USER.
-- Do NOT infer, guess, or interpret.
-- Do NOT store meta commentary about the conversation or assistant.
-- Do NOT store safety, policy, or consent statements.
-- If the USER corrects a fact (e.g. “my name is Mukesh, not Bella”), store ONLY the corrected fact.
-- If the user explicitly states their name (e.g., “my name is X” / “call me X”) you MUST store it as PROFILE.
-- If the user states intent or commitment (near-term or recurring), you MUST store it as OPEN_LOOP.
-- FORCE RULE: Any sentence starting with "I'm going to..." or "I will..." must be extracted as OPEN_LOOP, even if it is a small task (e.g., shower, walk).
+FOUNDATION (PROFILE/PEOPLE/PROJECT):
+- Only if explicitly stated by the user.
+- Do not infer or guess.
+- Do not capture assistant/persona names as PROFILE.
 
-OPEN_LOOP EXPANSION (examples you must capture):
-- “I will tidy the sink tonight.”
-- “Walking at 7:30 tomorrow.”
-- “Morning walk before noon every day.”
-- “I’ll do 30 minutes of exercise daily.”
-
-ALLOWED TYPES:
-- PROFILE: identity or preferences explicitly stated by the user
-- PEOPLE: relationships explicitly stated by the user
-- PROJECT: products, companies, or systems the user is building
-- OPEN_LOOP: intentions, commitments, habits, or near-term plans
-
-OUTPUT REQUIREMENTS:
-- Return ONLY valid JSON.
-- No markdown, no explanations, no extra text.
-- If nothing qualifies, return {"memories": []}.
-
-USER MESSAGE:
-${userMessage}
+USER MESSAGES:
+${userMessages.join("\n")}
 
 JSON SCHEMA:
 {
   "memories": [
-    {
-      "type": "PROFILE|PEOPLE|PROJECT|OPEN_LOOP",
-      "content": "short factual memory",
-      "confidence": 0.0
-    }
+    { "type": "PROFILE|PEOPLE|PROJECT|OPEN_LOOP", "content": "..." }
   ]
 }`;
 
@@ -237,12 +254,7 @@ JSON SCHEMA:
     }
     
     if (!result) return [];
-    return (result.memories || []).map((memory) => {
-      if (memory?.type === "OPEN_LOOP") {
-        return { ...memory, confidence: 1.0 };
-      }
-      return memory;
-    });
+    return result.memories || [];
   } catch (error) {
     console.error("Memory extraction failed:", error);
     return [];
