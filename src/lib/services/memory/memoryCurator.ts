@@ -372,6 +372,22 @@ export async function autoCurateMaybe(userId: string, personaId: string) {
       },
     })
   );
+  if (elapsedMs > 5000) {
+    console.warn(
+      "[curator.warn]",
+      JSON.stringify({
+        userId,
+        personaId,
+        reason,
+        elapsedMs,
+        counts: {
+          archived: result.archived,
+          deduped: result.deduped,
+          folded: result.folded,
+        },
+      })
+    );
+  }
 
   return { ...result, reason };
 }

@@ -28,6 +28,7 @@ const envSchema = z.object({
   FEATURE_CONTEXT_DEBUG: z.string().optional(),
   FEATURE_SESSION_SUMMARY: z.string().optional(),
   FEATURE_SUMMARY_TEST_STALL: z.string().optional(),
+  FEATURE_JUDGE_TEST_MODE: z.string().optional(),
   SUMMARY_TIMEOUT_MS: z.string().optional(),
 });
 

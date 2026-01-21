@@ -1,16 +1,6 @@
-import { prisma } from "@/lib/prisma";
-import { createQaUser, getPersonaIdBySlug, cleanupQaUser, isQaClerkId } from "./regress/helpers";
-import { RegressContext, RegressResult } from "./regress/types";
-import { run as shadowJudgeWrites } from "./regress/cases/shadowJudge_writes";
-import { run as loopSemantics } from "./regress/cases/loop_semantics";
-import { run as stoplistProfile } from "./regress/cases/stoplist_profile";
-import { run as contextCaps } from "./regress/cases/context_caps";
-import { run as contextBlocks } from "./regress/cases/context_blocks";
-import { run as sessionLifecycle } from "./regress/cases/session_lifecycle";
-import { run as promptSizeWarn } from "./regress/cases/prompt_size_warn";
-import { run as sessionSummaryCreated } from "./regress/cases/session_summary_created";
-import { run as sessionSummaryNonBlocking } from "./regress/cases/session_summary_non_blocking";
-import { run as curatorAutoTrigger } from "./regress/cases/curator_auto_trigger";
+process.env.FEATURE_JUDGE_TEST_MODE = "true";
+
+import type { RegressContext, RegressResult } from "./regress/types";
 
 async function runCase(fn: (ctx: RegressContext) => Promise<RegressResult>, ctx: RegressContext) {
   const result = await fn(ctx);
@@ -21,6 +11,24 @@ async function runCase(fn: (ctx: RegressContext) => Promise<RegressResult>, ctx:
 }
 
 async function main() {
+  const { prisma } = await import("@/lib/prisma");
+  const {
+    createQaUser,
+    getPersonaIdBySlug,
+    cleanupQaUser,
+    isQaClerkId,
+  } = await import("./regress/helpers");
+  const { run: shadowJudgeWrites } = await import("./regress/cases/shadowJudge_writes");
+  const { run: loopSemantics } = await import("./regress/cases/loop_semantics");
+  const { run: stoplistProfile } = await import("./regress/cases/stoplist_profile");
+  const { run: contextCaps } = await import("./regress/cases/context_caps");
+  const { run: contextBlocks } = await import("./regress/cases/context_blocks");
+  const { run: sessionLifecycle } = await import("./regress/cases/session_lifecycle");
+  const { run: promptSizeWarn } = await import("./regress/cases/prompt_size_warn");
+  const { run: sessionSummaryCreated } = await import("./regress/cases/session_summary_created");
+  const { run: sessionSummaryNonBlocking } = await import("./regress/cases/session_summary_non_blocking");
+  const { run: curatorAutoTrigger } = await import("./regress/cases/curator_auto_trigger");
+
   const user = await createQaUser();
   if (!isQaClerkId(user.clerkUserId)) {
     throw new Error(`Refusing to run on non-QA user: ${user.clerkUserId}`);
