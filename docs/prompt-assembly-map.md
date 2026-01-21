@@ -1,9 +1,9 @@
 # Prompt Assembly Map (Live Code)
 
-## v1.3.3 changes
-- Foundation memories are seeded-first, then oldest-first.
-- Soft prompt-size warning logs when the assembled prompt exceeds 20,000 chars.
-- Session summary JSON is sanitized (fences stripped) before parsing.
+## v1.3.5 / v1.3.6 changes
+- Open loops are split into COMMITMENTS, THREADS, and FRICTIONS.
+- COMMITMENTS drive tasks; THREADS/FRICTIONS are tracked separately.
+- Curator auto-trigger runs deterministically and asynchronously.
 
 ## Raw Code Excerpts
 
@@ -34,13 +34,19 @@
       ...(relevantMemoryStrings
         ? [{ role: "system" as const, content: `[RELEVANT MEMORIES]:\n${relevantMemoryStrings}` }]
         : []),
-      ...(activeTodoStrings
+      ...(commitmentStrings
         ? [
             {
               role: "system" as const,
-              content: `OPEN LOOPS (pending):\n${activeTodoStrings}`,
+              content: `COMMITMENTS (pending):\n${commitmentStrings}`,
             },
           ]
+        : []),
+      ...(threadStrings
+        ? [{ role: "system" as const, content: `ACTIVE THREADS:\n${threadStrings}` }]
+        : []),
+      ...(frictionStrings
+        ? [{ role: "system" as const, content: `FRICTIONS / PATTERNS:\n${frictionStrings}` }]
         : []),
       ...(recentWinStrings
         ? [{ role: "system" as const, content: `Recent wins:\n${recentWinStrings}` }]
@@ -69,13 +75,17 @@ export interface ConversationContext {
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   foundationMemories: string[];
   relevantMemories: string[];
-  activeTodos: string[];
+  commitments: string[];
+  threads: string[];
+  frictions: string[];
   recentWins: string[];
   summarySpine?: string;
   sessionSummary?: string;
 }
 
-const MAX_OPEN_LOOPS = 5;
+const MAX_COMMITMENTS = 5;
+const MAX_THREADS = 3;
+const MAX_FRICTIONS = 3;
 const MAX_USER_SEED_CHARS = 800;
 const MAX_SUMMARY_SPINE_CHARS = 1200;
 const MAX_RECENT_MESSAGE_CHARS = 800;
@@ -119,7 +129,7 @@ function selectRelevantMemories(memories: Array<{ type: string; content: string 
   return selected;
 }
 
-function dedupeOpenLoops(
+function dedupeTodos(
   todos: Array<{ id: string; content: string; createdAt: Date }>
 ) {
   const sorted = [...todos].sort(
@@ -129,13 +139,13 @@ function dedupeOpenLoops(
   const deduped: Array<{ id: string; content: string; createdAt: Date }> = [];
 
   for (const todo of sorted) {
-    const normalized = todo.content.trim().toLowerCase();
+    const normalized = normalizeText(todo.content);
     if (seen.has(normalized)) continue;
     seen.add(normalized);
     deduped.push(todo);
   }
 
-  return deduped.slice(0, MAX_OPEN_LOOPS);
+  return deduped;
 }
 
     const foundationMemories = await prisma.memory.findMany({
@@ -168,23 +178,50 @@ function dedupeOpenLoops(
     const relevantMemoryStrings = selectedRelevant.map(formatMemory);
     const foundationMemoryStrings = sortedFoundation.map(formatMemory);
 
-    const todos = await prisma.todo.findMany({
+    const commitmentTodos = await prisma.todo.findMany({
       where: {
         userId,
         personaId,
         status: "PENDING",
+        kind: "COMMITMENT",
       },
       orderBy: { createdAt: "asc" },
       take: 20,
       select: { id: true, content: true, createdAt: true },
     });
-    const openLoops = dedupeOpenLoops(todos);
+    const threadTodos = await prisma.todo.findMany({
+      where: {
+        userId,
+        personaId,
+        status: "PENDING",
+        kind: "THREAD",
+      },
+      orderBy: { createdAt: "asc" },
+      take: 20,
+      select: { id: true, content: true, createdAt: true },
+    });
+    const frictionTodos = await prisma.todo.findMany({
+      where: {
+        userId,
+        personaId,
+        status: "PENDING",
+        kind: "FRICTION",
+      },
+      orderBy: { createdAt: "asc" },
+      take: 20,
+      select: { id: true, content: true, createdAt: true },
+    });
+
+    const commitments = dedupeTodos(commitmentTodos).slice(0, MAX_COMMITMENTS);
+    const threads = dedupeTodos(threadTodos).slice(0, MAX_THREADS);
+    const frictions = dedupeTodos(frictionTodos).slice(0, MAX_FRICTIONS);
 
     const recentWins = await prisma.todo.findMany({
       where: {
         userId,
         personaId,
         status: "COMPLETED",
+        kind: "COMMITMENT",
         completedAt: {
           gte: new Date(Date.now() - 48 * 60 * 60 * 1000),
         },
@@ -206,7 +243,9 @@ function dedupeOpenLoops(
         .reverse(),
       foundationMemories: foundationMemoryStrings,
       relevantMemories: relevantMemoryStrings,
-      activeTodos: openLoops.map((todo) => todo.content),
+      commitments: commitments.map((todo) => todo.content),
+      threads: threads.map((todo) => todo.content),
+      frictions: frictions.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
       summarySpine: summarySpine?.content?.slice(0, MAX_SUMMARY_SPINE_CHARS),
       sessionSummary: formatSessionSummary(latestSessionSummary?.summary),
@@ -247,22 +286,34 @@ function dedupeOpenLoops(
         })
       );
 
-      const openLoopTodos = filteredMemories.filter(
-        (memory) => memory.type === MemoryType.OPEN_LOOP
+    const normalizedLoops = loops
+      .map((loop) => {
+        const rawKind = typeof loop.kind === "string" ? loop.kind : "";
+        const normalizedKind = rawKind.trim().toUpperCase();
+        const content = typeof loop.content === "string" ? loop.content.trim() : "";
+        if (!content) return null;
+        const allowedKinds = new Set(["COMMITMENT", "THREAD", "FRICTION"]);
+        const safeKind = allowedKinds.has(normalizedKind) ? normalizedKind : "THREAD";
+        return { kind: safeKind as TodoKind, content, confidence: loop.confidence };
+      })
+      .filter((loop) => loop !== null)
+      .slice(0, 8);
+
+    if (normalizedLoops.length > 0) {
+      await Promise.all(
+        normalizedLoops.map(async (loop) => {
+          await prisma.todo.create({
+            data: {
+              userId,
+              personaId,
+              content: loop.content,
+              kind: loop.kind,
+              status: "PENDING",
+            },
+          });
+        })
       );
-      if (openLoopTodos.length > 0) {
-        await Promise.all(
-          openLoopTodos.map(async (memory) => {
-            await prisma.todo.create({
-              data: {
-                userId,
-                personaId,
-                content: memory.content,
-              },
-            });
-          })
-        );
-      }
+    }
 ```
 
 ### src/lib/services/session/sessionService.ts (summary retrieval)
@@ -281,8 +332,10 @@ export async function getLatestSessionSummary(userId: string, personaId: string)
 | --- | --- | --- | --- | --- | --- |
 | Foundation | contextBuilder.ts -> foundationMemories | Memory (PROFILE/PEOPLE/PROJECT) | take 12 | none | Seeded profiles sorted first, then oldest-first. |
 | Relevant | memoryStore.ts searchMemories + contextBuilder selectRelevantMemories | Memory (PROFILE/PEOPLE/PROJECT) | top 12 raw; max 8 selected | per-type + content | Deduped against Foundation by normalized content. |
-| Open Loops | contextBuilder.ts dedupeOpenLoops | Todo (PENDING) | max 5 | normalized content | Depends on Todo creation; may still include noisy commitments. |
-| Wins | contextBuilder.ts recentWins | Todo (COMPLETED, last 48h) | max 3 | none | Uses content only; no metadata. |
+| Commitments | contextBuilder.ts dedupeTodos | Todo (PENDING, kind=COMMITMENT) | max 5 | normalized content | Tasks only; avoids ambiguous/venting loops. |
+| Active Threads | contextBuilder.ts dedupeTodos | Todo (PENDING, kind=THREAD) | max 3 | normalized content | Unresolved topics/questions. |
+| Frictions / Patterns | contextBuilder.ts dedupeTodos | Todo (PENDING, kind=FRICTION) | max 3 | normalized content | Recurring blockers/patterns. |
+| Wins | contextBuilder.ts recentWins | Todo (COMPLETED, kind=COMMITMENT, last 48h) | max 3 | none | Uses content only; no metadata. |
 | Summary Spine | contextBuilder.ts summarySpine | SummarySpine.content | max 1200 chars | none | No truncation per section; could still be dense. |
 | Latest Session Summary | sessionService.ts getLatestSessionSummary | SessionSummary.summary | max 600 chars | none | Only injected if exists. |
 | Prompt Size Warn | route.ts assembly | all blocks | warn at >20,000 chars | n/a | Logs `[chat.prompt.warn]` with sizes and counts. |
@@ -291,10 +344,10 @@ export async function getLatestSessionSummary(userId: string, personaId: string)
 
 ## Duplications / Contradictions
 - SessionState lastInteraction duplicates Session.lastActivityAt; both can inform “time since last message.”
-- Open Loops are derived from Todos; if Todo creation duplicates, block can still show repetition despite dedupe by text.
+- Commitments/threads/frictions are derived from Todos; duplicates can still occur if similar phrasing varies.
 - Session summaries are generated asynchronously; they may lag behind the most recent turns.
 
 ## Smallest 3 Improvements (no behavior change)
-1) Promote seeded profiles to a fixed top slice (e.g., always include up to N seeded before other entries).
-2) Normalize Todo content beyond whitespace (strip punctuation) before dedupe to reduce near-duplicates.
-3) Add a warning log when async session summary creation fails (counts + elapsed) to aid debugging.
+1) Prefer a fixed cap of seeded truths in Foundation (e.g., always include up to N seeded before any extracted).
+2) Normalize Todo content further (strip parentheses/quotes) before dedupe to reduce near-duplicates.
+3) Add per-kind counts to the prompt-size warning for quicker triage.

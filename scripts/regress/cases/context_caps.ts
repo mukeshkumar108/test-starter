@@ -15,8 +15,14 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
     );
   }
 
-  for (let i = 0; i < 10; i += 1) {
-    await seedTodo(ctx.userId, ctx.personaId, `Todo item ${i}`);
+  for (let i = 0; i < 4; i += 1) {
+    await seedTodo(ctx.userId, ctx.personaId, `Commitment ${i}`, "PENDING", "COMMITMENT");
+  }
+  for (let i = 0; i < 4; i += 1) {
+    await seedTodo(ctx.userId, ctx.personaId, `Thread ${i}`, "PENDING", "THREAD");
+  }
+  for (let i = 0; i < 4; i += 1) {
+    await seedTodo(ctx.userId, ctx.personaId, `Friction ${i}`, "PENDING", "FRICTION");
   }
 
   const context = await buildContext(ctx.userId, ctx.personaId, "hello");
@@ -26,7 +32,9 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
 
   const ok =
     context.relevantMemories.length <= 8 &&
-    context.activeTodos.length <= 5 &&
+    context.commitments.length <= 5 &&
+    context.threads.length <= 3 &&
+    context.frictions.length <= 3 &&
     onlyAllowedTypes;
 
   return {
@@ -34,7 +42,9 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
     ok,
     evidence: {
       relevantCount: context.relevantMemories.length,
-      activeTodosCount: context.activeTodos.length,
+      commitmentsCount: context.commitments.length,
+      threadsCount: context.threads.length,
+      frictionsCount: context.frictions.length,
       relevantTypes: relevant.map((memory) => memory.type),
     },
   };

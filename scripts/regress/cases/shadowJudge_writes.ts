@@ -31,7 +31,7 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
 
   const todos = await prisma.todo.findMany({
     where: { userId: ctx.userId, personaId: ctx.personaId },
-    select: { id: true, content: true, status: true },
+    select: { id: true, content: true, status: true, kind: true },
   });
 
   const openLoopMemories = await prisma.memory.findMany({
@@ -39,13 +39,15 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
     select: { id: true, content: true },
   });
 
-  const ok = todos.length >= 1 && openLoopMemories.length === 0;
+  const hasCommitment = todos.some((todo) => todo.kind === "COMMITMENT");
+  const ok = todos.length >= 1 && openLoopMemories.length === 0 && hasCommitment;
   return {
     name,
     ok,
     evidence: {
       todoCount: todos.length,
       todos,
+      hasCommitment,
       openLoopMemoryCount: openLoopMemories.length,
       openLoopMemories,
     },

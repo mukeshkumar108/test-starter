@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { storeMemory } from "@/lib/services/memory/memoryStore";
-import { MemoryType, TodoStatus } from "@prisma/client";
+import { MemoryType, TodoKind, TodoStatus } from "@prisma/client";
 
 const QA_PREFIX = "qa_regress_";
 
@@ -38,7 +38,8 @@ export async function seedTodo(
   userId: string,
   personaId: string,
   content: string,
-  status: TodoStatus = "PENDING"
+  status: TodoStatus = "PENDING",
+  kind: TodoKind = "COMMITMENT"
 ) {
   return prisma.todo.create({
     data: {
@@ -46,6 +47,7 @@ export async function seedTodo(
       personaId,
       content,
       status,
+      kind,
     },
   });
 }
