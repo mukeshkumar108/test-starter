@@ -9,7 +9,7 @@ export interface ConversationContext {
   persona: string;
   userSeed?: string;
   sessionState?: any;
-  recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   foundationMemories: string[];
   relevantMemories: string[];
   activeTodos: string[];
@@ -19,6 +19,9 @@ export interface ConversationContext {
 }
 
 const MAX_OPEN_LOOPS = 5;
+const MAX_USER_SEED_CHARS = 800;
+const MAX_SUMMARY_SPINE_CHARS = 1200;
+const MAX_RECENT_MESSAGE_CHARS = 800;
 
 function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
   const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
@@ -108,6 +111,7 @@ export async function buildContext(
       select: {
         role: true,
         content: true,
+        createdAt: true,
       },
     });
 
@@ -182,14 +186,19 @@ export async function buildContext(
 
     return {
       persona: personaPrompt,
-      userSeed: userSeed?.content,
+      userSeed: userSeed?.content?.slice(0, MAX_USER_SEED_CHARS),
       sessionState: sessionState?.state,
-      recentMessages: messages.reverse(), // Chronological order
+      recentMessages: messages
+        .map((message) => ({
+          ...message,
+          content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+        }))
+        .reverse(), // Chronological order
       foundationMemories: foundationMemoryStrings,
       relevantMemories: relevantMemoryStrings,
       activeTodos: openLoops.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
-      summarySpine: summarySpine?.content,
+      summarySpine: summarySpine?.content?.slice(0, MAX_SUMMARY_SPINE_CHARS),
       sessionSummary: latestSessionSummary?.summary.slice(0, 600),
     };
   } catch (error) {
