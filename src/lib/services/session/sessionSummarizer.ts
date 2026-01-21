@@ -32,8 +32,14 @@ function buildPrompt(messages: Array<{ role: string; content: string }>, previou
 }
 
 function normalizeSummary(content: string): SummaryPayload {
+  const cleaned = content
+    .trim()
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
   try {
-    const parsed = JSON.parse(content) as SummaryPayload;
+    const parsed = JSON.parse(cleaned) as SummaryPayload;
     if (parsed && typeof parsed.one_liner === "string") {
       return {
         one_liner: parsed.one_liner.trim(),
@@ -48,9 +54,10 @@ function normalizeSummary(content: string): SummaryPayload {
     // Fall through.
   }
 
-  const trimmed = content.trim();
+  const trimmed = cleaned;
+  const firstSentence = trimmed.split(/(?<=[.!?])\s+/)[0] ?? "";
   return {
-    one_liner: trimmed.slice(0, 200) || "No meaningful content.",
+    one_liner: firstSentence.slice(0, 200) || trimmed.slice(0, 200) || "No meaningful content.",
     what_mattered: [],
     open_loops: [],
     commitments: [],
