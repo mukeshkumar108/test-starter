@@ -37,8 +37,6 @@ enum TodoKind {
   COMMITMENT
   HABIT
   REMINDER
-  THREAD
-  FRICTION
 }
 
 model Session {

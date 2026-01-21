@@ -1,3 +1,0 @@
--- Add new TodoKind values for v1.3.5
-ALTER TYPE "TodoKind" ADD VALUE IF NOT EXISTS 'THREAD';
-ALTER TYPE "TodoKind" ADD VALUE IF NOT EXISTS 'FRICTION';
