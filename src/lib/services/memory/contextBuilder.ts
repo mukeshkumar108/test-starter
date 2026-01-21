@@ -22,6 +22,7 @@ const MAX_OPEN_LOOPS = 5;
 const MAX_USER_SEED_CHARS = 800;
 const MAX_SUMMARY_SPINE_CHARS = 1200;
 const MAX_RECENT_MESSAGE_CHARS = 800;
+const MAX_SESSION_SUMMARY_CHARS = 600;
 
 function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
   const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
@@ -70,6 +71,31 @@ function dedupeOpenLoops(
   }
 
   return deduped.slice(0, MAX_OPEN_LOOPS);
+}
+
+function formatSessionSummary(summary?: string | null) {
+  if (!summary) return undefined;
+  try {
+    const parsed = JSON.parse(summary) as {
+      one_liner?: string;
+      what_mattered?: string[];
+      open_loops?: string[];
+      commitments?: string[];
+      people?: string[];
+      tone?: string;
+    };
+    const parts = [
+      parsed.one_liner ? `One-liner: ${parsed.one_liner}` : null,
+      parsed.what_mattered?.length ? `What mattered: ${parsed.what_mattered.join("; ")}` : null,
+      parsed.open_loops?.length ? `Open loops: ${parsed.open_loops.join("; ")}` : null,
+      parsed.commitments?.length ? `Commitments: ${parsed.commitments.join("; ")}` : null,
+      parsed.people?.length ? `People: ${parsed.people.join("; ")}` : null,
+      parsed.tone ? `Tone: ${parsed.tone}` : null,
+    ].filter(Boolean);
+    return parts.join(" | ").slice(0, MAX_SESSION_SUMMARY_CHARS);
+  } catch {
+    return summary.slice(0, MAX_SESSION_SUMMARY_CHARS);
+  }
 }
 
 export async function buildContext(
@@ -199,7 +225,7 @@ export async function buildContext(
       activeTodos: openLoops.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
       summarySpine: summarySpine?.content?.slice(0, MAX_SUMMARY_SPINE_CHARS),
-      sessionSummary: latestSessionSummary?.summary.slice(0, 600),
+      sessionSummary: formatSessionSummary(latestSessionSummary?.summary),
     };
   } catch (error) {
     console.error("Context Builder Error:", error);

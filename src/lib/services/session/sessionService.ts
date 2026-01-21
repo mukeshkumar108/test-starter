@@ -1,10 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
+import { summarizeSession } from "@/lib/services/session/sessionSummarizer";
 
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
 
 function isSummaryEnabled() {
-  return env.FEATURE_SESSION_SUMMARY === "true";
+  return env.FEATURE_SESSION_SUMMARY !== "false";
 }
 
 async function createSessionSummary(session: {
@@ -14,66 +15,30 @@ async function createSessionSummary(session: {
   startedAt: Date;
   lastActivityAt: Date;
 }) {
-  const messages = await prisma.message.findMany({
-    where: {
-      userId: session.userId,
-      personaId: session.personaId,
-      createdAt: {
-        gte: session.startedAt,
-        lte: session.lastActivityAt,
-      },
-    },
-    orderBy: { createdAt: "asc" },
-    take: 30,
-    select: { role: true, content: true },
+  const summary = await summarizeSession({
+    sessionId: session.id,
+    userId: session.userId,
+    personaId: session.personaId,
+    startedAt: session.startedAt,
+    lastActivityAt: session.lastActivityAt,
   });
-
-  if (messages.length === 0) return null;
-
-  const prompt = `Summarize this session in 1-2 short sentences. Return JSON only.\n\nJSON schema:\n{ "summary": "..." }\n\nTranscript:\n${messages
-    .map((m) => `${m.role}: ${m.content}`)
-    .join("\n")}`;
-
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      "HTTP-Referer": "https://github.com/your-repo",
-      "X-Title": "Walkie-Talkie Voice Companion",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "openai/gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 150,
-      temperature: 0.2,
-    }),
-  });
-
-  if (!response.ok) return null;
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content ?? "";
-  let summary = content.trim();
-
-  try {
-    const parsed = JSON.parse(content);
-    if (typeof parsed.summary === "string") {
-      summary = parsed.summary.trim();
-    }
-  } catch {
-    // Keep raw content if JSON parsing fails.
-  }
 
   if (!summary) return null;
 
-  return prisma.sessionSummary.create({
-    data: {
+  return prisma.sessionSummary.upsert({
+    where: { sessionId: session.id },
+    update: {
+      summary: summary.summaryJson.slice(0, 600),
+      metadata: { source: "auto_session_summary", format: "json" },
+      model: summary.model,
+    },
+    create: {
       sessionId: session.id,
       userId: session.userId,
       personaId: session.personaId,
-      summary: summary.slice(0, 600),
-      model: "openai/gpt-4o-mini",
+      summary: summary.summaryJson.slice(0, 600),
+      metadata: { source: "auto_session_summary", format: "json" },
+      model: summary.model,
     },
   });
 }

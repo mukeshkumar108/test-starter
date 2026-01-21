@@ -13,7 +13,8 @@
     "db:seed": "tsx src/lib/seed.ts",
     "db:studio": "prisma studio",
     "regress:v1.1": "tsx scripts/regression-baseline-v1_1.ts",
-    "regress:core": "pnpm tsx scripts/regress-core.ts"
+    "regress:core": "pnpm tsx scripts/regress-core.ts",
+    "synth:session-summary:v1.3": "pnpm tsx scripts/synth-session-summary-v1_3.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.36.7",

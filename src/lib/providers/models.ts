@@ -13,6 +13,9 @@ export const MODELS = {
   
   // Cheap model for shadow processing/judging
   JUDGE: "openai/gpt-4o-mini",
+
+  // Session summaries
+  SUMMARY: "amazon/nova-micro-v1",
   
   // Embeddings model
   EMBEDDINGS: "text-embedding-3-small",
@@ -21,6 +24,7 @@ export const MODELS = {
 // Type helpers
 export type ChatModel = typeof MODELS.CHAT[keyof typeof MODELS.CHAT];
 export type JudgeModel = typeof MODELS.JUDGE;
+export type SummaryModel = typeof MODELS.SUMMARY;
 export type EmbeddingsModel = typeof MODELS.EMBEDDINGS;
 
 // Get chat model for persona
