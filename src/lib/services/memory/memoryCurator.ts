@@ -1,11 +1,18 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
-import { MemoryType } from "@prisma/client";
+import { MemoryType, type Memory as MemoryRecord } from "@prisma/client";
 
 const MAX_FOLDS_PER_RUN = 5;
 
 function isCuratorEnabled() {
   return env.FEATURE_MEMORY_CURATOR === "true";
+}
+
+function getMetadataObject(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  return metadata as Record<string, unknown>;
 }
 
 function getEntityKey(content: string) {
@@ -32,30 +39,33 @@ export async function runCuratorForUser(userId: string) {
   });
 
   const activeObservations = candidates.filter((memory) => {
-    const source = memory.metadata?.source;
-    const status = memory.metadata?.status ?? "ACTIVE";
+    const metadata = getMetadataObject(memory.metadata);
+    const source = metadata?.source;
+    const status = metadata?.status ?? "ACTIVE";
     return source === "shadow_extraction" && status !== "ARCHIVED";
   });
 
-  const groups = new Map<
-    string,
-    {
-      type: MemoryType;
-      key: string;
-      items: typeof activeObservations;
-      metaKey?: { entity?: string; project?: string };
-    }
-  >();
+  type Observation = MemoryRecord;
+  type Group = {
+    type: MemoryType;
+    key: string;
+    items: Observation[];
+    metaKey?: { entity?: string; project?: string };
+  };
+  const groups = new Map<string, Group>();
 
   for (const memory of activeObservations) {
     if (memory.type === MemoryType.PEOPLE) {
-      const entity = memory.metadata?.entity || getEntityKey(memory.content);
+      const metadata = getMetadataObject(memory.metadata);
+      const entityValue = metadata?.entity;
+      const entity =
+        typeof entityValue === "string" ? entityValue : getEntityKey(memory.content);
       if (!entity) continue;
       const key = `PEOPLE:${entity}`;
       const group = groups.get(key) ?? {
         type: MemoryType.PEOPLE,
         key,
-        items: [],
+        items: [] as Observation[],
         metaKey: { entity },
       };
       group.items.push(memory);
@@ -63,13 +73,15 @@ export async function runCuratorForUser(userId: string) {
     }
 
     if (memory.type === MemoryType.PROJECT) {
-      const project = memory.metadata?.project;
+      const metadata = getMetadataObject(memory.metadata);
+      const projectValue = metadata?.project;
+      const project = typeof projectValue === "string" ? projectValue : null;
       if (!project) continue;
       const key = `PROJECT:${project}`;
       const group = groups.get(key) ?? {
         type: MemoryType.PROJECT,
         key,
-        items: [],
+        items: [] as Observation[],
         metaKey: { project },
       };
       group.items.push(memory);
@@ -107,11 +119,12 @@ export async function runCuratorForUser(userId: string) {
     });
 
     for (const memory of group.items) {
+      const metadata = getMetadataObject(memory.metadata) ?? {};
       await prisma.memory.update({
         where: { id: memory.id },
         data: {
           metadata: {
-            ...(memory.metadata ?? {}),
+            ...metadata,
             status: "ARCHIVED",
             archivedAt: nowIso,
           },
