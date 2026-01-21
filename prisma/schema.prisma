@@ -35,6 +35,8 @@ enum TodoStatus {
 enum TodoKind {
   OPEN_LOOP
   COMMITMENT
+  THREAD
+  FRICTION
   HABIT
   REMINDER
 }
