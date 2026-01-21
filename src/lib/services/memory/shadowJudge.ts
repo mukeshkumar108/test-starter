@@ -31,6 +31,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const windowCandidates = [userMessage, ...recentWindow].filter(Boolean);
     const deduped = windowCandidates.filter((content, index, arr) => arr.indexOf(content) === index);
     const userWindow = deduped.slice(0, 4).reverse();
+    const windowText = userWindow.join(" ").toLowerCase();
     console.log("Shadow Judge user messages:", { requestId, userWindow });
     const extracted = await extractMemories(userWindow);
     const memories = extracted.memories ?? [];
@@ -81,7 +82,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
           return !profileStoplist.has(normalized);
         }
         if (memory.type === MemoryType.PEOPLE) {
-          return isPeopleRelationship(memory.content);
+          return isPeopleRelationship(memory.content) && hasRelationshipInWindow(windowText);
         }
         return true;
       });
@@ -133,13 +134,14 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const seenLoopKeys = new Set<string>();
     const dedupedLoops = normalizedLoops.filter((loop) => {
       if (!loop) return false;
-      const key = `${loop.kind}:${normalizeLoopContent(loop.content)}`;
+      const signature = getLoopSignature(loop.kind, loop.content);
+      const key = `${loop.kind}:${signature}`;
       if (seenLoopKeys.has(key)) return false;
       seenLoopKeys.add(key);
       return true;
     }) as Array<{ kind: TodoKind; content: string; confidence: number }>;
 
-    const compressedLoops = compressCommitments(dedupedLoops);
+    const compressedLoops = compressLoopsByKind(dedupedLoops);
 
     if (compressedLoops.length > 0) {
       const existingTodos = await prisma.todo.findMany({
@@ -152,14 +154,30 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         select: { content: true, kind: true },
       });
       const existingSet = new Set(
-        existingTodos.map((todo) => `${todo.kind}:${normalizeLoopContent(todo.content)}`)
+        existingTodos.map((todo) => `${todo.kind}:${getLoopSignature(todo.kind, todo.content)}`)
       );
       await Promise.all(
         compressedLoops.map(async (loop) => {
           try {
-            const normalizedContent = normalizeLoopContent(loop.content);
-            const key = `${loop.kind}:${normalizedContent}`;
-            if (existingSet.has(key)) {
+            const signature = getLoopSignature(loop.kind, loop.content);
+            const key = `${loop.kind}:${signature}`;
+            const hasOverlap = Array.from(existingSet).some((existing) => {
+              const [existingKind, existingSig] = existing.split(":");
+              if (existingKind !== loop.kind) return false;
+              const existingTokens = existingSig.split("|").filter(Boolean);
+              const incomingTokens = signature.split("|").filter(Boolean);
+              if (existingTokens.length === 0 || incomingTokens.length === 0) return false;
+              const existingSetTokens = new Set(existingTokens);
+              const incomingSetTokens = new Set(incomingTokens);
+              const incomingSubset = incomingTokens.every((token) =>
+                existingSetTokens.has(token)
+              );
+              const existingSubset = existingTokens.every((token) =>
+                incomingSetTokens.has(token)
+              );
+              return incomingSubset || existingSubset;
+            });
+            if (existingSet.has(key) || hasOverlap) {
               return;
             }
             console.log("Shadow Judge todo write attempt:", {
@@ -408,45 +426,126 @@ function normalizeLoopContent(value: string) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ")
-    .replace(/[.,!?;:]+$/g, "");
+    .replace(/[.,!?;:'"(){}\[\]\\\/]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function compressCommitments(
+function normalizeThreadContent(value: string) {
+  const cleaned = normalizeLoopContent(value)
+    .replace(/\b(talk|discuss|chat|sync|connect|discussed|discussion|need|needs|sophie|user)\b/g, "")
+    .replace(/\b(to|about|with|for|on|at|in)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const tokens = cleaned.split(" ").filter(Boolean).sort();
+  return tokens.join(" ").trim();
+}
+
+function normalizeCommitmentContent(value: string) {
+  const cleaned = normalizeLoopContent(value);
+  const tokens = cleaned
+    .split(" ")
+    .filter(Boolean)
+    .filter(
+      (token) =>
+        !new Set([
+          "plans",
+          "will",
+          "just",
+          "actually",
+          "sophie",
+          "user",
+          "about",
+          "to",
+          "the",
+          "a",
+          "an",
+          "at",
+          "in",
+          "on",
+          "tonight",
+          "today",
+          "this",
+        ]).has(token)
+    )
+    .sort();
+  const normalized = tokens.join(" ").trim();
+  return normalized || cleaned;
+}
+
+function getLoopTokens(kind: TodoKind, content: string) {
+  const signature =
+    kind === TodoKind.COMMITMENT
+      ? normalizeCommitmentContent(content)
+      : kind === TodoKind.THREAD
+        ? normalizeThreadContent(content)
+        : normalizeLoopContent(content);
+  const tokens = signature.split(" ").filter(Boolean);
+  if (tokens.length > 0) return tokens;
+  return normalizeLoopContent(content).split(" ").filter(Boolean);
+}
+
+function getLoopSignature(kind: TodoKind, content: string) {
+  return getLoopTokens(kind, content).join("|");
+}
+
+function compressLoopsByKind(
   loops: Array<{ kind: TodoKind; content: string; confidence: number }>
 ) {
-  const commitments = loops.filter((loop) => loop.kind === TodoKind.COMMITMENT);
-  if (commitments.length <= 1) return loops;
+  const kinds: TodoKind[] = [
+    TodoKind.COMMITMENT,
+    TodoKind.THREAD,
+    TodoKind.FRICTION,
+  ];
 
   const keep = new Set<string>();
-  const normalized = commitments.map((loop) => ({
-    content: loop.content,
-    norm: normalizeLoopContent(loop.content),
-  }));
+  for (const kind of kinds) {
+    const items = loops.filter((loop) => loop.kind === kind);
+    if (items.length <= 1) {
+      items.forEach((item) => keep.add(item.content));
+      continue;
+    }
 
-  for (let i = 0; i < normalized.length; i += 1) {
-    const current = normalized[i];
-    let isCovered = false;
-    for (let j = 0; j < normalized.length; j += 1) {
-      if (i === j) continue;
-      const other = normalized[j];
-      if (other.norm.includes(current.norm) && other.norm.length >= current.norm.length) {
-        if (other.norm !== current.norm) {
-          isCovered = true;
-          break;
+    const normalized = items.map((loop) => ({
+      content: loop.content,
+      tokens: getLoopTokens(kind, loop.content),
+    }));
+
+    for (let i = 0; i < normalized.length; i += 1) {
+      const current = normalized[i];
+      if (current.tokens.length === 0) continue;
+      let isCovered = false;
+      for (let j = 0; j < normalized.length; j += 1) {
+        if (i === j) continue;
+        const other = normalized[j];
+        if (other.tokens.length === 0) continue;
+        const otherSet = new Set(other.tokens);
+        const isSubset = current.tokens.every((token) => otherSet.has(token));
+        if (isSubset && other.tokens.length >= current.tokens.length) {
+          if (other.tokens.join("|") !== current.tokens.join("|")) {
+            isCovered = true;
+            break;
+          }
         }
       }
-    }
-    if (!isCovered) {
-      keep.add(current.content);
+      if (!isCovered) {
+        keep.add(current.content);
+      }
     }
   }
 
-  return loops.filter((loop) => loop.kind !== TodoKind.COMMITMENT || keep.has(loop.content));
+  return loops.filter((loop) => keep.has(loop.content));
 }
 
 function isPeopleRelationship(content: string) {
   return /\b(my|mom|mother|dad|father|parent|sister|brother|wife|husband|partner|girlfriend|boyfriend|fiance|fiancé|spouse|friend|cofounder|co-founder|colleague|teammate|manager|boss|client|mentor)\b/i.test(
     content
+  );
+}
+
+function hasRelationshipInWindow(windowText: string) {
+  return /\b(my|our)\b.{0,40}\b(cofounder|co-founder|friend|manager|boss|client|mentor|teammate|colleague|partner|wife|husband|girlfriend|boyfriend|spouse|fiance|fiancé|sister|brother|mom|mother|dad|father|parent)\b/i.test(
+    windowText
   );
 }
 
