@@ -1,9 +1,9 @@
 # Prompt Assembly Map (Live Code)
 
-## v1.3.2 changes
-- Session summaries run asynchronously on session close and never block chat requests.
-- Session summarizer uses a hard timeout (default 2500ms) via `SUMMARY_TIMEOUT_MS`.
-- Relevant memories are deduped against foundation memories by normalized content.
+## v1.3.3 changes
+- Foundation memories are seeded-first, then oldest-first.
+- Soft prompt-size warning logs when the assembled prompt exceeds 20,000 chars.
+- Session summary JSON is sanitized (fences stripped) before parsing.
 
 ## Raw Code Excerpts
 
@@ -79,6 +79,15 @@ const MAX_OPEN_LOOPS = 5;
 const MAX_USER_SEED_CHARS = 800;
 const MAX_SUMMARY_SPINE_CHARS = 1200;
 const MAX_RECENT_MESSAGE_CHARS = 800;
+const MAX_SESSION_SUMMARY_CHARS = 600;
+
+function normalizeText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,!?;:]+$/g, "");
+}
 
 function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
   const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
@@ -97,7 +106,7 @@ function selectRelevantMemories(memories: Array<{ type: string; content: string 
 
   for (const memory of memories) {
     if (!allowedTypes.has(memory.type)) continue;
-    const normalizedContent = memory.content.trim().toLowerCase();
+    const normalizedContent = normalizeText(memory.content);
     if (seen.has(normalizedContent)) continue;
     if (counts[memory.type] >= perTypeCaps[memory.type]) continue;
     if (selected.length >= 8) break;
@@ -139,10 +148,25 @@ function dedupeOpenLoops(
       select: { content: true, metadata: true },
     });
 
+    const sortedFoundation = [...foundationMemories].sort((a, b) => {
+      const aMeta = a.metadata as { source?: string } | null;
+      const bMeta = b.metadata as { source?: string } | null;
+      const aSeeded = aMeta?.source === "seeded_profile";
+      const bSeeded = bMeta?.source === "seeded_profile";
+      if (aSeeded === bSeeded) return 0;
+      return aSeeded ? -1 : 1;
+    });
+
     const relevantMemories = await searchMemories(userId, userMessage, 12);
-    const selectedRelevant = selectRelevantMemories(relevantMemories);
+    const foundationSet = new Set(
+      foundationMemories.map((memory) => normalizeText(memory.content))
+    );
+    const filteredRelevant = relevantMemories.filter(
+      (memory) => !foundationSet.has(normalizeText(memory.content))
+    );
+    const selectedRelevant = selectRelevantMemories(filteredRelevant);
     const relevantMemoryStrings = selectedRelevant.map(formatMemory);
-    const foundationMemoryStrings = foundationMemories.map(formatMemory);
+    const foundationMemoryStrings = sortedFoundation.map(formatMemory);
 
     const todos = await prisma.todo.findMany({
       where: {
@@ -185,7 +209,7 @@ function dedupeOpenLoops(
       activeTodos: openLoops.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
       summarySpine: summarySpine?.content?.slice(0, MAX_SUMMARY_SPINE_CHARS),
-      sessionSummary: latestSessionSummary?.summary.slice(0, 600),
+      sessionSummary: formatSessionSummary(latestSessionSummary?.summary),
     };
 ```
 
@@ -267,10 +291,10 @@ export async function getLatestSessionSummary(userId: string, personaId: string)
 
 ## Duplications / Contradictions
 - SessionState lastInteraction duplicates Session.lastActivityAt; both can inform “time since last message.”
-- Foundation and Relevant can repeat the same memory content (same text appears in both blocks).
 - Open Loops are derived from Todos; if Todo creation duplicates, block can still show repetition despite dedupe by text.
+- Session summaries are generated asynchronously; they may lag behind the most recent turns.
 
 ## Smallest 3 Improvements (no behavior change)
-1) Prefer seeded profile entries first in Foundation (ordering by metadata.source then createdAt) to reduce noise.
-2) Normalize relevant memory text before formatting to reduce near‑duplicates between Foundation/Relevant.
-3) Add a soft warning log when combined system blocks exceed a size budget (no truncation change).
+1) Promote seeded profiles to a fixed top slice (e.g., always include up to N seeded before other entries).
+2) Normalize Todo content beyond whitespace (strip punctuation) before dedupe to reduce near-duplicates.
+3) Add a warning log when async session summary creation fails (counts + elapsed) to aid debugging.
