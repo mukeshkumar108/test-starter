@@ -23,6 +23,9 @@ const envSchema = z.object({
   ELEVENLABS_VOICE_ALEXANDER: z.string().min(1).optional(),
   LEMONFOX_API_KEY: z.string().min(1),
   OPENAI_API_KEY: z.string().min(1), // For embeddings
+  ADMIN_SECRET: z.string().min(1).optional(),
+  FEATURE_MEMORY_CURATOR: z.string().optional(),
+  FEATURE_CONTEXT_DEBUG: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

@@ -8,6 +8,8 @@ import { buildContext } from "@/lib/services/memory/contextBuilder";
 import { processShadowPath } from "@/lib/services/memory/shadowJudge";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
+import { getChatModelForPersona } from "@/lib/providers/models";
+import { searchMemories } from "@/lib/services/memory/memoryStore";
 
 export const runtime = "nodejs";
 
@@ -80,6 +82,7 @@ function getSessionContext(sessionState?: any) {
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
+  const traceId = request.headers.get("x-trace-id") || crypto.randomUUID();
   const totalStartTime = Date.now();
   
   try {
@@ -194,6 +197,7 @@ export async function POST(request: NextRequest) {
     const activeTodoStrings = activeTodos.join("\n");
     const recentWins = context.recentWins;
     const recentWinStrings = recentWins.join("\n");
+    const model = getChatModelForPersona(persona.slug);
     const messages = [
       { role: "system" as const, content: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }) },
       ...(sessionContext ? [{ role: "system" as const, content: sessionContext }] : []),
@@ -220,6 +224,49 @@ export async function POST(request: NextRequest) {
       ...context.recentMessages,
       { role: "user" as const, content: sttResult.transcript },
     ];
+
+    console.log(
+      "[chat.trace]",
+      JSON.stringify({
+        trace_id: traceId,
+        userId: user.id,
+        personaId,
+        model,
+        token_usage: null,
+        counts: {
+          foundationMemories: context.foundationMemories.length,
+          relevantMemories: context.relevantMemories.length,
+          pendingTodos: context.activeTodos.length,
+          recentWins: context.recentWins.length,
+        },
+      })
+    );
+
+    const debugEnabled =
+      env.FEATURE_CONTEXT_DEBUG === "true" &&
+      request.headers.get("x-debug-context") === "1";
+
+    let debugPayload: Record<string, unknown> | undefined;
+    if (debugEnabled) {
+      const rawRetrieval = await searchMemories(user.id, sttResult.transcript, 12);
+      debugPayload = {
+        contextBlocks: {
+          realTime: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }),
+          session: sessionContext,
+          persona: context.persona,
+          foundationMemories: foundationMemoryStrings,
+          relevantMemories: relevantMemoryStrings,
+          pendingTodos: activeTodoStrings,
+          recentWins: recentWinStrings,
+          userSeed: context.userSeed,
+          summarySpine: context.summarySpine,
+        },
+        retrieval: {
+          query: sttResult.transcript,
+          results: rawRetrieval,
+        },
+      };
+    }
 
     const llmResponse = await generateResponse(messages, persona.slug);
     llm_ms = llmResponse.duration_ms;
@@ -287,10 +334,11 @@ export async function POST(request: NextRequest) {
         total_ms,
       },
       requestId,
+      ...(debugPayload ? { debug: debugPayload } : {}),
     });
 
   } catch (error) {
-    console.error("Chat API Error:", { requestId, error });
+    console.error("Chat API Error:", { requestId, traceId, error });
     return NextResponse.json(
       { 
         error: error instanceof Error ? error.message : "Internal server error",

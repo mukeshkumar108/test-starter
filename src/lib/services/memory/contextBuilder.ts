@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { searchMemories } from "@/lib/services/memory/memoryStore";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { env } from "@/env";
 
 export interface ConversationContext {
   persona: string;
@@ -14,6 +15,8 @@ export interface ConversationContext {
   recentWins: string[];
   summarySpine?: string;
 }
+
+const MAX_OPEN_LOOPS = 5;
 
 function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
   const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
@@ -43,6 +46,25 @@ function selectRelevantMemories(memories: Array<{ type: string; content: string 
   }
 
   return selected;
+}
+
+function dedupeOpenLoops(
+  todos: Array<{ id: string; content: string; createdAt: Date }>
+) {
+  const sorted = [...todos].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+  );
+  const seen = new Set<string>();
+  const deduped: Array<{ id: string; content: string; createdAt: Date }> = [];
+
+  for (const todo of sorted) {
+    const normalized = todo.content.trim().toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(todo);
+  }
+
+  return deduped.slice(0, MAX_OPEN_LOOPS);
 }
 
 export async function buildContext(
@@ -126,9 +148,19 @@ export async function buildContext(
         status: "PENDING",
       },
       orderBy: { createdAt: "asc" },
-      take: 7,
-      select: { content: true },
+      take: 20,
+      select: { id: true, content: true, createdAt: true },
     });
+    const openLoops = dedupeOpenLoops(todos);
+    if (env.FEATURE_CONTEXT_DEBUG === "true") {
+      console.log(
+        "[context.debug]",
+        JSON.stringify({
+          openLoopsRaw: todos.map((todo) => ({ id: todo.id, content: todo.content })),
+          openLoopsFinal: openLoops.map((todo) => todo.content),
+        })
+      );
+    }
 
     const recentWins = await prisma.todo.findMany({
       where: {
@@ -151,7 +183,7 @@ export async function buildContext(
       recentMessages: messages.reverse(), // Chronological order
       foundationMemories: foundationMemoryStrings,
       relevantMemories: relevantMemoryStrings,
-      activeTodos: todos.map((todo) => todo.content),
+      activeTodos: openLoops.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
       summarySpine: summarySpine?.content,
     };

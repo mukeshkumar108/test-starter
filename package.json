@@ -11,7 +11,8 @@
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:seed": "tsx src/lib/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "regress:v1.1": "tsx scripts/regression-baseline-v1_1.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.36.7",

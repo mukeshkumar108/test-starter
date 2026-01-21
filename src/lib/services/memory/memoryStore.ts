@@ -38,7 +38,9 @@ export async function searchMemories(
       LIMIT ${limit}
     `;
 
-    return memories;
+    return memories.filter(
+      (memory) => (memory.metadata?.status ?? "ACTIVE") !== "ARCHIVED"
+    );
   } catch (error) {
     console.error("Memory search failed:", error);
     return [];
