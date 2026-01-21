@@ -139,6 +139,7 @@ model Todo {
   userId      String
   personaId   String
   content     String
+  dedupeKey   String?
   status      TodoStatus @default(PENDING)
   kind        TodoKind   @default(OPEN_LOOP)
   createdAt   DateTime   @default(now())
@@ -148,6 +149,7 @@ model Todo {
   persona PersonaProfile @relation(fields: [personaId], references: [id], onDelete: Cascade)
 
   @@index([userId, personaId, status])
+  @@index([userId, personaId, kind, status, dedupeKey])
 }
 
 model Message {

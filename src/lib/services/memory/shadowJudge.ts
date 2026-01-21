@@ -118,6 +118,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         const rawKind = typeof loop.kind === "string" ? loop.kind : "";
         const normalizedKind = rawKind.trim().toUpperCase();
         const content = typeof loop.content === "string" ? loop.content.trim() : "";
+        const dedupeKeyRaw = typeof loop.dedupe_key === "string" ? loop.dedupe_key : "";
         if (!content) return null;
         const allowedKinds = new Set(["COMMITMENT", "THREAD", "FRICTION"]);
         const safeKind = allowedKinds.has(normalizedKind) ? normalizedKind : "THREAD";
@@ -126,7 +127,13 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         );
         const finalKind =
           safeKind === "COMMITMENT" && commitVeto ? "THREAD" : safeKind;
-        return { kind: finalKind as TodoKind, content, confidence: loop.confidence };
+        const dedupeKey = dedupeKeyRaw ? normalizeDedupeKey(dedupeKeyRaw) : null;
+        return {
+          kind: finalKind as TodoKind,
+          content,
+          dedupeKey,
+          confidence: loop.confidence,
+        };
       })
       .filter((loop) => loop !== null)
       .slice(0, 8);
@@ -134,14 +141,19 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const seenLoopKeys = new Set<string>();
     const dedupedLoops = normalizedLoops.filter((loop) => {
       if (!loop) return false;
-      const signature = getLoopSignature(loop.kind, loop.content);
+      const signature = loop.dedupeKey ?? normalizeLoopContent(loop.content);
       const key = `${loop.kind}:${signature}`;
       if (seenLoopKeys.has(key)) return false;
       seenLoopKeys.add(key);
       return true;
-    }) as Array<{ kind: TodoKind; content: string; confidence: number }>;
+    }) as Array<{
+      kind: TodoKind;
+      content: string;
+      dedupeKey: string | null;
+      confidence: number;
+    }>;
 
-    const compressedLoops = compressLoopsByKind(dedupedLoops);
+    const compressedLoops = dedupedLoops;
 
     if (compressedLoops.length > 0) {
       const existingTodos = await prisma.todo.findMany({
@@ -151,33 +163,24 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
           status: "PENDING",
           kind: { in: [TodoKind.COMMITMENT, TodoKind.THREAD, TodoKind.FRICTION] },
         },
-        select: { content: true, kind: true },
+        select: { content: true, kind: true, dedupeKey: true },
       });
       const existingSet = new Set(
-        existingTodos.map((todo) => `${todo.kind}:${getLoopSignature(todo.kind, todo.content)}`)
+        existingTodos.map((todo) => {
+          const signature = todo.dedupeKey
+            ? normalizeDedupeKey(todo.dedupeKey)
+            : normalizeLoopContent(todo.content);
+          return `${todo.kind}:${signature}`;
+        })
       );
       await Promise.all(
         compressedLoops.map(async (loop) => {
           try {
-            const signature = getLoopSignature(loop.kind, loop.content);
+            const signature = loop.dedupeKey
+              ? normalizeDedupeKey(loop.dedupeKey)
+              : normalizeLoopContent(loop.content);
             const key = `${loop.kind}:${signature}`;
-            const hasOverlap = Array.from(existingSet).some((existing) => {
-              const [existingKind, existingSig] = existing.split(":");
-              if (existingKind !== loop.kind) return false;
-              const existingTokens = existingSig.split("|").filter(Boolean);
-              const incomingTokens = signature.split("|").filter(Boolean);
-              if (existingTokens.length === 0 || incomingTokens.length === 0) return false;
-              const existingSetTokens = new Set(existingTokens);
-              const incomingSetTokens = new Set(incomingTokens);
-              const incomingSubset = incomingTokens.every((token) =>
-                existingSetTokens.has(token)
-              );
-              const existingSubset = existingTokens.every((token) =>
-                incomingSetTokens.has(token)
-              );
-              return incomingSubset || existingSubset;
-            });
-            if (existingSet.has(key) || hasOverlap) {
+            if (existingSet.has(key)) {
               return;
             }
             console.log("Shadow Judge todo write attempt:", {
@@ -192,6 +195,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
                 content: loop.content,
                 kind: loop.kind,
                 status: "PENDING",
+                dedupeKey: loop.dedupeKey ?? undefined,
               },
             });
             console.log("Shadow Judge todo write success:", { requestId, content: loop.content });
@@ -271,6 +275,13 @@ FOUNDATION (PROFILE/PEOPLE/PROJECT):
 LOOPS:
 - FRICTION is for negative sentiment, blockers, or feeling stuck (e.g., "visual polish feels off").
 - THREAD is for neutral topics or ongoing discussions.
+- Every loop item MUST include dedupe_key: stable across paraphrases, snake_case, 3-8 words.
+- If multiple sentences express the same intent, output ONE loop item only.
+- Keep the SAME kind and dedupe_key for paraphrases of the same intent.
+- Example dedupe_key (do not output these examples, only follow pattern):
+  - "We need to cut costs" / "Reducing expenditure" -> dedupe_key: cut_costs_reduce_spend
+  - "I'm burnt out" / "My bandwidth is exhausted" -> dedupe_key: burnout_low_bandwidth
+  - "Simplify UI" / "Trim the fat" -> dedupe_key: simplify_ui_clutter
 
 USER MESSAGES:
 ${userMessages.join("\n")}
@@ -281,7 +292,7 @@ JSON SCHEMA:
     { "type": "PROFILE|PEOPLE|PROJECT", "content": "...", "confidence": 0.0 }
   ],
   "loops": [
-    { "kind": "COMMITMENT|THREAD|FRICTION", "content": "...", "confidence": 0.0 }
+    { "kind": "COMMITMENT|THREAD|FRICTION", "content": "...", "dedupe_key": "...", "confidence": 0.0 }
   ]
 }`;
 
@@ -431,110 +442,13 @@ function normalizeLoopContent(value: string) {
     .trim();
 }
 
-function normalizeThreadContent(value: string) {
-  const cleaned = normalizeLoopContent(value)
-    .replace(/\b(talk|discuss|chat|sync|connect|discussed|discussion|need|needs|sophie|user)\b/g, "")
-    .replace(/\b(to|about|with|for|on|at|in)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  const tokens = cleaned.split(" ").filter(Boolean).sort();
-  return tokens.join(" ").trim();
-}
-
-function normalizeCommitmentContent(value: string) {
-  const cleaned = normalizeLoopContent(value);
-  const tokens = cleaned
-    .split(" ")
-    .filter(Boolean)
-    .filter(
-      (token) =>
-        !new Set([
-          "plans",
-          "will",
-          "just",
-          "actually",
-          "sophie",
-          "user",
-          "about",
-          "to",
-          "the",
-          "a",
-          "an",
-          "at",
-          "in",
-          "on",
-          "tonight",
-          "today",
-          "this",
-        ]).has(token)
-    )
-    .sort();
-  const normalized = tokens.join(" ").trim();
-  return normalized || cleaned;
-}
-
-function getLoopTokens(kind: TodoKind, content: string) {
-  const signature =
-    kind === TodoKind.COMMITMENT
-      ? normalizeCommitmentContent(content)
-      : kind === TodoKind.THREAD
-        ? normalizeThreadContent(content)
-        : normalizeLoopContent(content);
-  const tokens = signature.split(" ").filter(Boolean);
-  if (tokens.length > 0) return tokens;
-  return normalizeLoopContent(content).split(" ").filter(Boolean);
-}
-
-function getLoopSignature(kind: TodoKind, content: string) {
-  return getLoopTokens(kind, content).join("|");
-}
-
-function compressLoopsByKind(
-  loops: Array<{ kind: TodoKind; content: string; confidence: number }>
-) {
-  const kinds: TodoKind[] = [
-    TodoKind.COMMITMENT,
-    TodoKind.THREAD,
-    TodoKind.FRICTION,
-  ];
-
-  const keep = new Set<string>();
-  for (const kind of kinds) {
-    const items = loops.filter((loop) => loop.kind === kind);
-    if (items.length <= 1) {
-      items.forEach((item) => keep.add(item.content));
-      continue;
-    }
-
-    const normalized = items.map((loop) => ({
-      content: loop.content,
-      tokens: getLoopTokens(kind, loop.content),
-    }));
-
-    for (let i = 0; i < normalized.length; i += 1) {
-      const current = normalized[i];
-      if (current.tokens.length === 0) continue;
-      let isCovered = false;
-      for (let j = 0; j < normalized.length; j += 1) {
-        if (i === j) continue;
-        const other = normalized[j];
-        if (other.tokens.length === 0) continue;
-        const otherSet = new Set(other.tokens);
-        const isSubset = current.tokens.every((token) => otherSet.has(token));
-        if (isSubset && other.tokens.length >= current.tokens.length) {
-          if (other.tokens.join("|") !== current.tokens.join("|")) {
-            isCovered = true;
-            break;
-          }
-        }
-      }
-      if (!isCovered) {
-        keep.add(current.content);
-      }
-    }
-  }
-
-  return loops.filter((loop) => keep.has(loop.content));
+function normalizeDedupeKey(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 function isPeopleRelationship(content: string) {
