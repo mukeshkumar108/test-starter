@@ -68,12 +68,14 @@ export async function closeStaleSessionIfAny(
   });
 
   if (isSummaryEnabled()) {
-    await createSessionSummary({
+    void createSessionSummary({
       id: updated.id,
       userId: updated.userId,
       personaId: updated.personaId,
       startedAt: updated.startedAt,
       lastActivityAt: updated.lastActivityAt,
+    }).catch((error) => {
+      console.warn("[session.summary] failed", error);
     });
   }
 

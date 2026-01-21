@@ -27,6 +27,8 @@ const envSchema = z.object({
   FEATURE_MEMORY_CURATOR: z.string().optional(),
   FEATURE_CONTEXT_DEBUG: z.string().optional(),
   FEATURE_SESSION_SUMMARY: z.string().optional(),
+  FEATURE_SUMMARY_TEST_STALL: z.string().optional(),
+  SUMMARY_TIMEOUT_MS: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

@@ -3,6 +3,8 @@ import { MODELS } from "@/lib/providers/models";
 import { env } from "@/env";
 
 const MAX_MESSAGE_CHARS = 800;
+const DEFAULT_TIMEOUT_MS = 2500;
+const TEST_STALL_MS = 5000;
 
 interface SummarizeParams {
   sessionId: string;
@@ -63,6 +65,11 @@ export async function summarizeSession(params: SummarizeParams) {
     return null;
   }
 
+  if (env.FEATURE_SUMMARY_TEST_STALL === "true") {
+    await new Promise((resolve) => setTimeout(resolve, TEST_STALL_MS));
+    return null;
+  }
+
   const previous = await prisma.sessionSummary.findUnique({
     where: { sessionId: params.sessionId },
     select: { summary: true },
@@ -112,21 +119,39 @@ export async function summarizeSession(params: SummarizeParams) {
   const prompt = buildPrompt(messages, previous?.summary);
   const model = MODELS.SUMMARY || "openai/gpt-4o-mini";
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      "HTTP-Referer": "https://github.com/your-repo",
-      "X-Title": "Walkie-Talkie Voice Companion",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 300,
-      temperature: 0.2,
-    }),
-  });
+  const timeoutMs = Number.parseInt(env.SUMMARY_TIMEOUT_MS ?? "", 10);
+  const effectiveTimeout = Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  let response: Response;
+  try {
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "HTTP-Referer": "https://github.com/your-repo",
+        "X-Title": "Walkie-Talkie Voice Companion",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 300,
+        temperature: 0.2,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      console.warn("Session summary request timed out");
+      return null;
+    }
+    console.warn("Session summary request failed:", error);
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "<no body>");

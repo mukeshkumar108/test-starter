@@ -5,6 +5,8 @@ import { RegressContext, RegressResult } from "../types";
 
 export async function run(ctx: RegressContext): Promise<RegressResult> {
   const name = "session_summary_created";
+  const previousFlag = process.env.FEATURE_SESSION_SUMMARY;
+  process.env.FEATURE_SESSION_SUMMARY = "true";
   const now = new Date();
   const initial = await ensureActiveSession(ctx.userId, ctx.personaId, now);
 
@@ -44,9 +46,23 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
 
   await ensureActiveSession(ctx.userId, ctx.personaId, new Date());
 
-  const summary = await prisma.sessionSummary.findUnique({
+  let summary = await prisma.sessionSummary.findUnique({
     where: { sessionId: initial.id },
   });
+
+  const start = Date.now();
+  while (!summary && Date.now() - start < 4000) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    summary = await prisma.sessionSummary.findUnique({
+      where: { sessionId: initial.id },
+    });
+  }
+
+  if (previousFlag === undefined) {
+    delete process.env.FEATURE_SESSION_SUMMARY;
+  } else {
+    process.env.FEATURE_SESSION_SUMMARY = previousFlag;
+  }
 
   const context = await buildContext(ctx.userId, ctx.personaId, "hey");
 
@@ -59,6 +75,7 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
       sessionId: initial.id,
       summary: summary?.summary ?? null,
       injectedSessionSummary: context.sessionSummary ?? null,
+      waitedMs: Date.now() - start,
     },
   };
 }
