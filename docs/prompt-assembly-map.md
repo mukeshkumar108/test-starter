@@ -255,12 +255,13 @@ export async function getLatestSessionSummary(userId: string, personaId: string)
 
 | Block Name | Source Function | Data Types | Caps | Dedupe | Notes/Risks |
 | --- | --- | --- | --- | --- | --- |
-| Foundation | contextBuilder.ts -> foundationMemories | Memory (PROFILE/PEOPLE/PROJECT) | take 12 | none | Ordered asc; can include old low-signal entries. |
+| Foundation | contextBuilder.ts -> foundationMemories | Memory (PROFILE/PEOPLE/PROJECT) | take 12 | none | Seeded profiles sorted first, then oldest-first. |
 | Relevant | memoryStore.ts searchMemories + contextBuilder selectRelevantMemories | Memory (PROFILE/PEOPLE/PROJECT) | top 12 raw; max 8 selected | per-type + content | Deduped against Foundation by normalized content. |
 | Open Loops | contextBuilder.ts dedupeOpenLoops | Todo (PENDING) | max 5 | normalized content | Depends on Todo creation; may still include noisy commitments. |
 | Wins | contextBuilder.ts recentWins | Todo (COMPLETED, last 48h) | max 3 | none | Uses content only; no metadata. |
 | Summary Spine | contextBuilder.ts summarySpine | SummarySpine.content | max 1200 chars | none | No truncation per section; could still be dense. |
 | Latest Session Summary | sessionService.ts getLatestSessionSummary | SessionSummary.summary | max 600 chars | none | Only injected if exists. |
+| Prompt Size Warn | route.ts assembly | all blocks | warn at >20,000 chars | n/a | Logs `[chat.prompt.warn]` with sizes and counts. |
 | Session State | route.ts getSessionContext | SessionState.state | derived | n/a | Duplicates Session lastActivityAt; possible overlap. |
 | UserSeed | contextBuilder.ts userSeed | UserSeed.content | max 800 chars | none | Manual seed, can be stale. |
 

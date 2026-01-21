@@ -178,6 +178,15 @@ export async function buildContext(
       select: { content: true, metadata: true },
     });
 
+    const sortedFoundation = [...foundationMemories].sort((a, b) => {
+      const aMeta = a.metadata as { source?: string } | null;
+      const bMeta = b.metadata as { source?: string } | null;
+      const aSeeded = aMeta?.source === "seeded_profile";
+      const bSeeded = bMeta?.source === "seeded_profile";
+      if (aSeeded === bSeeded) return 0;
+      return aSeeded ? -1 : 1;
+    });
+
     const relevantMemories = await searchMemories(userId, userMessage, 12);
     const foundationSet = new Set(
       foundationMemories.map((memory) => normalizeText(memory.content))
@@ -187,7 +196,7 @@ export async function buildContext(
     );
     const selectedRelevant = selectRelevantMemories(filteredRelevant);
     const relevantMemoryStrings = selectedRelevant.map(formatMemory);
-    const foundationMemoryStrings = foundationMemories.map(formatMemory);
+    const foundationMemoryStrings = sortedFoundation.map(formatMemory);
 
     const todos = await prisma.todo.findMany({
       where: {

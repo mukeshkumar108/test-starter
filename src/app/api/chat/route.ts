@@ -238,6 +238,27 @@ export async function POST(request: NextRequest) {
       { role: "user" as const, content: sttResult.transcript },
     ];
 
+    const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+    if (totalChars > 20000) {
+      console.warn(
+        "[chat.prompt.warn]",
+        JSON.stringify({
+          trace_id: traceId,
+          userId: user.id,
+          personaId,
+          totalChars,
+          messageCount: messages.length,
+          counts: {
+            foundation: context.foundationMemories.length,
+            relevant: context.relevantMemories.length,
+            pending: context.activeTodos.length,
+            wins: context.recentWins.length,
+          },
+          model,
+        })
+      );
+    }
+
     console.log(
       "[chat.trace]",
       JSON.stringify({
