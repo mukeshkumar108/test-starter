@@ -76,7 +76,9 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
   const foundationMemoryStrings = context.foundationMemories.join("\n");
   const relevantMemoryStrings = context.relevantMemories.join("\n");
   const sessionContext = getSessionContext(context.sessionState);
-  const activeTodoStrings = context.activeTodos.join("\n");
+  const commitmentStrings = context.commitments.join("\n");
+  const threadStrings = context.threads.join("\n");
+  const frictionStrings = context.frictions.join("\n");
   const recentWinStrings = context.recentWins.join("\n");
   const model = getChatModelForPersona("creative");
 
@@ -90,13 +92,19 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
     ...(relevantMemoryStrings
       ? [{ role: "system" as const, content: `[RELEVANT MEMORIES]:\n${relevantMemoryStrings}` }]
       : []),
-    ...(activeTodoStrings
+    ...(commitmentStrings
       ? [
           {
             role: "system" as const,
-            content: `OPEN LOOPS (pending):\n${activeTodoStrings}`,
+            content: `COMMITMENTS (pending):\n${commitmentStrings}`,
           },
         ]
+      : []),
+    ...(threadStrings
+      ? [{ role: "system" as const, content: `ACTIVE THREADS:\n${threadStrings}` }]
+      : []),
+    ...(frictionStrings
+      ? [{ role: "system" as const, content: `FRICTIONS / PATTERNS:\n${frictionStrings}` }]
       : []),
     ...(recentWinStrings
       ? [{ role: "system" as const, content: `Recent wins:\n${recentWinStrings}` }]

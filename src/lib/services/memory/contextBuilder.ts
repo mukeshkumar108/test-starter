@@ -12,13 +12,17 @@ export interface ConversationContext {
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   foundationMemories: string[];
   relevantMemories: string[];
-  activeTodos: string[];
+  commitments: string[];
+  threads: string[];
+  frictions: string[];
   recentWins: string[];
   summarySpine?: string;
   sessionSummary?: string;
 }
 
-const MAX_OPEN_LOOPS = 5;
+const MAX_COMMITMENTS = 5;
+const MAX_THREADS = 3;
+const MAX_FRICTIONS = 3;
 const MAX_USER_SEED_CHARS = 800;
 const MAX_SUMMARY_SPINE_CHARS = 1200;
 const MAX_RECENT_MESSAGE_CHARS = 800;
@@ -62,7 +66,7 @@ function selectRelevantMemories(memories: Array<{ type: string; content: string 
   return selected;
 }
 
-function dedupeOpenLoops(
+function dedupeTodos(
   todos: Array<{ id: string; content: string; createdAt: Date }>
 ) {
   const sorted = [...todos].sort(
@@ -72,13 +76,13 @@ function dedupeOpenLoops(
   const deduped: Array<{ id: string; content: string; createdAt: Date }> = [];
 
   for (const todo of sorted) {
-    const normalized = todo.content.trim().toLowerCase();
+    const normalized = normalizeText(todo.content);
     if (seen.has(normalized)) continue;
     seen.add(normalized);
     deduped.push(todo);
   }
 
-  return deduped.slice(0, MAX_OPEN_LOOPS);
+  return deduped;
 }
 
 function formatSessionSummary(summary?: string | null) {
@@ -198,23 +202,56 @@ export async function buildContext(
     const relevantMemoryStrings = selectedRelevant.map(formatMemory);
     const foundationMemoryStrings = sortedFoundation.map(formatMemory);
 
-    const todos = await prisma.todo.findMany({
+    const commitmentTodos = await prisma.todo.findMany({
       where: {
         userId,
         personaId,
         status: "PENDING",
+        kind: "COMMITMENT",
       },
       orderBy: { createdAt: "asc" },
       take: 20,
       select: { id: true, content: true, createdAt: true },
     });
-    const openLoops = dedupeOpenLoops(todos);
+
+    const threadTodos = await prisma.todo.findMany({
+      where: {
+        userId,
+        personaId,
+        status: "PENDING",
+        kind: "THREAD",
+      },
+      orderBy: { createdAt: "asc" },
+      take: 20,
+      select: { id: true, content: true, createdAt: true },
+    });
+
+    const frictionTodos = await prisma.todo.findMany({
+      where: {
+        userId,
+        personaId,
+        status: "PENDING",
+        kind: "FRICTION",
+      },
+      orderBy: { createdAt: "asc" },
+      take: 20,
+      select: { id: true, content: true, createdAt: true },
+    });
+
+    const commitments = dedupeTodos(commitmentTodos).slice(0, MAX_COMMITMENTS);
+    const threads = dedupeTodos(threadTodos).slice(0, MAX_THREADS);
+    const frictions = dedupeTodos(frictionTodos).slice(0, MAX_FRICTIONS);
+
     if (env.FEATURE_CONTEXT_DEBUG === "true") {
       console.log(
         "[context.debug]",
         JSON.stringify({
-          openLoopsRaw: todos.map((todo) => ({ id: todo.id, content: todo.content })),
-          openLoopsFinal: openLoops.map((todo) => todo.content),
+          commitmentsRaw: commitmentTodos.map((todo) => ({ id: todo.id, content: todo.content })),
+          commitmentsFinal: commitments.map((todo) => todo.content),
+          threadsRaw: threadTodos.map((todo) => ({ id: todo.id, content: todo.content })),
+          threadsFinal: threads.map((todo) => todo.content),
+          frictionsRaw: frictionTodos.map((todo) => ({ id: todo.id, content: todo.content })),
+          frictionsFinal: frictions.map((todo) => todo.content),
         })
       );
     }
@@ -224,6 +261,7 @@ export async function buildContext(
         userId,
         personaId,
         status: "COMPLETED",
+        kind: "COMMITMENT",
         completedAt: {
           gte: new Date(Date.now() - 48 * 60 * 60 * 1000),
         },
@@ -245,7 +283,9 @@ export async function buildContext(
         .reverse(), // Chronological order
       foundationMemories: foundationMemoryStrings,
       relevantMemories: relevantMemoryStrings,
-      activeTodos: openLoops.map((todo) => todo.content),
+      commitments: commitments.map((todo) => todo.content),
+      threads: threads.map((todo) => todo.content),
+      frictions: frictions.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
       summarySpine: summarySpine?.content?.slice(0, MAX_SUMMARY_SPINE_CHARS),
       sessionSummary: formatSessionSummary(latestSessionSummary?.summary),

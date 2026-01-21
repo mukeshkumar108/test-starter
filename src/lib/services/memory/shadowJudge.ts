@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { MemoryType } from "@prisma/client";
+import { MemoryType, TodoKind } from "@prisma/client";
 import { MODELS } from "@/lib/providers/models";
 import { env } from "@/env";
 
@@ -32,7 +32,9 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const deduped = windowCandidates.filter((content, index, arr) => arr.indexOf(content) === index);
     const userWindow = deduped.slice(0, 4).reverse();
     console.log("Shadow Judge user messages:", { requestId, userWindow });
-    const memories = await extractMemories(userWindow);
+    const extracted = await extractMemories(userWindow);
+    const memories = extracted.memories ?? [];
+    const loops = extracted.loops ?? [];
 
     // Store memories if any
     if (memories.length > 0) {
@@ -103,32 +105,54 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         })
       );
 
-      const openLoopTodos = filteredMemories.filter(
-        (memory) => memory.type === MemoryType.OPEN_LOOP
-      );
-      if (openLoopTodos.length > 0) {
-        await Promise.all(
-          openLoopTodos.map(async (memory) => {
-            try {
-              console.log("Shadow Judge todo write attempt:", { requestId, content: memory.content });
-              await prisma.todo.create({
-                data: {
-                  userId,
-                  personaId,
-                  content: memory.content,
-                },
-              });
-              console.log("Shadow Judge todo write success:", { requestId, content: memory.content });
-            } catch (error) {
-              console.error("Shadow Judge todo write failed:", { requestId, error });
-            }
-          })
+    }
+
+    const normalizedLoops = loops
+      .map((loop) => {
+        const rawKind = typeof loop.kind === "string" ? loop.kind : "";
+        const normalizedKind = rawKind.trim().toUpperCase();
+        const content = typeof loop.content === "string" ? loop.content.trim() : "";
+        if (!content) return null;
+        const allowedKinds = new Set(["COMMITMENT", "THREAD", "FRICTION"]);
+        const safeKind = allowedKinds.has(normalizedKind) ? normalizedKind : "THREAD";
+        const commitVeto = /\b(maybe|might|could|would|wish|hope|if i|if we|what if|just vent|venting|frustrat|angry|upset|tired|overwhelmed|stuck|can't|cannot|won't)\b/i.test(
+          content
         );
-      }
+        const finalKind =
+          safeKind === "COMMITMENT" && commitVeto ? "THREAD" : safeKind;
+        return { kind: finalKind as TodoKind, content, confidence: loop.confidence };
+      })
+      .filter((loop) => loop !== null)
+      .slice(0, 8);
+
+    if (normalizedLoops.length > 0) {
+      await Promise.all(
+        normalizedLoops.map(async (loop) => {
+          try {
+            console.log("Shadow Judge todo write attempt:", {
+              requestId,
+              kind: loop.kind,
+              content: loop.content,
+            });
+            await prisma.todo.create({
+              data: {
+                userId,
+                personaId,
+                content: loop.content,
+                kind: loop.kind,
+                status: "PENDING",
+              },
+            });
+            console.log("Shadow Judge todo write success:", { requestId, content: loop.content });
+          } catch (error) {
+            console.error("Shadow Judge todo write failed:", { requestId, error });
+          }
+        })
+      );
     }
 
     const activeTodos = await prisma.todo.findMany({
-      where: { userId, personaId, status: "PENDING" },
+      where: { userId, personaId, status: "PENDING", kind: TodoKind.COMMITMENT },
       orderBy: { createdAt: "asc" },
       select: { id: true },
     });
@@ -177,11 +201,12 @@ async function extractMemories(userMessages: string[]) {
   try {
     const requestId = crypto.randomUUID();
     const timeoutMs = 2500;
-    const prompt = `Extract explicit user facts and commitments. Return ONLY JSON.
+    const prompt = `Extract explicit user facts and loops. Return ONLY JSON.
 
 MUST:
 - If the user states their name, capture it as PROFILE.
-- Capture commitments, habits, or plans as OPEN_LOOP (including implied intent).
+- Capture loops as one of: COMMITMENT, THREAD, FRICTION.
+- If ambiguous, classify as THREAD.
 
 FOUNDATION (PROFILE/PEOPLE/PROJECT):
 - Only if explicitly stated by the user.
@@ -194,7 +219,10 @@ ${userMessages.join("\n")}
 JSON SCHEMA:
 {
   "memories": [
-    { "type": "PROFILE|PEOPLE|PROJECT|OPEN_LOOP", "content": "..." }
+    { "type": "PROFILE|PEOPLE|PROJECT", "content": "...", "confidence": 0.0 }
+  ],
+  "loops": [
+    { "kind": "COMMITMENT|THREAD|FRICTION", "content": "...", "confidence": 0.0 }
   ]
 }`;
 
@@ -221,10 +249,10 @@ JSON SCHEMA:
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         console.warn("Shadow Judge request timed out:", { requestId });
-        return [];
+        return { memories: [], loops: [] };
       }
       console.warn("Shadow Judge request failed:", { requestId, error });
-      return [];
+      return { memories: [], loops: [] };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -238,14 +266,14 @@ JSON SCHEMA:
         statusText: response.statusText,
         body: truncated,
       });
-      return [];
+      return { memories: [], loops: [] };
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content ?? "";
     console.log("Shadow Judge raw response:", { requestId, content });
     const repaired = repairJsonContent(content);
-    let result: { memories?: any[] } | null = null;
+    let result: { memories?: any[]; loops?: any[] } | null = null;
 
     try {
       result = JSON.parse(repaired);
@@ -260,20 +288,20 @@ JSON SCHEMA:
         } catch {
           const truncated = repaired.length > 500 ? `${repaired.slice(0, 500)}…` : repaired;
           console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
-          return [];
+          return { memories: [], loops: [] };
         }
       } else {
         const truncated = repaired.length > 500 ? `${repaired.slice(0, 500)}…` : repaired;
         console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
-        return [];
+        return { memories: [], loops: [] };
       }
     }
     
-    if (!result) return [];
-    return result.memories || [];
+    if (!result) return { memories: [], loops: [] };
+    return { memories: result.memories || [], loops: result.loops || [] };
   } catch (error) {
     console.error("Memory extraction failed:", error);
-    return [];
+    return { memories: [], loops: [] };
   }
 }
 

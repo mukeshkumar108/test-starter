@@ -2,12 +2,15 @@ import { prisma } from "@/lib/prisma";
 import { createQaUser, getPersonaIdBySlug, cleanupQaUser, isQaClerkId } from "./regress/helpers";
 import { RegressContext, RegressResult } from "./regress/types";
 import { run as shadowJudgeWrites } from "./regress/cases/shadowJudge_writes";
+import { run as loopSemantics } from "./regress/cases/loop_semantics";
 import { run as stoplistProfile } from "./regress/cases/stoplist_profile";
 import { run as contextCaps } from "./regress/cases/context_caps";
+import { run as contextBlocks } from "./regress/cases/context_blocks";
 import { run as sessionLifecycle } from "./regress/cases/session_lifecycle";
 import { run as promptSizeWarn } from "./regress/cases/prompt_size_warn";
 import { run as sessionSummaryCreated } from "./regress/cases/session_summary_created";
 import { run as sessionSummaryNonBlocking } from "./regress/cases/session_summary_non_blocking";
+import { run as curatorAutoTrigger } from "./regress/cases/curator_auto_trigger";
 
 async function runCase(fn: (ctx: RegressContext) => Promise<RegressResult>, ctx: RegressContext) {
   const result = await fn(ctx);
@@ -29,11 +32,14 @@ async function main() {
 
   try {
     results.push(await runCase(shadowJudgeWrites, ctx));
+    results.push(await runCase(loopSemantics, ctx));
     results.push(await runCase(stoplistProfile, ctx));
     results.push(await runCase(contextCaps, ctx));
+    results.push(await runCase(contextBlocks, ctx));
     results.push(await runCase(sessionLifecycle, ctx));
     results.push(await runCase(sessionSummaryNonBlocking, ctx));
     results.push(await runCase(sessionSummaryCreated, ctx));
+    results.push(await runCase(curatorAutoTrigger, ctx));
     results.push(await runCase(promptSizeWarn, ctx));
   } finally {
     await cleanupQaUser(user.id);

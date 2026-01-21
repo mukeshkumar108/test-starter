@@ -84,15 +84,15 @@ async function main() {
     const blocks = {
       foundation: context.foundationMemories.length > 0,
       relevant: context.relevantMemories.length > 0,
-      pending: context.activeTodos.length > 0,
+      pending: context.commitments.length > 0,
       wins: context.recentWins.length > 0,
     };
     results.push(`Context blocks present: ${JSON.stringify(blocks)}`);
 
-    if (context.activeTodos.length > 0) {
-      const label = "OPEN LOOPS (pending):";
+    if (context.commitments.length > 0) {
+      const label = "COMMITMENTS (pending):";
       if (!label) {
-        failures.push("OPEN LOOPS label missing.");
+        failures.push("COMMITMENTS label missing.");
       }
     }
 
