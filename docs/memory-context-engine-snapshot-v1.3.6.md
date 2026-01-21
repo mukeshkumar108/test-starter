@@ -1,12 +1,3 @@
-# Memory & Context Engine — Snapshot v1.3.6 (Replaces v1.3.3)
-
-Note: This file name is preserved for compatibility. The current, canonical snapshot is v1.3.6.
-See: docs/memory-context-engine-snapshot-v1.3.6.md
-
----
-
-(Contents mirror the v1.3.6 snapshot.)
-
 # Memory & Context Engine — Snapshot v1.3.6
 
 This snapshot reflects current code paths as of v1.3.6. It is based on:
