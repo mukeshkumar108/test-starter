@@ -3,6 +3,10 @@ import { env } from "@/env";
 import { MemoryType, type Memory as MemoryRecord } from "@prisma/client";
 
 const MAX_FOLDS_PER_RUN = 5;
+const AUTO_RUN_COOLDOWN_MS = 60 * 1000;
+const AUTO_RUN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const AUTO_RUN_MEMORY_THRESHOLD = 25;
+const autoRunGuards = new Map<string, number>();
 
 function isCuratorEnabled() {
   return env.FEATURE_MEMORY_CURATOR === "true";
@@ -13,6 +17,18 @@ function getMetadataObject(metadata: unknown) {
     return null;
   }
   return metadata as Record<string, unknown>;
+}
+
+function normalizeContent(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,!?;:]+$/g, "");
+}
+
+function isSeeded(metadata: Record<string, unknown> | null) {
+  return metadata?.source === "seeded_profile";
 }
 
 function getEntityKey(content: string) {
@@ -157,4 +173,205 @@ export async function runCuratorBatch(limitUsers: number = 25) {
   }
 
   return { enabled: true, folded: foldedTotal, usersProcessed: userIds.length };
+}
+
+async function runDeterministicHygiene(userId: string) {
+  const candidates = await prisma.memory.findMany({
+    where: {
+      userId,
+      type: { in: [MemoryType.PROFILE, MemoryType.PEOPLE, MemoryType.PROJECT] },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const active = candidates.filter((memory) => {
+    const metadata = getMetadataObject(memory.metadata);
+    const status = metadata?.status ?? "ACTIVE";
+    return status !== "ARCHIVED";
+  });
+
+  const groups = new Map<string, MemoryRecord[]>();
+  for (const memory of active) {
+    const key = `${memory.type}:${normalizeContent(memory.content)}`;
+    const group = groups.get(key) ?? [];
+    group.push(memory);
+    groups.set(key, group);
+  }
+
+  let archived = 0;
+  let deduped = 0;
+  const nowIso = new Date().toISOString();
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const seeded = group.filter((item) => isSeeded(getMetadataObject(item.metadata)));
+    const keep =
+      seeded.length > 0
+        ? seeded.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
+        : group.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+    for (const memory of group) {
+      if (memory.id === keep.id) continue;
+      const metadata = getMetadataObject(memory.metadata) ?? {};
+      await prisma.memory.update({
+        where: { id: memory.id },
+        data: {
+          metadata: {
+            ...metadata,
+            status: "ARCHIVED",
+            archivedAt: nowIso,
+            archiveReason: "dedupe",
+          },
+        },
+      });
+      archived += 1;
+      deduped += 1;
+    }
+  }
+
+  let folded = 0;
+  for (const memory of active) {
+    if (folded >= MAX_FOLDS_PER_RUN) break;
+    if (memory.type !== MemoryType.PEOPLE) continue;
+    const metadata = getMetadataObject(memory.metadata);
+    if (isSeeded(metadata) || metadata?.source === "curated_fold") continue;
+    const entityValue = metadata?.entity;
+    if (typeof entityValue !== "string") continue;
+    const related = active.filter((item) => {
+      if (item.type !== MemoryType.PEOPLE) return false;
+      const meta = getMetadataObject(item.metadata);
+      if (isSeeded(meta)) return false;
+      return meta?.entity === entityValue;
+    });
+    if (related.length < 3) continue;
+
+    const summary = buildSummary(entityValue, related);
+    const foldedIds = related.map((item) => item.id);
+
+    await prisma.memory.create({
+      data: {
+        userId,
+        type: MemoryType.PEOPLE,
+        content: summary,
+        metadata: {
+          source: "curated_fold",
+          status: "ACTIVE",
+          importance: 2,
+          folded_from_ids: foldedIds,
+          entity: entityValue,
+        },
+      },
+    });
+
+    for (const item of related) {
+      const meta = getMetadataObject(item.metadata) ?? {};
+      await prisma.memory.update({
+        where: { id: item.id },
+        data: {
+          metadata: {
+            ...meta,
+            status: "ARCHIVED",
+            archivedAt: nowIso,
+            archiveReason: "fold",
+          },
+        },
+      });
+      archived += 1;
+    }
+
+    folded += 1;
+  }
+
+  return { archived, deduped, folded };
+}
+
+export async function autoCurateMaybe(userId: string, personaId: string) {
+  const key = `${userId}:${personaId}`;
+  const now = Date.now();
+  const lastGuard = autoRunGuards.get(key) ?? 0;
+  if (now - lastGuard < AUTO_RUN_COOLDOWN_MS) {
+    return { skipped: true, reason: "cooldown" };
+  }
+  autoRunGuards.set(key, now);
+
+  const sessionState = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+  });
+  const baseState =
+    sessionState?.state && typeof sessionState.state === "object" && !Array.isArray(sessionState.state)
+      ? (sessionState.state as Record<string, unknown>)
+      : {};
+  const curatorState =
+    baseState.curator && typeof baseState.curator === "object" && !Array.isArray(baseState.curator)
+      ? (baseState.curator as Record<string, unknown>)
+      : {};
+  const lastRunAtRaw = curatorState.lastRunAt;
+  const lastRunAt = typeof lastRunAtRaw === "string" ? new Date(lastRunAtRaw) : null;
+  const lastRunMs = lastRunAt?.getTime() ?? 0;
+
+  const dueByTime = !lastRunAt || now - lastRunMs >= AUTO_RUN_INTERVAL_MS;
+  let dueByCount = false;
+
+  if (!dueByTime && lastRunAt) {
+    const recent = await prisma.memory.findMany({
+      where: {
+        userId,
+        createdAt: { gt: lastRunAt },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: { metadata: true },
+    });
+    const recentCount = recent.filter((item) => {
+      const metadata = getMetadataObject(item.metadata);
+      const status = metadata?.status ?? "ACTIVE";
+      return status !== "ARCHIVED";
+    }).length;
+    dueByCount = recentCount >= AUTO_RUN_MEMORY_THRESHOLD;
+  }
+
+  if (!dueByTime && !dueByCount) {
+    return { skipped: true, reason: "not_due" };
+  }
+
+  const reason = dueByTime ? "24h" : "25mem";
+  const startedAt = Date.now();
+  console.log(
+    "[curator.auto]",
+    JSON.stringify({ userId, personaId, reason, startedAt })
+  );
+
+  const result = await runDeterministicHygiene(userId);
+  const elapsedMs = Date.now() - startedAt;
+
+  const newState = {
+    ...baseState,
+    curator: {
+      lastRunAt: new Date().toISOString(),
+      lastMemoryCountAtRun: result.deduped + result.archived,
+    },
+  };
+
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId, personaId } },
+    update: { state: newState },
+    create: { userId, personaId, state: newState },
+  });
+
+  console.log(
+    "[curator.auto.done]",
+    JSON.stringify({
+      userId,
+      personaId,
+      reason,
+      elapsedMs,
+      counts: {
+        archived: result.archived,
+        deduped: result.deduped,
+        folded: result.folded,
+      },
+    })
+  );
+
+  return { ...result, reason };
 }
