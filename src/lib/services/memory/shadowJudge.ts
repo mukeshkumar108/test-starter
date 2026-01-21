@@ -176,6 +176,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
 async function extractMemories(userMessages: string[]) {
   try {
     const requestId = crypto.randomUUID();
+    const timeoutMs = 2500;
     const prompt = `Extract explicit user facts and commitments. Return ONLY JSON.
 
 MUST:
@@ -197,21 +198,36 @@ JSON SCHEMA:
   ]
 }`;
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://github.com/your-repo",
-        "X-Title": "Walkie-Talkie Voice Companion",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: MODELS.JUDGE,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 500,
-        temperature: 0.1,
-      }),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
+          "HTTP-Referer": "https://github.com/your-repo",
+          "X-Title": "Walkie-Talkie Voice Companion",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: MODELS.JUDGE,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 350,
+          temperature: 0,
+        }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.warn("Shadow Judge request timed out:", { requestId });
+        return [];
+      }
+      console.warn("Shadow Judge request failed:", { requestId, error });
+      return [];
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "<no body>");

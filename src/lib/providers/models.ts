@@ -12,7 +12,7 @@ export const MODELS = {
   },
   
   // Cheap model for shadow processing/judging
-  JUDGE: "openai/gpt-4o-mini",
+  JUDGE: "xiaomi/mimo-v2-flash",
 
   // Session summaries
   SUMMARY: "amazon/nova-micro-v1",
