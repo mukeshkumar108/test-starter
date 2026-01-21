@@ -249,10 +249,10 @@ JSON SCHEMA:
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         console.warn("Shadow Judge request timed out:", { requestId });
-        return [];
+        return { memories: [], loops: [] };
       }
       console.warn("Shadow Judge request failed:", { requestId, error });
-      return [];
+      return { memories: [], loops: [] };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -266,7 +266,7 @@ JSON SCHEMA:
         statusText: response.statusText,
         body: truncated,
       });
-      return [];
+      return { memories: [], loops: [] };
     }
 
     const data = await response.json();
@@ -288,12 +288,12 @@ JSON SCHEMA:
         } catch {
           const truncated = repaired.length > 500 ? `${repaired.slice(0, 500)}…` : repaired;
           console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
-          return [];
+          return { memories: [], loops: [] };
         }
       } else {
         const truncated = repaired.length > 500 ? `${repaired.slice(0, 500)}…` : repaired;
         console.error("Shadow Judge JSON parse failed:", { requestId, content: truncated });
-        return [];
+        return { memories: [], loops: [] };
       }
     }
     
