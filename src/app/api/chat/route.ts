@@ -6,6 +6,7 @@ import { generateResponse } from "@/lib/services/voice/llmService";
 import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
 import { buildContext } from "@/lib/services/memory/contextBuilder";
 import { processShadowPath } from "@/lib/services/memory/shadowJudge";
+import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import { getChatModelForPersona } from "@/lib/providers/models";
@@ -198,8 +199,9 @@ export async function POST(request: NextRequest) {
     const foundationMemoryStrings = context.foundationMemories.join("\n");
     const relevantMemoryStrings = context.relevantMemories.join("\n");
     const sessionContext = getSessionContext(context.sessionState);
-    const activeTodos = context.activeTodos;
-    const activeTodoStrings = activeTodos.join("\n");
+    const commitmentStrings = context.commitments.join("\n");
+    const threadStrings = context.threads.join("\n");
+    const frictionStrings = context.frictions.join("\n");
     const recentWins = context.recentWins;
     const recentWinStrings = recentWins.join("\n");
     const model = getChatModelForPersona(persona.slug);
@@ -213,13 +215,19 @@ export async function POST(request: NextRequest) {
       ...(relevantMemoryStrings
         ? [{ role: "system" as const, content: `[RELEVANT MEMORIES]:\n${relevantMemoryStrings}` }]
         : []),
-      ...(activeTodoStrings
+      ...(commitmentStrings
         ? [
             {
               role: "system" as const,
-              content: `OPEN LOOPS (pending):\n${activeTodoStrings}`,
+              content: `COMMITMENTS (pending):\n${commitmentStrings}`,
             },
           ]
+        : []),
+      ...(threadStrings
+        ? [{ role: "system" as const, content: `ACTIVE THREADS:\n${threadStrings}` }]
+        : []),
+      ...(frictionStrings
+        ? [{ role: "system" as const, content: `FRICTIONS / PATTERNS:\n${frictionStrings}` }]
         : []),
       ...(recentWinStrings
         ? [{ role: "system" as const, content: `Recent wins:\n${recentWinStrings}` }]
@@ -251,7 +259,9 @@ export async function POST(request: NextRequest) {
           counts: {
             foundation: context.foundationMemories.length,
             relevant: context.relevantMemories.length,
-            pending: context.activeTodos.length,
+            commitments: context.commitments.length,
+            threads: context.threads.length,
+            frictions: context.frictions.length,
             wins: context.recentWins.length,
           },
           model,
@@ -270,7 +280,9 @@ export async function POST(request: NextRequest) {
         counts: {
           foundationMemories: context.foundationMemories.length,
           relevantMemories: context.relevantMemories.length,
-          pendingTodos: context.activeTodos.length,
+          commitments: context.commitments.length,
+          threads: context.threads.length,
+          frictions: context.frictions.length,
           recentWins: context.recentWins.length,
         },
       })
@@ -290,7 +302,9 @@ export async function POST(request: NextRequest) {
           persona: context.persona,
           foundationMemories: foundationMemoryStrings,
           relevantMemories: relevantMemoryStrings,
-          pendingTodos: activeTodoStrings,
+          commitments: commitmentStrings,
+          threads: threadStrings,
+          frictions: frictionStrings,
           recentWins: recentWinStrings,
           userSeed: context.userSeed,
           summarySpine: context.summarySpine,
@@ -354,6 +368,10 @@ export async function POST(request: NextRequest) {
       currentSessionState: context.sessionState,
     }).catch(error => {
       console.error("Shadow path failed (non-blocking):", error);
+    });
+
+    autoCurateMaybe(user.id, personaId).catch((error) => {
+      console.warn("[curator.auto.err]", { userId: user.id, personaId, error });
     });
 
     // Return fast response
