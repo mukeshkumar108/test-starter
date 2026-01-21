@@ -24,6 +24,14 @@ const MAX_SUMMARY_SPINE_CHARS = 1200;
 const MAX_RECENT_MESSAGE_CHARS = 800;
 const MAX_SESSION_SUMMARY_CHARS = 600;
 
+function normalizeText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,!?;:]+$/g, "");
+}
+
 function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
   const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
   const perTypeCaps: Record<string, number> = {
@@ -41,7 +49,7 @@ function selectRelevantMemories(memories: Array<{ type: string; content: string 
 
   for (const memory of memories) {
     if (!allowedTypes.has(memory.type)) continue;
-    const normalizedContent = memory.content.trim().toLowerCase();
+    const normalizedContent = normalizeText(memory.content);
     if (seen.has(normalizedContent)) continue;
     if (counts[memory.type] >= perTypeCaps[memory.type]) continue;
     if (selected.length >= 8) break;
@@ -171,7 +179,13 @@ export async function buildContext(
     });
 
     const relevantMemories = await searchMemories(userId, userMessage, 12);
-    const selectedRelevant = selectRelevantMemories(relevantMemories);
+    const foundationSet = new Set(
+      foundationMemories.map((memory) => normalizeText(memory.content))
+    );
+    const filteredRelevant = relevantMemories.filter(
+      (memory) => !foundationSet.has(normalizeText(memory.content))
+    );
+    const selectedRelevant = selectRelevantMemories(filteredRelevant);
     const relevantMemoryStrings = selectedRelevant.map(formatMemory);
     const foundationMemoryStrings = foundationMemories.map(formatMemory);
 

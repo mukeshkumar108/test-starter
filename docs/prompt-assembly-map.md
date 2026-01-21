@@ -1,5 +1,10 @@
 # Prompt Assembly Map (Live Code)
 
+## v1.3.2 changes
+- Session summaries run asynchronously on session close and never block chat requests.
+- Session summarizer uses a hard timeout (default 2500ms) via `SUMMARY_TIMEOUT_MS`.
+- Relevant memories are deduped against foundation memories by normalized content.
+
 ## Raw Code Excerpts
 
 ### src/app/api/chat/route.ts (assembly + injected blocks)
@@ -251,7 +256,7 @@ export async function getLatestSessionSummary(userId: string, personaId: string)
 | Block Name | Source Function | Data Types | Caps | Dedupe | Notes/Risks |
 | --- | --- | --- | --- | --- | --- |
 | Foundation | contextBuilder.ts -> foundationMemories | Memory (PROFILE/PEOPLE/PROJECT) | take 12 | none | Ordered asc; can include old low-signal entries. |
-| Relevant | memoryStore.ts searchMemories + contextBuilder selectRelevantMemories | Memory (PROFILE/PEOPLE/PROJECT) | top 12 raw; max 8 selected | per-type + content | Similar items can repeat across Foundation + Relevant. |
+| Relevant | memoryStore.ts searchMemories + contextBuilder selectRelevantMemories | Memory (PROFILE/PEOPLE/PROJECT) | top 12 raw; max 8 selected | per-type + content | Deduped against Foundation by normalized content. |
 | Open Loops | contextBuilder.ts dedupeOpenLoops | Todo (PENDING) | max 5 | normalized content | Depends on Todo creation; may still include noisy commitments. |
 | Wins | contextBuilder.ts recentWins | Todo (COMPLETED, last 48h) | max 3 | none | Uses content only; no metadata. |
 | Summary Spine | contextBuilder.ts summarySpine | SummarySpine.content | max 1200 chars | none | No truncation per section; could still be dense. |
