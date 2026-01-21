@@ -39,6 +39,40 @@ enum TodoKind {
   REMINDER
 }
 
+model Session {
+  id             String   @id @default(cuid())
+  userId         String
+  personaId      String
+  startedAt      DateTime @default(now())
+  lastActivityAt DateTime @default(now())
+  endedAt        DateTime?
+  turnCount      Int      @default(0)
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  persona PersonaProfile @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  summary SessionSummary?
+
+  @@index([userId, personaId, lastActivityAt])
+  @@index([userId, personaId, startedAt])
+}
+
+model SessionSummary {
+  id        String   @id @default(cuid())
+  sessionId String   @unique
+  userId    String
+  personaId String
+  summary   String
+  metadata  Json?
+  model     String?
+  createdAt DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  persona PersonaProfile @relation(fields: [personaId], references: [id], onDelete: Cascade)
+
+  @@index([userId, personaId, createdAt])
+}
+
 model User {
   id          String   @id @default(cuid())
   clerkUserId String   @unique
@@ -52,6 +86,8 @@ model User {
   summarySpines SummarySpine[]
   sessionStates SessionState[]
   todos         Todo[]
+  sessions      Session[]
+  sessionSummaries SessionSummary[]
 }
 
 model PersonaProfile {
@@ -68,6 +104,8 @@ model PersonaProfile {
   
   sessionStates SessionState[]
   todos         Todo[]
+  sessions      Session[]
+  sessionSummaries SessionSummary[]
 }
 
 model UserSeed {

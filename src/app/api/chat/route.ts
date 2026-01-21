@@ -10,6 +10,7 @@ import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import { getChatModelForPersona } from "@/lib/providers/models";
 import { searchMemories } from "@/lib/services/memory/memoryStore";
+import { closeStaleSessionIfAny, ensureActiveSession } from "@/lib/services/session/sessionService";
 
 export const runtime = "nodejs";
 
@@ -181,6 +182,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const now = new Date();
+    await closeStaleSessionIfAny(user.id, personaId, now);
+    await ensureActiveSession(user.id, personaId, now);
+
     // Step 2: Build conversation context
     const context = await buildContext(user.id, personaId, sttResult.transcript);
     const lastMessage = await prisma.message.findFirst({
@@ -221,6 +226,14 @@ export async function POST(request: NextRequest) {
         : []),
       ...(context.userSeed ? [{ role: "system" as const, content: `User context: ${context.userSeed}` }] : []),
       ...(context.summarySpine ? [{ role: "system" as const, content: `Conversation summary: ${context.summarySpine}` }] : []),
+      ...(context.sessionSummary
+        ? [
+            {
+              role: "system" as const,
+              content: `LATEST SESSION SUMMARY: ${context.sessionSummary}`,
+            },
+          ]
+        : []),
       ...context.recentMessages,
       { role: "user" as const, content: sttResult.transcript },
     ];

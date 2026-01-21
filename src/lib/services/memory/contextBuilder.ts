@@ -3,6 +3,7 @@ import { searchMemories } from "@/lib/services/memory/memoryStore";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { env } from "@/env";
+import { getLatestSessionSummary } from "@/lib/services/session/sessionService";
 
 export interface ConversationContext {
   persona: string;
@@ -14,6 +15,7 @@ export interface ConversationContext {
   activeTodos: string[];
   recentWins: string[];
   summarySpine?: string;
+  sessionSummary?: string;
 }
 
 const MAX_OPEN_LOOPS = 5;
@@ -118,6 +120,8 @@ export async function buildContext(
       orderBy: { version: "desc" },
     });
 
+    const latestSessionSummary = await getLatestSessionSummary(userId, personaId);
+
     const formatMemory = (memory: { content: string; metadata?: any }) => {
       const source = memory.metadata?.source;
       const sourceLabel =
@@ -186,6 +190,7 @@ export async function buildContext(
       activeTodos: openLoops.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
       summarySpine: summarySpine?.content,
+      sessionSummary: latestSessionSummary?.summary.slice(0, 600),
     };
   } catch (error) {
     console.error("Context Builder Error:", error);

@@ -26,6 +26,7 @@ const envSchema = z.object({
   ADMIN_SECRET: z.string().min(1).optional(),
   FEATURE_MEMORY_CURATOR: z.string().optional(),
   FEATURE_CONTEXT_DEBUG: z.string().optional(),
+  FEATURE_SESSION_SUMMARY: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);
