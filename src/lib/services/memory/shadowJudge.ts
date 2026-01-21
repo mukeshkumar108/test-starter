@@ -76,9 +76,14 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         (memory) => memory.type !== MemoryType.OPEN_LOOP
       );
       const sanitizedFoundation = foundationMemories.filter((memory) => {
-        if (memory.type !== MemoryType.PROFILE) return true;
-        const normalized = memory.content.trim().toLowerCase();
-        return !profileStoplist.has(normalized);
+        if (memory.type === MemoryType.PROFILE) {
+          const normalized = memory.content.trim().toLowerCase();
+          return !profileStoplist.has(normalized);
+        }
+        if (memory.type === MemoryType.PEOPLE) {
+          return isPeopleRelationship(memory.content);
+        }
+        return true;
       });
 
       await Promise.all(
@@ -125,10 +130,38 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
       .filter((loop) => loop !== null)
       .slice(0, 8);
 
-    if (normalizedLoops.length > 0) {
+    const seenLoopKeys = new Set<string>();
+    const dedupedLoops = normalizedLoops.filter((loop) => {
+      if (!loop) return false;
+      const key = `${loop.kind}:${normalizeLoopContent(loop.content)}`;
+      if (seenLoopKeys.has(key)) return false;
+      seenLoopKeys.add(key);
+      return true;
+    }) as Array<{ kind: TodoKind; content: string; confidence: number }>;
+
+    const compressedLoops = compressCommitments(dedupedLoops);
+
+    if (compressedLoops.length > 0) {
+      const existingTodos = await prisma.todo.findMany({
+        where: {
+          userId,
+          personaId,
+          status: "PENDING",
+          kind: { in: [TodoKind.COMMITMENT, TodoKind.THREAD, TodoKind.FRICTION] },
+        },
+        select: { content: true, kind: true },
+      });
+      const existingSet = new Set(
+        existingTodos.map((todo) => `${todo.kind}:${normalizeLoopContent(todo.content)}`)
+      );
       await Promise.all(
-        normalizedLoops.map(async (loop) => {
+        compressedLoops.map(async (loop) => {
           try {
+            const normalizedContent = normalizeLoopContent(loop.content);
+            const key = `${loop.kind}:${normalizedContent}`;
+            if (existingSet.has(key)) {
+              return;
+            }
             console.log("Shadow Judge todo write attempt:", {
               requestId,
               kind: loop.kind,
@@ -215,6 +248,11 @@ FOUNDATION (PROFILE/PEOPLE/PROJECT):
 - Only if explicitly stated by the user.
 - Do not infer or guess.
 - Do not capture assistant/persona names as PROFILE.
+- Only capture PEOPLE if the user states a relationship (e.g., "my cofounder John"). Passing mentions of names are NOT memories.
+
+LOOPS:
+- FRICTION is for negative sentiment, blockers, or feeling stuck (e.g., "visual polish feels off").
+- THREAD is for neutral topics or ongoing discussions.
 
 USER MESSAGES:
 ${userMessages.join("\n")}
@@ -363,6 +401,53 @@ function repairJsonContent(content: string) {
     }
   }
   return cleaned;
+}
+
+function normalizeLoopContent(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,!?;:]+$/g, "");
+}
+
+function compressCommitments(
+  loops: Array<{ kind: TodoKind; content: string; confidence: number }>
+) {
+  const commitments = loops.filter((loop) => loop.kind === TodoKind.COMMITMENT);
+  if (commitments.length <= 1) return loops;
+
+  const keep = new Set<string>();
+  const normalized = commitments.map((loop) => ({
+    content: loop.content,
+    norm: normalizeLoopContent(loop.content),
+  }));
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const current = normalized[i];
+    let isCovered = false;
+    for (let j = 0; j < normalized.length; j += 1) {
+      if (i === j) continue;
+      const other = normalized[j];
+      if (other.norm.includes(current.norm) && other.norm.length >= current.norm.length) {
+        if (other.norm !== current.norm) {
+          isCovered = true;
+          break;
+        }
+      }
+    }
+    if (!isCovered) {
+      keep.add(current.content);
+    }
+  }
+
+  return loops.filter((loop) => loop.kind !== TodoKind.COMMITMENT || keep.has(loop.content));
+}
+
+function isPeopleRelationship(content: string) {
+  return /\b(my|mom|mother|dad|father|parent|sister|brother|wife|husband|partner|girlfriend|boyfriend|fiance|fiancé|spouse|friend|cofounder|co-founder|colleague|teammate|manager|boss|client|mentor)\b/i.test(
+    content
+  );
 }
 
 async function updateSessionState(
