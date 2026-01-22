@@ -15,211 +15,25 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
   try {
     const requestId = crypto.randomUUID();
     const { userId, personaId, userMessage, assistantResponse, currentSessionState } = params;
-    const allowedTypes = new Set(Object.values(MemoryType));
-
-    // Extract memories using judge model (last 3-6 user-only turns)
-    const recentUserMessages = await prisma.message.findMany({
-      where: { userId, role: "user" },
-      orderBy: { createdAt: "desc" },
-      take: 6,
-      select: { content: true, createdAt: true },
-    });
-    const cutoff = Date.now() - 60 * 60 * 1000;
-    const recentWindow = recentUserMessages
-      .filter((m) => m.createdAt.getTime() >= cutoff)
-      .map((m) => m.content);
-    const windowCandidates = [userMessage, ...recentWindow].filter(Boolean);
-    const deduped = windowCandidates.filter((content, index, arr) => arr.indexOf(content) === index);
-    const userWindow = deduped.slice(0, 4).reverse();
-    const windowText = userWindow.join(" ").toLowerCase();
+    const { userWindow, windowText } = await getUserWindow(userId, userMessage);
     console.log("Shadow Judge user messages:", { requestId, userWindow });
-    const extracted = await extractMemories(userWindow);
+
+    const extracted = await judgeExtract(userWindow);
     const memories = extracted.memories ?? [];
     const loops = extracted.loops ?? [];
 
     // Store memories if any
     if (memories.length > 0) {
       console.log("Shadow Judge parsed memories:", { requestId, memories });
-      const normalizedMemories = memories
-        .map((memory) => {
-          const rawType = memory.type ?? "";
-          const normalized = rawType.split("|")[0].trim().toUpperCase();
-          if (!allowedTypes.has(normalized as MemoryType)) {
-            if (process.env.NODE_ENV !== "production") {
-              console.warn("Shadow memory skipped (invalid type):", {
-                requestId,
-                rawType,
-                normalized,
-              });
-            }
-            return null;
-          }
-          return { ...memory, type: normalized as MemoryType };
-        })
-        .filter((memory) => memory !== null);
-
-      const filteredMemories = normalizedMemories
-        .slice(0, 5)
-        .filter(
-          (memory) =>
-            !/testing|frustrat|grateful|supportive|assistant|conversation|ready to help/i.test(
-              memory.content
-            )
-        );
-
-      const profileStoplist = new Set([
-        "sophie",
-        "isabella",
-        "william",
-        "alexander",
-      ]);
-      const foundationMemories = filteredMemories.filter(
-        (memory) => memory.type !== MemoryType.OPEN_LOOP
-      );
-      const sanitizedFoundation = foundationMemories.filter((memory) => {
-        if (memory.type === MemoryType.PROFILE) {
-          const normalized = memory.content.trim().toLowerCase();
-          return !profileStoplist.has(normalized);
-        }
-        if (memory.type === MemoryType.PEOPLE) {
-          return isPeopleRelationship(memory.content) && hasRelationshipInWindow(windowText);
-        }
-        return true;
-      });
-
-      await Promise.all(
-        sanitizedFoundation.map(async (memory) => {
-          try {
-            console.log("Shadow Judge memory write attempt:", {
-              requestId,
-              type: memory.type,
-              content: memory.content,
-              confidence: memory.confidence,
-            });
-            await prisma.memory.create({
-              data: {
-                userId,
-                type: memory.type,
-                content: memory.content,
-                metadata: { source: "shadow_extraction", confidence: memory.confidence },
-              },
-            });
-            console.log("Shadow Judge memory write success:", { requestId, content: memory.content });
-          } catch (error) {
-            console.error("Shadow Judge memory write failed:", { requestId, error });
-          }
-        })
-      );
-
+      const sanitizedFoundation = sanitizeMemories(memories, windowText);
+      await writeMemories(userId, sanitizedFoundation, requestId);
     }
 
-    const normalizedLoops = loops
-      .map((loop) => {
-        const rawKind = typeof loop.kind === "string" ? loop.kind : "";
-        const normalizedKind = rawKind.trim().toUpperCase();
-        const content = typeof loop.content === "string" ? loop.content.trim() : "";
-        const dedupeKeyRaw = typeof loop.dedupe_key === "string" ? loop.dedupe_key : "";
-        if (!content) return null;
-        const allowedKinds = new Set(["COMMITMENT", "HABIT", "THREAD", "FRICTION"]);
-        const safeKind = allowedKinds.has(normalizedKind) ? normalizedKind : "THREAD";
-        const commitVeto = /\b(maybe|might|could|would|wish|hope|if i|if we|what if|just vent|venting|frustrat|angry|upset|tired|overwhelmed|stuck|can't|cannot|won't)\b/i.test(
-          content
-        );
-        const finalKind =
-          safeKind === "COMMITMENT" && commitVeto ? "THREAD" : safeKind;
-        const dedupeKey = dedupeKeyRaw ? normalizeDedupeKey(dedupeKeyRaw) : null;
-        return {
-          kind: finalKind as TodoKind,
-          content,
-          dedupeKey,
-          confidence: loop.confidence,
-        };
-      })
-      .filter((loop) => loop !== null)
-      .slice(0, 8);
-
-    const seenLoopKeys = new Set<string>();
-    const dedupedLoops = normalizedLoops.filter((loop) => {
-      if (!loop) return false;
-      const signature = loop.dedupeKey ?? normalizeLoopContent(loop.content);
-      const key = `${loop.kind}:${signature}`;
-      if (seenLoopKeys.has(key)) return false;
-      seenLoopKeys.add(key);
-      return true;
-    }) as Array<{
-      kind: TodoKind;
-      content: string;
-      dedupeKey: string | null;
-      confidence: number;
-    }>;
-
+    const normalizedLoops = normalizeLoops(loops);
+    const dedupedLoops = dedupeLoops(normalizedLoops);
     const compressedLoops = dedupedLoops;
-
-    if (compressedLoops.length > 0) {
-      const existingTodos = await prisma.todo.findMany({
-        where: {
-          userId,
-          personaId,
-          status: "PENDING",
-          kind: { in: [TodoKind.COMMITMENT, TodoKind.HABIT, TodoKind.THREAD, TodoKind.FRICTION] },
-        },
-        select: { content: true, kind: true, dedupeKey: true },
-      });
-      const existingSet = new Set(
-        existingTodos.map((todo) => {
-          const signature = todo.dedupeKey
-            ? normalizeDedupeKey(todo.dedupeKey)
-            : normalizeLoopContent(todo.content);
-          return `${todo.kind}:${signature}`;
-        })
-      );
-      await Promise.all(
-        compressedLoops.map(async (loop) => {
-          try {
-            const signature = loop.dedupeKey
-              ? normalizeDedupeKey(loop.dedupeKey)
-              : normalizeLoopContent(loop.content);
-            const key = `${loop.kind}:${signature}`;
-            if (existingSet.has(key)) {
-              return;
-            }
-            console.log("Shadow Judge todo write attempt:", {
-              requestId,
-              kind: loop.kind,
-              content: loop.content,
-            });
-            await prisma.todo.create({
-              data: {
-                userId,
-                personaId,
-                content: loop.content,
-                kind: loop.kind,
-                status: "PENDING",
-                dedupeKey: loop.dedupeKey ?? undefined,
-              },
-            });
-            console.log("Shadow Judge todo write success:", { requestId, content: loop.content });
-          } catch (error) {
-            console.error("Shadow Judge todo write failed:", { requestId, error });
-          }
-        })
-      );
-    }
-
-    const activeTodos = await prisma.todo.findMany({
-      where: { userId, personaId, status: "PENDING", kind: TodoKind.COMMITMENT },
-      orderBy: { createdAt: "asc" },
-      select: { id: true },
-    });
-    if (
-      activeTodos.length === 1 &&
-      /\b(done|finished|completed)\b/i.test(userMessage)
-    ) {
-      await prisma.todo.update({
-        where: { id: activeTodos[0].id },
-        data: { status: "COMPLETED", completedAt: new Date() },
-      });
-    }
+    await writeTodos(userId, personaId, compressedLoops, requestId);
+    await autoCompleteCommitment(userId, personaId, userMessage);
 
     // Update session state
     const updatedSessionState = await updateSessionState(
@@ -250,6 +64,251 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     console.error("Shadow Judge Error:", error);
     // Don't throw - shadow processing should never block user
   }
+}
+
+async function getUserWindow(userId: string, userMessage: string) {
+  const recentUserMessages = await prisma.message.findMany({
+    where: { userId, role: "user" },
+    orderBy: { createdAt: "desc" },
+    take: 6,
+    select: { content: true, createdAt: true },
+  });
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  const recentWindow = recentUserMessages
+    .filter((m) => m.createdAt.getTime() >= cutoff)
+    .map((m) => m.content);
+  const windowCandidates = [userMessage, ...recentWindow].filter(Boolean);
+  const deduped = windowCandidates.filter(
+    (content, index, arr) => arr.indexOf(content) === index
+  );
+  const userWindow = deduped.slice(0, 4).reverse();
+  return {
+    userWindow,
+    windowText: userWindow.join(" ").toLowerCase(),
+  };
+}
+
+async function judgeExtract(userWindow: string[]) {
+  return extractMemories(userWindow);
+}
+
+function sanitizeMemories(memories: Array<any>, windowText: string) {
+  const allowedTypes = new Set(Object.values(MemoryType));
+  const normalizedMemories = memories
+    .map((memory) => {
+      const rawType = memory.type ?? "";
+      const normalized = rawType.split("|")[0].trim().toUpperCase();
+      if (!allowedTypes.has(normalized as MemoryType)) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("Shadow memory skipped (invalid type):", {
+            rawType,
+            normalized,
+          });
+        }
+        return null;
+      }
+      return { ...memory, type: normalized as MemoryType };
+    })
+    .filter((memory) => memory !== null);
+
+  const filteredMemories = normalizedMemories
+    .slice(0, 5)
+    .filter(
+      (memory) =>
+        !/testing|frustrat|grateful|supportive|assistant|conversation|ready to help/i.test(
+          memory.content
+        )
+    );
+
+  const profileStoplist = new Set([
+    "sophie",
+    "isabella",
+    "william",
+    "alexander",
+  ]);
+  const foundationMemories = filteredMemories.filter(
+    (memory) => memory.type !== MemoryType.OPEN_LOOP
+  );
+  return foundationMemories.filter((memory) => {
+    if (memory.type === MemoryType.PROFILE) {
+      const normalized = memory.content.trim().toLowerCase();
+      return !profileStoplist.has(normalized);
+    }
+    if (memory.type === MemoryType.PEOPLE) {
+      return isPeopleRelationship(memory.content) && hasRelationshipInWindow(windowText);
+    }
+    return true;
+  });
+}
+
+async function writeMemories(
+  userId: string,
+  sanitizedFoundation: Array<any>,
+  requestId: string
+) {
+  await Promise.all(
+    sanitizedFoundation.map(async (memory) => {
+      try {
+        console.log("Shadow Judge memory write attempt:", {
+          requestId,
+          type: memory.type,
+          content: memory.content,
+          confidence: memory.confidence,
+        });
+        await prisma.memory.create({
+          data: {
+            userId,
+            type: memory.type,
+            content: memory.content,
+            metadata: { source: "shadow_extraction", confidence: memory.confidence },
+          },
+        });
+        console.log("Shadow Judge memory write success:", { requestId, content: memory.content });
+      } catch (error) {
+        console.error("Shadow Judge memory write failed:", { requestId, error });
+      }
+    })
+  );
+}
+
+function normalizeLoops(loops: Array<any>) {
+  return loops
+    .map((loop) => {
+      const rawKind = typeof loop.kind === "string" ? loop.kind : "";
+      const normalizedKind = rawKind.trim().toUpperCase();
+      const content = typeof loop.content === "string" ? loop.content.trim() : "";
+      const dedupeKeyRaw = typeof loop.dedupe_key === "string" ? loop.dedupe_key : "";
+      if (!content) return null;
+      const allowedKinds = new Set(["COMMITMENT", "HABIT", "THREAD", "FRICTION"]);
+      const safeKind = allowedKinds.has(normalizedKind) ? normalizedKind : "THREAD";
+      const shouldDowngrade =
+        safeKind === "COMMITMENT" &&
+        hasHedgeWords(content) &&
+        !hasTimeboxMarker(content) &&
+        !hasExplicitWill(content);
+      const finalKind = shouldDowngrade ? "THREAD" : safeKind;
+      const dedupeKey = dedupeKeyRaw ? normalizeDedupeKey(dedupeKeyRaw) : null;
+      return {
+        kind: finalKind as TodoKind,
+        content,
+        dedupeKey,
+        confidence: loop.confidence,
+      };
+    })
+    .filter((loop) => loop !== null)
+    .slice(0, 8);
+}
+
+function dedupeLoops(normalizedLoops: Array<{
+  kind: TodoKind;
+  content: string;
+  dedupeKey: string | null;
+  confidence: number;
+}>) {
+  const seenLoopKeys = new Set<string>();
+  return normalizedLoops.filter((loop) => {
+    const signature = loop.dedupeKey ?? normalizeLoopContent(loop.content);
+    const key = `${loop.kind}:${signature}`;
+    if (seenLoopKeys.has(key)) return false;
+    seenLoopKeys.add(key);
+    return true;
+  });
+}
+
+async function writeTodos(
+  userId: string,
+  personaId: string,
+  loops: Array<{
+    kind: TodoKind;
+    content: string;
+    dedupeKey: string | null;
+    confidence: number;
+  }>,
+  requestId: string
+) {
+  if (loops.length === 0) return;
+  const existingTodos = await prisma.todo.findMany({
+    where: {
+      userId,
+      personaId,
+      status: "PENDING",
+      kind: { in: [TodoKind.COMMITMENT, TodoKind.HABIT, TodoKind.THREAD, TodoKind.FRICTION] },
+    },
+    select: { content: true, kind: true, dedupeKey: true },
+  });
+  const existingSet = new Set(
+    existingTodos.map((todo) => {
+      const signature = todo.dedupeKey
+        ? normalizeDedupeKey(todo.dedupeKey)
+        : normalizeLoopContent(todo.content);
+      return `${todo.kind}:${signature}`;
+    })
+  );
+  await Promise.all(
+    loops.map(async (loop) => {
+      try {
+        const signature = loop.dedupeKey
+          ? normalizeDedupeKey(loop.dedupeKey)
+          : normalizeLoopContent(loop.content);
+        const key = `${loop.kind}:${signature}`;
+        if (existingSet.has(key)) {
+          return;
+        }
+        console.log("Shadow Judge todo write attempt:", {
+          requestId,
+          kind: loop.kind,
+          content: loop.content,
+        });
+        await prisma.todo.create({
+          data: {
+            userId,
+            personaId,
+            content: loop.content,
+            kind: loop.kind,
+            status: "PENDING",
+            dedupeKey: loop.dedupeKey ?? undefined,
+          },
+        });
+        console.log("Shadow Judge todo write success:", { requestId, content: loop.content });
+      } catch (error) {
+        console.error("Shadow Judge todo write failed:", { requestId, error });
+      }
+    })
+  );
+}
+
+async function autoCompleteCommitment(
+  userId: string,
+  personaId: string,
+  userMessage: string
+) {
+  const activeTodos = await prisma.todo.findMany({
+    where: { userId, personaId, status: "PENDING", kind: TodoKind.COMMITMENT },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (
+    activeTodos.length === 1 &&
+    /\b(done|finished|completed)\b/i.test(userMessage)
+  ) {
+    await prisma.todo.update({
+      where: { id: activeTodos[0].id },
+      data: { status: "COMPLETED", completedAt: new Date() },
+    });
+  }
+}
+
+function hasHedgeWords(content: string) {
+  return /\b(maybe|might|could|wish|hope|if i|if we)\b/i.test(content);
+}
+
+function hasTimeboxMarker(content: string) {
+  return /\b(today|tonight|tomorrow|before|by|end of day|end of the day)\b/i.test(content) ||
+    /\bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/i.test(content);
+}
+
+function hasExplicitWill(content: string) {
+  return /\b(i will|i'm going to|i am going to|i'll)\b/i.test(content);
 }
 
 async function extractMemories(userMessages: string[]) {
