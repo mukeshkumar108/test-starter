@@ -26,6 +26,7 @@ async function main() {
   const { run: sessionLifecycle } = await import("./regress/cases/session_lifecycle");
   const { run: promptSizeWarn } = await import("./regress/cases/prompt_size_warn");
   const { run: sessionSummaryCreated } = await import("./regress/cases/session_summary_created");
+  const { run: sessionSummarySafety } = await import("./regress/cases/session_summary_safety");
   const { run: sessionSummaryNonBlocking } = await import("./regress/cases/session_summary_non_blocking");
   const { run: curatorAutoTrigger } = await import("./regress/cases/curator_auto_trigger");
 
@@ -47,6 +48,7 @@ async function main() {
     results.push(await runCase(sessionLifecycle, ctx));
     results.push(await runCase(sessionSummaryNonBlocking, ctx));
     results.push(await runCase(sessionSummaryCreated, ctx));
+    results.push(await runCase(sessionSummarySafety, ctx));
     results.push(await runCase(curatorAutoTrigger, ctx));
     results.push(await runCase(promptSizeWarn, ctx));
   } finally {

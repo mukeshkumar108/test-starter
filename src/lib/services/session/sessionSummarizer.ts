@@ -5,6 +5,10 @@ import { env } from "@/env";
 const MAX_MESSAGE_CHARS = 800;
 const DEFAULT_TIMEOUT_MS = 2500;
 const TEST_STALL_MS = 5000;
+const MAX_ONE_LINER_CHARS = 200;
+const MAX_TONE_CHARS = 40;
+const MAX_LIST_ITEMS = 5;
+const MAX_LIST_ITEM_CHARS = 120;
 
 interface SummarizeParams {
   sessionId: string;
@@ -21,6 +25,7 @@ interface SummaryPayload {
   commitments: string[];
   people: string[];
   tone: string;
+  parse_error?: boolean;
 }
 
 function buildPrompt(messages: Array<{ role: string; content: string }>, previousSummary?: string) {
@@ -28,7 +33,46 @@ function buildPrompt(messages: Array<{ role: string; content: string }>, previou
     .map((message) => `${message.role}: ${message.content}`)
     .join("\n");
 
-  return `Return JSON:\n{\n  "one_liner": "...",\n  "what_mattered": ["..."],\n  "open_loops": ["..."],\n  "commitments": ["..."],\n  "people": ["..."],\n  "tone": "..."\n}\n\nRules:\n- Be concise.\n- Do NOT invent.\n- Prefer extracting user intent + decisions + emotional state.\n- If no meaningful content, return empty arrays and a short one_liner.\n\n${previousSummary ? `previous_summary: ${previousSummary}\n\n` : ""}Transcript:\n${transcript}`;
+  return `Return JSON:\n{\n  "one_liner": "...",\n  "what_mattered": ["..."],\n  "open_loops": ["..."],\n  "commitments": ["..."],\n  "people": ["..."],\n  "tone": "..."\n}\n\nRules:\n- Be concise.\n- Do NOT invent.\n- Prefer extracting user intent + decisions + emotional state.\n- If no meaningful content, return empty arrays and a short one_liner.\n- The assistant persona name is Sophie. Do NOT include Sophie in people[].\n- Do NOT write the one_liner from Sophie's perspective; it should describe the user.\n\n${previousSummary ? `previous_summary: ${previousSummary}\n\n` : ""}Transcript:\n${transcript}`;
+}
+
+function stripJsonFence(content: string) {
+  return content
+    .trim()
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+}
+
+function capList(values: string[]) {
+  return values
+    .filter((value) => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => value.slice(0, MAX_LIST_ITEM_CHARS))
+    .slice(0, MAX_LIST_ITEMS);
+}
+
+function sanitizePeople(values: string[]) {
+  return capList(values).filter((value) => !/^sophie\b/i.test(value));
+}
+
+function sanitizeOneLiner(value: string) {
+  const trimmed = value.trim().slice(0, MAX_ONE_LINER_CHARS);
+  if (/^sophie\b/i.test(trimmed)) {
+    return trimmed.replace(/^sophie\b/i, "User").trim();
+  }
+  return trimmed;
+}
+
+function fallbackOneLiner(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "Summary unavailable.";
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return "Summary unavailable.";
+  }
+  const firstSentence = trimmed.split(/(?<=[.!?])\s+/)[0] ?? "";
+  return sanitizeOneLiner(firstSentence || trimmed || "Summary unavailable.");
 }
 
 function normalizeSummary(content: string): SummaryPayload {
@@ -42,27 +86,38 @@ function normalizeSummary(content: string): SummaryPayload {
     const parsed = JSON.parse(cleaned) as SummaryPayload;
     if (parsed && typeof parsed.one_liner === "string") {
       return {
-        one_liner: parsed.one_liner.trim(),
-        what_mattered: Array.isArray(parsed.what_mattered) ? parsed.what_mattered : [],
-        open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
-        commitments: Array.isArray(parsed.commitments) ? parsed.commitments : [],
-        people: Array.isArray(parsed.people) ? parsed.people : [],
-        tone: typeof parsed.tone === "string" ? parsed.tone.trim() : "",
+        one_liner: sanitizeOneLiner(parsed.one_liner),
+        what_mattered: capList(Array.isArray(parsed.what_mattered) ? parsed.what_mattered : []),
+        open_loops: capList(Array.isArray(parsed.open_loops) ? parsed.open_loops : []),
+        commitments: capList(Array.isArray(parsed.commitments) ? parsed.commitments : []),
+        people: sanitizePeople(Array.isArray(parsed.people) ? parsed.people : []),
+        tone: typeof parsed.tone === "string" ? parsed.tone.trim().slice(0, MAX_TONE_CHARS) : "unknown",
       };
     }
   } catch {
     // Fall through.
   }
 
-  const trimmed = cleaned;
-  const firstSentence = trimmed.split(/(?<=[.!?])\s+/)[0] ?? "";
   return {
-    one_liner: firstSentence.slice(0, 200) || trimmed.slice(0, 200) || "No meaningful content.",
+    one_liner: fallbackOneLiner(cleaned),
     what_mattered: [],
     open_loops: [],
     commitments: [],
     people: [],
-    tone: "",
+    tone: "unknown",
+    parse_error: true,
+  };
+}
+
+function buildFallbackSummary(raw?: string): SummaryPayload {
+  return {
+    one_liner: fallbackOneLiner(raw ?? ""),
+    what_mattered: [],
+    open_loops: [],
+    commitments: [],
+    people: [],
+    tone: "unknown",
+    parse_error: true,
   };
 }
 
@@ -152,10 +207,28 @@ export async function summarizeSession(params: SummarizeParams) {
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       console.warn("Session summary request timed out");
-      return null;
+      return {
+        summaryJson: JSON.stringify(buildFallbackSummary()),
+        model,
+        metadata: {
+          parse_error: true,
+          truncated: false,
+          model,
+          createdAt: new Date().toISOString(),
+        },
+      };
     }
     console.warn("Session summary request failed:", error);
-    return null;
+    return {
+      summaryJson: JSON.stringify(buildFallbackSummary()),
+      model,
+      metadata: {
+        parse_error: true,
+        truncated: false,
+        model,
+        createdAt: new Date().toISOString(),
+      },
+    };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -167,15 +240,41 @@ export async function summarizeSession(params: SummarizeParams) {
       statusText: response.statusText,
       body: errText.slice(0, 500),
     });
-    return null;
+    return {
+      summaryJson: JSON.stringify(buildFallbackSummary(errText)),
+      model,
+      metadata: {
+        parse_error: true,
+        truncated: false,
+        model,
+        createdAt: new Date().toISOString(),
+      },
+    };
   }
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content ?? "";
-  const normalized = normalizeSummary(content);
+  const cleaned = stripJsonFence(content);
+  let payload: SummaryPayload;
+  let parseError = false;
+
+  try {
+    JSON.parse(cleaned);
+    payload = normalizeSummary(cleaned);
+    parseError = Boolean(payload.parse_error);
+  } catch {
+    payload = buildFallbackSummary(cleaned);
+    parseError = true;
+  }
 
   return {
-    summaryJson: JSON.stringify(normalized),
+    summaryJson: JSON.stringify(payload),
     model,
+    metadata: {
+      parse_error: parseError,
+      truncated: false,
+      model,
+      createdAt: new Date().toISOString(),
+    },
   };
 }

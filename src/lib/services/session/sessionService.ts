@@ -28,16 +28,24 @@ async function createSessionSummary(session: {
   return prisma.sessionSummary.upsert({
     where: { sessionId: session.id },
     update: {
-      summary: summary.summaryJson.slice(0, 600),
-      metadata: { source: "auto_session_summary", format: "json" },
+      summary: summary.summaryJson,
+      metadata: {
+        source: "auto_session_summary",
+        format: "json",
+        ...(summary.metadata ?? {}),
+      },
       model: summary.model,
     },
     create: {
       sessionId: session.id,
       userId: session.userId,
       personaId: session.personaId,
-      summary: summary.summaryJson.slice(0, 600),
-      metadata: { source: "auto_session_summary", format: "json" },
+      summary: summary.summaryJson,
+      metadata: {
+        source: "auto_session_summary",
+        format: "json",
+        ...(summary.metadata ?? {}),
+      },
       model: summary.model,
     },
   });
