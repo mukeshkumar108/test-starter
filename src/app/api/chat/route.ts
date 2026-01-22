@@ -88,21 +88,21 @@ function getLocalHour(now: Date, timeZone: string) {
 }
 
 async function fetchWeather(lat: number, lon: number) {
-  const apiKey = process.env.OPENWEATHER_API_KEY;
+  const apiKey = process.env.WEATHERAPI_API_KEY;
   if (!apiKey) return null;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), WEATHER_TIMEOUT_MS);
   try {
     const response = await fetch(
-      `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`,
+      `https://api.weatherapi.com/v1/current.json?key=${apiKey}&q=${lat},${lon}`,
       { signal: controller.signal }
     );
     if (!response.ok) return null;
     const data = await response.json();
-    const temp = typeof data?.main?.temp === "number" ? Math.round(data.main.temp) : null;
+    const temp = typeof data?.current?.temp_c === "number" ? Math.round(data.current.temp_c) : null;
     const description =
-      typeof data?.weather?.[0]?.description === "string"
-        ? data.weather[0].description
+      typeof data?.current?.condition?.text === "string"
+        ? data.current.condition.text
         : null;
     if (temp === null || !description) return null;
     const formattedDesc = description
