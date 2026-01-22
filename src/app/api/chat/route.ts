@@ -20,36 +20,165 @@ interface ChatRequestBody {
   audioBlob: File;
 }
 
-function getCurrentContext(params: { lastMessageAt?: Date | null }) {
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/London",
-    weekday: "long",
+const WEATHER_CACHE = new Map<
+  string,
+  { fetchedAt: number; weather: string; coordsKey: string }
+>();
+const WEATHER_TTL_MS = 30 * 60 * 1000;
+const WEATHER_TIMEOUT_MS = 1500;
+
+function normalizeWhitespace(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function getRequestTimeZone(request: NextRequest) {
+  return (
+    request.headers.get("x-timezone") ||
+    request.headers.get("x-user-timezone") ||
+    request.headers.get("x-client-timezone") ||
+    undefined
+  );
+}
+
+function getRequestCoords(request: NextRequest) {
+  const latRaw =
+    request.headers.get("x-geo-latitude") ||
+    request.headers.get("x-client-lat") ||
+    request.headers.get("x-latitude");
+  const lonRaw =
+    request.headers.get("x-geo-longitude") ||
+    request.headers.get("x-client-lon") ||
+    request.headers.get("x-longitude");
+  const lat = latRaw ? Number.parseFloat(latRaw) : NaN;
+  const lon = lonRaw ? Number.parseFloat(lonRaw) : NaN;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon };
+}
+
+function formatLocalDateTime(now: Date, timeZone: string) {
+  const dateParts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "short",
     month: "short",
     day: "2-digit",
-    year: "numeric",
+  }).formatToParts(now);
+  const weekday = dateParts.find((part) => part.type === "weekday")?.value ?? "";
+  const month = dateParts.find((part) => part.type === "month")?.value ?? "";
+  const day = dateParts.find((part) => part.type === "day")?.value ?? "";
+  const dateString = normalizeWhitespace(`${weekday} ${month} ${day}`);
+
+  const timeString = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
-  });
+  }).format(now);
 
-  const formatted = formatter.format(now);
-  const location = "Cambridge, UK";
-  const weather = "Grey/Overcast"; // TODO: wire real weather API
+  return `${dateString}, ${timeString}`;
+}
 
-  let lastInteraction = "No prior messages";
+function getLocalHour(now: Date, timeZone: string) {
+  const hourString = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    hour12: false,
+  }).format(now);
+  const hour = Number.parseInt(hourString, 10);
+  return Number.isNaN(hour) ? null : hour;
+}
+
+async function fetchWeather(lat: number, lon: number) {
+  const apiKey = process.env.OPENWEATHER_API_KEY;
+  if (!apiKey) return null;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), WEATHER_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`,
+      { signal: controller.signal }
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const temp = typeof data?.main?.temp === "number" ? Math.round(data.main.temp) : null;
+    const description =
+      typeof data?.weather?.[0]?.description === "string"
+        ? data.weather[0].description
+        : null;
+    if (temp === null || !description) return null;
+    const formattedDesc = description
+      .split(" ")
+      .map((word: string) =>
+        word.length > 0 ? `${word[0].toUpperCase()}${word.slice(1)}` : word
+      )
+      .join(" ");
+    return `${temp}°C, ${formattedDesc}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function getCurrentContext(params: {
+  lastMessageAt?: Date | null;
+  userId: string;
+  timeZone?: string;
+  coords?: { lat: number; lon: number } | null;
+  userTimeZone?: string | null;
+}) {
+  const now = new Date();
+  const serverTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const timeZone =
+    params.userTimeZone ||
+    params.timeZone ||
+    serverTimeZone ||
+    "Europe/London";
+
+  const formatted = formatLocalDateTime(now, timeZone);
+  const localHour = getLocalHour(now, timeZone);
+  const lateNightFlag =
+    localHour !== null && localHour >= 22
+      ? " [CONTEXT]: It is very late at night for the user."
+      : "";
+
+  let sessionGap = "";
   if (params.lastMessageAt) {
     const diffMs = now.getTime() - params.lastMessageAt.getTime();
     const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    if (diffMinutes < 60) {
-      lastInteraction = `${diffMinutes} minutes ago`;
-    } else {
-      const diffHours = Math.floor(diffMinutes / 60);
-      lastInteraction = `${diffHours} hours ago`;
+    if (diffMinutes > 30) {
+      const hours = Math.floor(diffMinutes / 60);
+      const minutes = diffMinutes % 60;
+      const parts = [];
+      if (hours > 0) parts.push(`${hours}h`);
+      parts.push(`${minutes}m`);
+      sessionGap = ` Session gap: ${parts.join(" ")}`;
     }
   }
 
-  return `[REAL-TIME CONTEXT] Time: ${formatted} Location: ${location} Weather: ${weather} Last Interaction: ${lastInteraction}`;
+  const coords = params.coords;
+  const coordsKey = coords ? `${coords.lat.toFixed(4)},${coords.lon.toFixed(4)}` : "";
+  const cached = WEATHER_CACHE.get(params.userId);
+  const isFresh =
+    cached &&
+    cached.coordsKey === coordsKey &&
+    now.getTime() - cached.fetchedAt < WEATHER_TTL_MS;
+
+  let weather = "Weather: unavailable";
+  if (isFresh) {
+    weather = `Weather: ${cached.weather}`;
+  } else if (coords) {
+    void (async () => {
+      const result = await fetchWeather(coords.lat, coords.lon);
+      if (!result) return;
+      WEATHER_CACHE.set(params.userId, {
+        fetchedAt: Date.now(),
+        weather: result,
+        coordsKey,
+      });
+    })();
+  }
+
+  return `[REAL-TIME]: ${formatted}. ${weather}.${sessionGap}${lateNightFlag}`;
 }
 
 function getSessionContext(sessionState?: any) {
@@ -188,6 +317,8 @@ export async function POST(request: NextRequest) {
     await ensureActiveSession(user.id, personaId, now);
 
     // Step 2: Build conversation context
+    const requestTimeZone = getRequestTimeZone(request);
+    const requestCoords = getRequestCoords(request);
     const context = await buildContext(user.id, personaId, sttResult.transcript);
     const lastMessage = await prisma.message.findFirst({
       where: { userId: user.id },
@@ -206,7 +337,15 @@ export async function POST(request: NextRequest) {
     const recentWinStrings = recentWins.join("\n");
     const model = getChatModelForPersona(persona.slug);
     const messages = [
-      { role: "system" as const, content: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }) },
+      {
+        role: "system" as const,
+        content: getCurrentContext({
+          lastMessageAt: lastMessage?.createdAt,
+          userId: user.id,
+          timeZone: requestTimeZone,
+          coords: requestCoords,
+        }),
+      },
       ...(sessionContext ? [{ role: "system" as const, content: sessionContext }] : []),
       { role: "system" as const, content: context.persona },
       ...(foundationMemoryStrings
@@ -297,7 +436,12 @@ export async function POST(request: NextRequest) {
       const rawRetrieval = await searchMemories(user.id, sttResult.transcript, 12);
       debugPayload = {
         contextBlocks: {
-          realTime: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }),
+          realTime: getCurrentContext({
+            lastMessageAt: lastMessage?.createdAt,
+            userId: user.id,
+            timeZone: requestTimeZone,
+            coords: requestCoords,
+          }),
           session: sessionContext,
           persona: context.persona,
           foundationMemories: foundationMemoryStrings,
