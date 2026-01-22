@@ -120,7 +120,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
         const content = typeof loop.content === "string" ? loop.content.trim() : "";
         const dedupeKeyRaw = typeof loop.dedupe_key === "string" ? loop.dedupe_key : "";
         if (!content) return null;
-        const allowedKinds = new Set(["COMMITMENT", "THREAD", "FRICTION"]);
+        const allowedKinds = new Set(["COMMITMENT", "HABIT", "THREAD", "FRICTION"]);
         const safeKind = allowedKinds.has(normalizedKind) ? normalizedKind : "THREAD";
         const commitVeto = /\b(maybe|might|could|would|wish|hope|if i|if we|what if|just vent|venting|frustrat|angry|upset|tired|overwhelmed|stuck|can't|cannot|won't)\b/i.test(
           content
@@ -161,7 +161,7 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
           userId,
           personaId,
           status: "PENDING",
-          kind: { in: [TodoKind.COMMITMENT, TodoKind.THREAD, TodoKind.FRICTION] },
+          kind: { in: [TodoKind.COMMITMENT, TodoKind.HABIT, TodoKind.THREAD, TodoKind.FRICTION] },
         },
         select: { content: true, kind: true, dedupeKey: true },
       });
@@ -263,7 +263,7 @@ async function extractMemories(userMessages: string[]) {
 
 MUST:
 - If the user states their name, capture it as PROFILE.
-- Capture loops as one of: COMMITMENT, THREAD, FRICTION.
+- Capture loops as one of: COMMITMENT, HABIT, THREAD, FRICTION.
 - If ambiguous, classify as THREAD.
 
 FOUNDATION (PROFILE/PEOPLE/PROJECT):
@@ -273,15 +273,23 @@ FOUNDATION (PROFILE/PEOPLE/PROJECT):
 - Only capture PEOPLE if the user states a relationship (e.g., "my cofounder John"). Passing mentions of names are NOT memories.
 
 LOOPS:
-- FRICTION is for negative sentiment, blockers, or feeling stuck (e.g., "visual polish feels off").
-- THREAD is for neutral topics or ongoing discussions.
+- COMMITMENT = explicit promise/decision to do a specific action (often timeboxed).
+- HABIT = recurring routine user wants daily/regular (walk, exercise, tidy).
+- FRICTION = blocker + negative valence + repeatable pattern ("I get stuck", "burnt out", "colors feel off", "I waste hours").
+- THREAD = neutral topic/discussion thread (non-negative, not timeboxed, not a habit).
+- If the user states ANY timebox or rule ("before/by/end of day", "tomorrow", "home by 11am", "20 minutes", "15 minutes", "hold me accountable"),
+  you MUST output COMMITMENT or HABIT items for those statements.
+- Do NOT create vague friction like "things to address". Frictions must be stable/repeatable patterns.
 - Every loop item MUST include dedupe_key: stable across paraphrases, snake_case, 3-8 words.
 - If multiple sentences express the same intent, output ONE loop item only.
 - Keep the SAME kind and dedupe_key for paraphrases of the same intent.
-- Example dedupe_key (do not output these examples, only follow pattern):
-  - "We need to cut costs" / "Reducing expenditure" -> dedupe_key: cut_costs_reduce_spend
-  - "I'm burnt out" / "My bandwidth is exhausted" -> dedupe_key: burnout_low_bandwidth
-  - "Simplify UI" / "Trim the fat" -> dedupe_key: simplify_ui_clutter
+- Examples (follow these formats; do not copy literal text):
+  - Example A (FRICTION): “I wake up, go on the computer, get stuck, don’t walk until 2–3pm.” -> FRICTION: “Delays walking until mid-afternoon after getting stuck at computer”
+  - Example B (HABIT): “Daily I need 15 minutes tidying.” -> HABIT: “15 minutes tidying daily”
+  - Example C (COMMITMENT): “Tomorrow morning walk before midday, home by 11am.” -> COMMITMENT: “Morning walk completed before 11am tomorrow”
+  - Example D (COMMITMENT): “Before the end of the day I need 20 minutes exercise.” -> COMMITMENT: “20 minutes exercise today”
+  - Example E (THREAD): “I’m working on my app; need sprints + breaks.” -> THREAD: “App work cadence: sprints with walk breaks”
+  - Example F (FRICTION): “Colors feel off; stuck on visual polish.” -> FRICTION: “Stuck on visual polish; colors feel off”
 
 USER MESSAGES:
 ${userMessages.join("\n")}
@@ -292,7 +300,7 @@ JSON SCHEMA:
     { "type": "PROFILE|PEOPLE|PROJECT", "content": "...", "confidence": 0.0 }
   ],
   "loops": [
-    { "kind": "COMMITMENT|THREAD|FRICTION", "content": "...", "dedupe_key": "...", "confidence": 0.0 }
+    { "kind": "COMMITMENT|HABIT|THREAD|FRICTION", "content": "...", "dedupe_key": "...", "confidence": 0.0 }
   ]
 }`;
 
