@@ -146,7 +146,7 @@ export async function buildContext(
 
     // Get recent messages (last 10)
     const messages = await prisma.message.findMany({
-      where: { userId },
+      where: { userId, personaId },
       orderBy: { createdAt: "desc" },
       take: 6,
       select: {
