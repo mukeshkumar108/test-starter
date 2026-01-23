@@ -173,6 +173,7 @@ model Message {
 model Memory {
   id          String                         @id @default(cuid())
   userId      String
+  personaId   String?
   type        MemoryType
   content     String
   embedding   Unsupported("vector(1536)")?
@@ -184,6 +185,7 @@ model Memory {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   @@index([userId, type])
+  @@index([userId, personaId, type])
 }
 
 model SummarySpine {

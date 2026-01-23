@@ -26,7 +26,7 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
   }
 
   const context = await buildContext(ctx.userId, ctx.personaId, "hello");
-  const relevant = await searchMemories(ctx.userId, "hello", 12);
+  const relevant = await searchMemories(ctx.userId, ctx.personaId, "hello", 12);
   const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
   const onlyAllowedTypes = relevant.every((memory) => allowedTypes.has(memory.type));
 

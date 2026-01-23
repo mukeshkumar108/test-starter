@@ -5,6 +5,7 @@ import { MemoryType } from "@prisma/client";
 
 export interface Memory {
   id: string;
+  personaId?: string | null;
   type: MemoryType;
   content: string;
   similarity?: number;
@@ -14,6 +15,7 @@ export interface Memory {
 
 export async function searchMemories(
   userId: string,
+  personaId: string,
   query: string,
   limit: number = 5
 ): Promise<Memory[]> {
@@ -27,11 +29,12 @@ export async function searchMemories(
 
     // Vector similarity search using pgvector
     const memories = await prisma.$queryRaw<Memory[]>`
-      SELECT id, type, content, metadata,
+      SELECT id, "personaId", type, content, metadata,
              1 - (embedding <=> ${queryEmbedding}::vector) as similarity,
              '<=>' as operator
       FROM "Memory"
       WHERE "userId" = ${userId}
+        AND ("personaId" = ${personaId} OR "personaId" IS NULL)
         AND "type" IN ('PROFILE', 'PEOPLE', 'PROJECT')
         AND embedding IS NOT NULL
       ORDER BY embedding <=> ${queryEmbedding}::vector
@@ -51,7 +54,8 @@ export async function storeMemory(
   userId: string,
   type: MemoryType,
   content: string,
-  metadata?: any
+  metadata?: any,
+  personaId?: string | null
 ): Promise<void> {
   try {
     // Generate embedding
@@ -59,6 +63,7 @@ export async function storeMemory(
 
     const data: any = {
       userId,
+      ...(personaId ? { personaId } : {}),
       type,
       content,
       metadata,

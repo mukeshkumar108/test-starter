@@ -491,7 +491,7 @@ export async function POST(request: NextRequest) {
 
     let debugPayload: Record<string, unknown> | undefined;
     if (debugEnabled) {
-      const rawRetrieval = await searchMemories(user.id, sttResult.transcript, 12);
+      const rawRetrieval = await searchMemories(user.id, personaId, sttResult.transcript, 12);
       debugPayload = {
         contextBlocks: {
           realTime: realTimeContext,

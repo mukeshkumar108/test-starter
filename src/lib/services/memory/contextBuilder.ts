@@ -186,6 +186,7 @@ export async function buildContext(
         userId,
         type: { in: ["PROFILE", "PEOPLE", "PROJECT"] },
         pinned: true,
+        OR: [{ personaId }, { personaId: null }],
       },
       orderBy: { createdAt: "asc" },
       take: MAX_FOUNDATION_MEMORIES,
@@ -194,7 +195,7 @@ export async function buildContext(
 
     const sortedFoundation = [...foundationMemories];
 
-    const relevantMemories = await searchMemories(userId, userMessage, 12);
+    const relevantMemories = await searchMemories(userId, personaId, userMessage, 12);
     const foundationSet = new Set(
       foundationMemories.map((memory) => normalizeText(memory.content))
     );

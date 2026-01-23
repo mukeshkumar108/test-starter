@@ -74,7 +74,7 @@ async function main() {
     }
 
     // 4) Retrieval types only
-    const retrieval = await searchMemories(user.id, "Ashley", 12);
+    const retrieval = await searchMemories(user.id, persona.id, "Ashley", 12);
     if (retrieval.some((mem) => !["PROFILE", "PEOPLE", "PROJECT"].includes(mem.type))) {
       failures.push("Retrieval returned non-whitelisted memory types.");
     }

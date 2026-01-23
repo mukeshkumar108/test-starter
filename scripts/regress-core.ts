@@ -30,6 +30,7 @@ async function main() {
   const { run: sessionSummaryNonBlocking } = await import("./regress/cases/session_summary_non_blocking");
   const { run: curatorAutoTrigger } = await import("./regress/cases/curator_auto_trigger");
   const { run: personaMessageIsolation } = await import("./regress/cases/persona_message_isolation");
+  const { run: memoryPersonaScope } = await import("./regress/cases/memory_persona_scope");
 
   const user = await createQaUser();
   if (!isQaClerkId(user.clerkUserId)) {
@@ -52,6 +53,7 @@ async function main() {
     results.push(await runCase(sessionSummarySafety, ctx));
     results.push(await runCase(curatorAutoTrigger, ctx));
     results.push(await runCase(personaMessageIsolation, ctx));
+    results.push(await runCase(memoryPersonaScope, ctx));
     results.push(await runCase(promptSizeWarn, ctx));
   } finally {
     await cleanupQaUser(user.id);
