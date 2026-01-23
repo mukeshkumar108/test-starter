@@ -12,6 +12,7 @@ export async function seedPersonaProfiles() {
       llmModel: MODELS.CHAT.MENTOR,
       ttsVoiceId: env.ELEVENLABS_VOICE_WILLIAM ?? env.ELEVENLABS_DEFAULT_VOICE_ID,
       language: "en",
+      enableSummarySpine: true,
     },
     {
       slug: "supportive", 
@@ -21,6 +22,7 @@ export async function seedPersonaProfiles() {
       llmModel: MODELS.CHAT.SUPPORTIVE,
       ttsVoiceId: env.ELEVENLABS_VOICE_ISABELLA ?? env.ELEVENLABS_DEFAULT_VOICE_ID,
       language: "en",
+      enableSummarySpine: true,
     },
     {
       slug: "coach",
@@ -30,6 +32,7 @@ export async function seedPersonaProfiles() {
       llmModel: MODELS.CHAT.COACH,
       ttsVoiceId: env.ELEVENLABS_VOICE_ALEXANDER ?? env.ELEVENLABS_DEFAULT_VOICE_ID,
       language: "en",
+      enableSummarySpine: true,
     },
     {
       slug: "creative",
@@ -39,6 +42,7 @@ export async function seedPersonaProfiles() {
       llmModel: MODELS.CHAT.CREATIVE,
       ttsVoiceId: env.ELEVENLABS_VOICE_SOPHIE ?? env.ELEVENLABS_DEFAULT_VOICE_ID,
       language: "en",
+      enableSummarySpine: false,
     },
   ];
 

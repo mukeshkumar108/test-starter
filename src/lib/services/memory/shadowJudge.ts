@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { MemoryType, TodoKind } from "@prisma/client";
 import { MODELS } from "@/lib/providers/models";
 import { env } from "@/env";
+import { summarizeRollingSession } from "@/lib/services/session/sessionSummarizer";
 
 interface ShadowProcessingParams {
   userId: string;
@@ -57,12 +58,53 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
       },
     });
 
+    const messageCount =
+      typeof updatedSessionState?.messageCount === "number"
+        ? updatedSessionState.messageCount
+        : null;
+    if (messageCount && messageCount % ROLLING_SUMMARY_TURN_INTERVAL === 0) {
+      void triggerRollingSummaryUpdate(userId, personaId, requestId);
+    }
+
     // Update summary spine
     await updateSummarySpine(userId, userMessage, assistantResponse);
 
   } catch (error) {
     console.error("Shadow Judge Error:", error);
     // Don't throw - shadow processing should never block user
+  }
+}
+
+const ROLLING_SUMMARY_TURN_INTERVAL = 4;
+
+async function triggerRollingSummaryUpdate(
+  userId: string,
+  personaId: string,
+  requestId: string
+) {
+  try {
+    const sessionState = await prisma.sessionState.findUnique({
+      where: { userId_personaId: { userId, personaId } },
+      select: { rollingSummary: true },
+    });
+
+    const summary = await summarizeRollingSession({
+      userId,
+      personaId,
+      previousSummary: sessionState?.rollingSummary,
+    });
+    if (!summary) return;
+
+    await prisma.sessionState.update({
+      where: { userId_personaId: { userId, personaId } },
+      data: {
+        rollingSummary: summary,
+        updatedAt: new Date(),
+      },
+    });
+    console.log("Shadow Judge rolling summary updated:", { requestId });
+  } catch (error) {
+    console.warn("Shadow Judge rolling summary failed:", { requestId, error });
   }
 }
 

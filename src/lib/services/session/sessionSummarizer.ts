@@ -278,3 +278,110 @@ export async function summarizeSession(params: SummarizeParams) {
     },
   };
 }
+
+function buildRollingPrompt(
+  messages: Array<{ role: string; content: string }>,
+  previousSummary?: string
+) {
+  const transcript = messages
+    .map((message) => `${message.role}: ${message.content}`)
+    .join("\n");
+
+  return `Summarize the current active session in 1-5 short lines.\n- Include: what we are doing, decisions, open loops surfaced, and tone/state.\n- Be concise. Do NOT invent.\n- Do NOT write from Sophie's perspective.\n- If no meaningful content, return a short single line.\n\n${previousSummary ? `previous_summary: ${previousSummary}\n\n` : ""}Transcript:\n${transcript}`;
+}
+
+export async function summarizeRollingSession(params: {
+  userId: string;
+  personaId: string;
+  previousSummary?: string | null;
+}) {
+  if (!env.OPENROUTER_API_KEY) {
+    console.warn("Rolling session summarizer skipped: missing OPENROUTER_API_KEY");
+    return null;
+  }
+
+  const userMessages = await prisma.message.findMany({
+    where: {
+      userId: params.userId,
+      personaId: params.personaId,
+      role: "user",
+    },
+    orderBy: { createdAt: "desc" },
+    take: 6,
+    select: { role: true, content: true, createdAt: true },
+  });
+
+  const assistantMessages = await prisma.message.findMany({
+    where: {
+      userId: params.userId,
+      personaId: params.personaId,
+      role: "assistant",
+    },
+    orderBy: { createdAt: "desc" },
+    take: 6,
+    select: { role: true, content: true, createdAt: true },
+  });
+
+  const messages = [...userMessages, ...assistantMessages]
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    .map((message) => ({
+      role: message.role,
+      content: message.content.slice(0, MAX_MESSAGE_CHARS),
+    }));
+
+  if (messages.length === 0) {
+    return null;
+  }
+
+  const prompt = buildRollingPrompt(messages, params.previousSummary ?? undefined);
+  const model = MODELS.SUMMARY || "openai/gpt-4o-mini";
+
+  const timeoutMs = Number.parseInt(env.SUMMARY_TIMEOUT_MS ?? "", 10);
+  const effectiveTimeout = Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  let response: Response;
+  try {
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "HTTP-Referer": "https://github.com/your-repo",
+        "X-Title": "Walkie-Talkie Voice Companion",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 200,
+        temperature: 0.2,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      console.warn("Rolling session summary request timed out");
+      return null;
+    }
+    console.warn("Rolling session summary request failed:", error);
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "<no body>");
+    console.warn("Rolling session summary request failed:", {
+      status: response.status,
+      statusText: response.statusText,
+      body: errText.slice(0, 500),
+    });
+    return null;
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content ?? "";
+  const cleaned = stripJsonFence(content);
+  return cleaned.trim().slice(0, 600);
+}

@@ -9,6 +9,7 @@ export interface ConversationContext {
   persona: string;
   userSeed?: string;
   sessionState?: any;
+  rollingSummary?: string;
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   foundationMemories: string[];
   relevantMemories: string[];
@@ -23,9 +24,11 @@ export interface ConversationContext {
 const MAX_COMMITMENTS = 5;
 const MAX_THREADS = 3;
 const MAX_FRICTIONS = 3;
+const MAX_FOUNDATION_MEMORIES = 20;
 const MAX_USER_SEED_CHARS = 800;
 const MAX_SUMMARY_SPINE_CHARS = 1200;
 const MAX_RECENT_MESSAGE_CHARS = 800;
+const MAX_ROLLING_SUMMARY_CHARS = 600;
 const MAX_SESSION_SUMMARY_CHARS = 600;
 
 function normalizeText(value: string) {
@@ -145,7 +148,7 @@ export async function buildContext(
     const messages = await prisma.message.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
-      take: 10,
+      take: 6,
       select: {
         role: true,
         content: true,
@@ -153,14 +156,20 @@ export async function buildContext(
       },
     });
 
+    const summarySpineEnabled =
+      env.FEATURE_SUMMARY_SPINE_GLOBAL !== "false" &&
+      persona.enableSummarySpine !== false;
+
     // Get latest summary spine
-    const summarySpine = await prisma.summarySpine.findFirst({
-      where: { 
-        userId,
-        conversationId: "default",
-      },
-      orderBy: { version: "desc" },
-    });
+    const summarySpine = summarySpineEnabled
+      ? await prisma.summarySpine.findFirst({
+          where: {
+            userId,
+            conversationId: "default",
+          },
+          orderBy: { version: "desc" },
+        })
+      : null;
 
     const latestSessionSummary = await getLatestSessionSummary(userId, personaId);
 
@@ -176,20 +185,14 @@ export async function buildContext(
       where: {
         userId,
         type: { in: ["PROFILE", "PEOPLE", "PROJECT"] },
+        pinned: true,
       },
       orderBy: { createdAt: "asc" },
-      take: 12,
+      take: MAX_FOUNDATION_MEMORIES,
       select: { content: true, metadata: true },
     });
 
-    const sortedFoundation = [...foundationMemories].sort((a, b) => {
-      const aMeta = a.metadata as { source?: string } | null;
-      const bMeta = b.metadata as { source?: string } | null;
-      const aSeeded = aMeta?.source === "seeded_profile";
-      const bSeeded = bMeta?.source === "seeded_profile";
-      if (aSeeded === bSeeded) return 0;
-      return aSeeded ? -1 : 1;
-    });
+    const sortedFoundation = [...foundationMemories];
 
     const relevantMemories = await searchMemories(userId, userMessage, 12);
     const foundationSet = new Set(
@@ -275,6 +278,7 @@ export async function buildContext(
       persona: personaPrompt,
       userSeed: userSeed?.content?.slice(0, MAX_USER_SEED_CHARS),
       sessionState: sessionState?.state,
+      rollingSummary: sessionState?.rollingSummary?.slice(0, MAX_ROLLING_SUMMARY_CHARS),
       recentMessages: messages
         .map((message) => ({
           ...message,

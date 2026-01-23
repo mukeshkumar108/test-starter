@@ -102,6 +102,7 @@ model PersonaProfile {
   ttsVoiceId  String
   language    String @default("en")
   isActive    Boolean @default(true)
+  enableSummarySpine Boolean @default(true)
   createdAt   DateTime @default(now())
   
   sessionStates SessionState[]
@@ -125,6 +126,7 @@ model SessionState {
   userId    String
   personaId String
   state     Json?
+  rollingSummary String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   
@@ -174,6 +176,7 @@ model Memory {
   content     String
   embedding   Unsupported("vector(1536)")?
   metadata    Json?
+  pinned      Boolean                        @default(false)
   createdAt   DateTime                       @default(now())
   updatedAt   DateTime                       @updatedAt
   
