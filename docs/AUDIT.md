@@ -1,0 +1,262 @@
+# AUDIT.md
+
+## 1) Trace of a Message (Chat)
+
+**Entry point**
+- `src/app/api/chat/route.ts` → `POST(request)`
+
+**Auth + session resolution**
+- `auth()` (Clerk cookie) → if missing, bearer token via `verifyToken()`.
+- `ensureUserByClerkId(clerkUserId)` (user upsert).
+- `personaId` from multipart form field `personaId`.
+- `prisma.personaProfile.findUnique({ where: { id: personaId } })` → 404 JSON if missing.
+- `closeStaleSessionIfAny(user.id, personaId, now)` → `src/lib/services/session/sessionService.ts`
+- `ensureActiveSession(user.id, personaId, now)` → `src/lib/services/session/sessionService.ts`
+
+**Context builder**
+- `buildContext(user.id, personaId, sttResult.transcript)` → `src/lib/services/memory/contextBuilder.ts`
+
+**LLM prompt assembly (exact order)**
+Source: `src/app/api/chat/route.ts` (messages array)
+1. **[REAL-TIME]**
+   - Source: `getCurrentContext()` in `route.ts`.
+   - Always-on.
+   - Includes date/time, weather, session gap (>30m), late-night flag.
+2. **[SESSION STATE]**
+   - Source: `getSessionContext(context.sessionState)`.
+   - Optional (only if SessionState exists).
+3. **Persona Prompt**
+   - Source: `context.persona` from `contextBuilder` (prompt file from `persona.promptPath`).
+4. **[FOUNDATION MEMORIES]**
+   - Source: `context.foundationMemories`.
+   - Optional (only if non-empty).
+5. **[RELEVANT MEMORIES]**
+   - Source: `context.relevantMemories`.
+   - Optional; dropped first if budget exceeded.
+6. **COMMITMENTS (pending)**
+   - Source: `context.commitments`.
+   - Optional.
+7. **ACTIVE THREADS**
+   - Source: `context.threads`.
+   - Optional; dropped third if budget exceeded.
+8. **FRICTIONS / PATTERNS**
+   - Source: `context.frictions`.
+   - Optional.
+9. **Recent wins**
+   - Source: `context.recentWins`.
+   - Optional.
+10. **User context**
+    - Source: `context.userSeed`.
+    - Optional.
+11. **Conversation summary (SummarySpine)**
+    - Source: `context.summarySpine`.
+    - Optional; persona-scoped via `persona.enableSummarySpine` and `FEATURE_SUMMARY_SPINE_GLOBAL`.
+12. **CURRENT SESSION SUMMARY**
+    - Source: `context.rollingSummary` (from SessionState.rollingSummary).
+    - Optional.
+13. **LATEST SESSION SUMMARY**
+    - Source: `context.sessionSummary` (SessionSummary table).
+    - Optional; dropped second if budget exceeded.
+14. **Recent message history**
+    - Source: `context.recentMessages` (last 6).
+    - Always-on.
+15. **Current user message**
+    - Source: `sttResult.transcript`.
+    - Always-on.
+
+**Budget guard**
+- `MAX_CONTEXT_TOKENS = 1200` in `route.ts`.
+- Estimated via `chars/4` heuristic.
+- Drop order (strict):
+  1) relevantMemories
+  2) sessionSummary
+  3) threads
+  4) non-pinned foundation overflow (placeholder; foundation is pinned-only)
+
+**LLM call**
+- `generateResponse(messages, persona.slug)` in `src/lib/services/voice/llmService.ts`.
+- OpenRouter Chat Completions.
+- Parameters: `model`, `max_tokens` (Sophie=350, others=1000), `temperature=0.7`, plus `top_p=0.9` and `presence_penalty=0.1` for Sophie.
+
+**Post-processing**
+- `synthesizeSpeech()` → `src/lib/services/voice/ttsService.ts`.
+- Stores two `Message` rows (user + assistant).
+
+**Async (non-blocking) paths**
+- Shadow Judge: `processShadowPath(...)` (fire-and-forget).
+- Curator auto-trigger: `autoCurateMaybe(...)` (fire-and-forget).
+- Session summaries (on stale session close): `closeStaleSessionIfAny` triggers `createSessionSummary(...)` (fire-and-forget).
+
+**DB reads/writes (chat path)**
+Sync reads (typical):
+- `personaProfile.findUnique`
+- `message.findFirst` (lastMessageAt)
+- `buildContext` (see below)
+- Session lifecycle (`session.findFirst` / `session.update|create`)
+- `ensureUserByClerkId` (user upsert)
+
+Sync writes:
+- `message.create` (user)
+- `message.create` (assistant)
+- Session update/create
+
+Async writes (shadow path):
+- `memory.create` (PROFILE/PEOPLE/PROJECT)
+- `todo.create` (COMMITMENT/HABIT/THREAD/FRICTION)
+- `sessionState.upsert`
+- `summarySpine.create` (if enabled)
+- `sessionSummary.upsert` (on session close)
+- `memory.update` / `memory.create` (curator)
+
+
+## 2) Trace of a Message (Voice)
+
+There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
+- STT (`transcribeAudio`) and TTS (`synthesizeSpeech`) are part of the same `/api/chat` flow.
+- No divergent context builder, flags, or budgets for “voice vs chat.”
+
+
+## 3) Current Context Pack Contract
+
+**Block order (must stay first/last)**
+- First: `[REAL-TIME]` (always) and `[SESSION STATE]` (optional) before persona.
+- Last: `recentMessages` and the current user message.
+
+**Budget drop order**
+- `relevantMemories` → `sessionSummary` → `threads` → `non-pinned foundation overflow` (placeholder).
+- Never dropped: real-time, persona prompt, commitments, frictions, pinned foundation, rolling summary, last 6 turns.
+
+
+## 4) Shadow Judge Contract (CURRENT)
+
+**Source**: `src/lib/services/memory/shadowJudge.ts`
+
+**Input window**
+- Last up to 4 unique user messages within last 60 minutes (deduped).
+
+**Output JSON schema (expected)**
+```json
+{
+  "memories": [
+    { "type": "PROFILE|PEOPLE|PROJECT", "content": "...", "confidence": 0.0 }
+  ],
+  "loops": [
+    { "kind": "COMMITMENT|HABIT|THREAD|FRICTION", "content": "...", "dedupe_key": "...", "confidence": 0.0 }
+  ]
+}
+```
+
+**Kinds recognized**
+- `COMMITMENT`, `HABIT`, `THREAD`, `FRICTION`
+
+**Dedupe strategy**
+- In-memory dedupe: `dedupe_key` (normalized), fallback to normalized content.
+- DB dedupe check: existing `Todo` rows with `status=PENDING` + same `kind` + same dedupe signature.
+
+**Pinned behavior**
+- Pinned applies only to foundation memory query (context builder). Shadow Judge does not set pinned.
+
+
+## 5) Retrieval Strategy (CURRENT)
+
+**Memory retrieval**
+- `searchMemories(userId, query, limit)` in `src/lib/services/memory/memoryStore.ts`
+- Uses pgvector cosine distance (`embedding <=> query`) with score `1 - distance`.
+- Filters:
+  - `userId` only (no personaId)
+  - `type` in PROFILE/PEOPLE/PROJECT
+  - `embedding IS NOT NULL`
+  - JS filter: `metadata.status != ARCHIVED`
+- No recency or importance weighting.
+
+**Foundation memory**
+- `contextBuilder` reads `Memory` where `pinned=true` only, capped 20.
+
+**Todos**
+- `commitments/threads/frictions` read from `Todo` scoped by userId + personaId + kind + status.
+
+**Messages**
+- `contextBuilder` recent messages query uses `userId` only (not personaId).
+
+
+## 6) Feature Flags + Defaults
+
+**Env flags (`src/env.ts`)**
+- `FEATURE_MEMORY_CURATOR` (default false) → enables curator.
+- `FEATURE_CONTEXT_DEBUG` (default false) → adds debug blocks to response.
+- `FEATURE_SESSION_SUMMARY` (default true unless "false") → creates SessionSummary on session close.
+- `FEATURE_SUMMARY_TEST_STALL` (test only).
+- `FEATURE_JUDGE_TEST_MODE` (test only).
+- `FEATURE_SUMMARY_SPINE_GLOBAL` (default true unless "false").
+
+**Persona flag**
+- `PersonaProfile.enableSummarySpine` (default true). Sophie (`creative`) seeded false.
+
+**Pinned**
+- `Memory.pinned` (default false) controls foundation inclusion.
+
+**Rolling summary**
+- `SessionState.rollingSummary` set async every 4 turns in Shadow Judge.
+
+
+## 7) Latency / Perf Hotspots (Static Analysis Only)
+
+**Approx DB calls per /api/chat** (typical, excluding network to LLM/STT/TTS/embeddings):
+- Auth/user: `ensureUserByClerkId` (1 write or upsert + 1 read internally)
+- Persona lookup: 1 read
+- Session lifecycle: 1–2 reads + optional update
+- Context builder:
+  - personaProfile (1)
+  - userSeed (1)
+  - sessionState (1)
+  - recent messages (1)
+  - summarySpine (0–1)
+  - sessionSummary (1)
+  - foundation memories (1)
+  - relevant memories (1 queryRaw)
+  - todos (3)
+  - recent wins (1)
+- lastMessageAt (1)
+- message writes (2)
+
+**Async path DB calls**
+- Shadow Judge: recent messages (1), memory writes (0–N), todo writes (0–N), sessionState upsert (1), summarySpine create (0–1), rolling summary update (0–1).
+- Curator: `sessionState` read + memory reads + updates/creates.
+
+**Obvious hotspots**
+- `searchMemories` triggers embedding call (network) + queryRaw.
+- Multiple `findMany` calls in `contextBuilder` per request.
+- Curator can be heavy (fold/dedupe loops), but runs async.
+
+**Index suggestions (notes only)**
+- If recent messages should be persona-scoped, index `(userId, personaId, createdAt)` on `Message`.
+- Ensure `Memory(userId, type)` index exists (it does).
+- `Todo(userId, personaId, kind, status, dedupeKey)` index exists (schema).
+
+
+## 8) File Map
+
+**Entry / API**
+- `src/app/api/chat/route.ts` — main chat handler, prompt assembly, LLM call, message writes, async hooks.
+- `src/app/api/personas/route.ts` — persona list.
+
+**Context / Memory**
+- `src/lib/services/memory/contextBuilder.ts` — builds context blocks.
+- `src/lib/services/memory/shadowJudge.ts` — async extraction + memory/todo writes + rolling summary update.
+- `src/lib/services/memory/memoryStore.ts` — pgvector search + memory writes.
+- `src/lib/services/memory/memoryCurator.ts` — curator (manual + auto-trigger).
+
+**Sessions**
+- `src/lib/services/session/sessionService.ts` — session lifecycle + session summary trigger.
+- `src/lib/services/session/sessionSummarizer.ts` — session summary + rolling summary LLM calls.
+
+**Voice**
+- `src/lib/services/voice/sttService.ts`
+- `src/lib/services/voice/llmService.ts`
+- `src/lib/services/voice/ttsService.ts`
+
+**Schema / Config / Seeds**
+- `prisma/schema.prisma` — Memory, Todo, Session, SessionSummary, SessionState, PersonaProfile.
+- `src/lib/seed.ts` — persona seeds (slugs and prompts).
+- `src/lib/providers/models.ts` — model IDs.
+- `src/env.ts` — feature flags and required keys.
