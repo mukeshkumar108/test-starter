@@ -3,6 +3,13 @@ import { MemoryType, TodoKind } from "@prisma/client";
 import { MODELS } from "@/lib/providers/models";
 import { env } from "@/env";
 import { summarizeRollingSession } from "@/lib/services/session/sessionSummarizer";
+import {
+  sanitizeSubtype,
+  sanitizeEntityRefs,
+  sanitizeImportance,
+  sanitizeEntityLabel,
+  type MemorySubtype,
+} from "./entityNormalizer";
 
 interface ShadowProcessingParams {
   userId: string;
@@ -191,18 +198,36 @@ async function writeMemories(
   await Promise.all(
     sanitizedFoundation.map(async (memory) => {
       try {
+        // Sanitize Memory B fields
+        const subtype = sanitizeSubtype(memory.subtype);
+        const entityRefs = sanitizeEntityRefs(memory.entityRefs);
+        const entityLabel = sanitizeEntityLabel(memory.entityLabel);
+        const rawImportance = sanitizeImportance(memory.importance);
+
         console.log("Shadow Judge memory write attempt:", {
           requestId,
           type: memory.type,
           content: memory.content,
           confidence: memory.confidence,
+          subtype,
+          entityRefs,
+          importance: rawImportance,
         });
+
         await prisma.memory.create({
           data: {
             userId,
             type: memory.type,
             content: memory.content,
-            metadata: { source: "shadow_extraction", confidence: memory.confidence },
+            metadata: {
+              source: "shadow_extraction",
+              confidence: memory.confidence,
+              // Memory B fields
+              ...(subtype && { subtype: subtype as Record<string, string> }),
+              ...(entityRefs.length > 0 && { entityRefs }),
+              ...(entityLabel && { entityLabel }),
+              importance: rawImportance,
+            },
           },
         });
         console.log("Shadow Judge memory write success:", { requestId, content: memory.content });
@@ -367,11 +392,21 @@ MUST:
 - Capture loops as one of: COMMITMENT, HABIT, THREAD, FRICTION.
 - If ambiguous, classify as THREAD.
 
-FOUNDATION (PROFILE/PEOPLE/PROJECT):
+FOUNDATION (PROFILE/PEOPLE/PROJECT) - Memory B Schema:
 - Only if explicitly stated by the user.
 - Do not infer or guess.
 - Do not capture assistant/persona names as PROFILE.
 - Only capture PEOPLE if the user states a relationship (e.g., "my cofounder John"). Passing mentions of names are NOT memories.
+
+MEMORY B FIELDS (required for all memories):
+- subtype.entityType: person | place | org | project (required for PEOPLE/PROJECT)
+- subtype.factType: fact | preference | relationship | friction | habit
+- entityRefs: Array of entity keys mentioned (format: "<type>:<slug>" e.g. "person:john_doe")
+  - Slug rules: lowercase, no punctuation, underscores for spaces/hyphens
+- entityLabel: Display name for the primary entity (e.g. "John Doe")
+- importance: 0 (trivial) | 1 (standard, default) | 2 (significant) | 3 (critical)
+  - Use 2 for relationships, locations, key project facts
+  - Use 3 only for core identity facts (name, role, primary relationships)
 
 LOOPS:
 - COMMITMENT = explicit promise/decision to do a specific action (often timeboxed).
@@ -384,13 +419,24 @@ LOOPS:
 - Every loop item MUST include dedupe_key: stable across paraphrases, snake_case, 3-8 words.
 - If multiple sentences express the same intent, output ONE loop item only.
 - Keep the SAME kind and dedupe_key for paraphrases of the same intent.
-- Examples (follow these formats; do not copy literal text):
-  - Example A (FRICTION): “I wake up, go on the computer, get stuck, don’t walk until 2–3pm.” -> FRICTION: “Delays walking until mid-afternoon after getting stuck at computer”
-  - Example B (HABIT): “Daily I need 15 minutes tidying.” -> HABIT: “15 minutes tidying daily”
-  - Example C (COMMITMENT): “Tomorrow morning walk before midday, home by 11am.” -> COMMITMENT: “Morning walk completed before 11am tomorrow”
-  - Example D (COMMITMENT): “Before the end of the day I need 20 minutes exercise.” -> COMMITMENT: “20 minutes exercise today”
-  - Example E (THREAD): “I’m working on my app; need sprints + breaks.” -> THREAD: “App work cadence: sprints with walk breaks”
-  - Example F (FRICTION): “Colors feel off; stuck on visual polish.” -> FRICTION: “Stuck on visual polish; colors feel off”
+
+EXAMPLES:
+1. "My cofounder John is handling the backend"
+   -> type: PEOPLE, subtype: {entityType: "person", factType: "relationship"}, entityRefs: ["person:john"], entityLabel: "John", importance: 2, content: "John is my cofounder; handles backend"
+
+2. "I live in Austin, Texas"
+   -> type: PROFILE, subtype: {entityType: "place", factType: "fact"}, entityRefs: ["place:austin_texas"], entityLabel: "Austin, Texas", importance: 2, content: "Lives in Austin, Texas"
+
+3. "I prefer dark mode in all my apps"
+   -> type: PROFILE, subtype: {factType: "preference"}, entityRefs: [], importance: 1, content: "Prefers dark mode"
+
+4. "I'm the CEO of Acme Corp"
+   -> type: PROFILE, subtype: {entityType: "org", factType: "relationship"}, entityRefs: ["org:acme_corp"], entityLabel: "Acme Corp", importance: 3, content: "CEO of Acme Corp"
+
+LOOP EXAMPLES (unchanged):
+- FRICTION: "I wake up, go on the computer, get stuck, don't walk until 2–3pm." -> "Delays walking until mid-afternoon after getting stuck at computer"
+- HABIT: "Daily I need 15 minutes tidying." -> "15 minutes tidying daily"
+- COMMITMENT: "Tomorrow morning walk before midday, home by 11am." -> "Morning walk completed before 11am tomorrow"
 
 USER MESSAGES:
 ${userMessages.join("\n")}
@@ -398,7 +444,15 @@ ${userMessages.join("\n")}
 JSON SCHEMA:
 {
   "memories": [
-    { "type": "PROFILE|PEOPLE|PROJECT", "content": "...", "confidence": 0.0 }
+    {
+      "type": "PROFILE|PEOPLE|PROJECT",
+      "content": "...",
+      "confidence": 0.0,
+      "subtype": { "entityType": "person|place|org|project", "factType": "fact|preference|relationship|friction|habit" },
+      "entityRefs": ["person:john_doe"],
+      "entityLabel": "John Doe",
+      "importance": 1
+    }
   ],
   "loops": [
     { "kind": "COMMITMENT|HABIT|THREAD|FRICTION", "content": "...", "dedupe_key": "...", "confidence": 0.0 }
