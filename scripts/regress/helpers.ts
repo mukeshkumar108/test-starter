@@ -34,6 +34,32 @@ export async function seedMemory(
   await storeMemory(userId, type, content, metadata);
 }
 
+/**
+ * Seed a memory with full metadata and pinned status.
+ * Uses storeMemory to generate embeddings, then updates pinned status.
+ * Returns the memory ID.
+ */
+export async function seedMemoryWithMetadata(
+  userId: string,
+  type: MemoryType,
+  content: string,
+  metadata: Record<string, unknown>,
+  pinned: boolean = false
+): Promise<string> {
+  // storeMemory generates embeddings (required for retrieval)
+  const memoryId = await storeMemory(userId, type, content, metadata);
+
+  // Update pinned status if needed
+  if (pinned) {
+    await prisma.memory.update({
+      where: { id: memoryId },
+      data: { pinned: true },
+    });
+  }
+
+  return memoryId;
+}
+
 export async function seedTodo(
   userId: string,
   personaId: string,

@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/prisma";
-import { searchMemories } from "@/lib/services/memory/memoryStore";
+import { searchMemories, type Memory } from "@/lib/services/memory/memoryStore";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { env } from "@/env";
 import { getLatestSessionSummary } from "@/lib/services/session/sessionService";
+import { Prisma } from "@prisma/client";
 
 export interface ConversationContext {
   persona: string;
@@ -31,6 +32,106 @@ const MAX_RECENT_MESSAGE_CHARS = 800;
 const MAX_ROLLING_SUMMARY_CHARS = 600;
 const MAX_SESSION_SUMMARY_CHARS = 600;
 
+// Entity card constants
+const MAX_ENTITY_CARDS = 5;
+const MAX_FACTS_PER_CARD = 3;
+const ENTITY_KEY_PATTERN = /^(person|place|org|project):[a-z0-9_]+$/;
+
+/**
+ * Extract valid entity keys from memory metadata.entityRefs
+ */
+function extractEntityKeysFromMemories(memories: Memory[]): Set<string> {
+  const keys = new Set<string>();
+  for (const m of memories) {
+    const refs = (m.metadata?.entityRefs as string[]) ?? [];
+    for (const ref of refs) {
+      if (ENTITY_KEY_PATTERN.test(ref)) {
+        keys.add(ref);
+      }
+    }
+  }
+  return keys;
+}
+
+interface LinkedMemory {
+  id: string;
+  content: string;
+  metadata: any;
+  pinned: boolean;
+  createdAt: Date;
+}
+
+/**
+ * Build entity cards via SQL filtering (1-hop expansion).
+ * Uses metadata->'entityRefs' ?| ARRAY[...] for efficient any-of matching.
+ * Sorted by: pinned DESC → importance DESC → createdAt DESC
+ */
+async function buildEntityCards(
+  userId: string,
+  personaId: string,
+  entityKeys: Set<string>,
+  excludeIds: Set<string>
+): Promise<string[]> {
+  if (entityKeys.size === 0) return [];
+
+  const entityKeyArray = Array.from(entityKeys);
+  const excludeIdArray = Array.from(excludeIds);
+
+  // SQL query with ?| ARRAY[] for "any-of" matching on entityRefs
+  // Sort by: pinned DESC, importance DESC, createdAt DESC
+  // Note: We use Prisma.join for the array and cast to text[] for PostgreSQL ?| operator
+  let linkedMemories: LinkedMemory[] = [];
+  try {
+    linkedMemories = await prisma.$queryRaw<LinkedMemory[]>`
+      SELECT id, content, metadata, pinned, "createdAt"
+      FROM "Memory"
+      WHERE "userId" = ${userId}
+        AND ("personaId" = ${personaId} OR "personaId" IS NULL)
+        AND "type" IN ('PROFILE', 'PEOPLE', 'PROJECT')
+        AND metadata ? 'entityRefs'
+        AND metadata->'entityRefs' ?| ARRAY[${Prisma.join(entityKeyArray)}]::text[]
+        AND (pinned = true OR COALESCE((metadata->>'importance')::int, 1) >= 2)
+        ${excludeIdArray.length > 0 ? Prisma.sql`AND id NOT IN (${Prisma.join(excludeIdArray)})` : Prisma.empty}
+      ORDER BY pinned DESC, COALESCE((metadata->>'importance')::int, 1) DESC, "createdAt" DESC
+      LIMIT 30
+    `;
+  } catch (error) {
+    console.error("[context.entity_cards.error]", { error, entityKeyArray, excludeIdArray });
+    return [];
+  }
+
+  // Group facts by entity key
+  const cardsByEntity = new Map<string, string[]>();
+
+  for (const m of linkedMemories) {
+    const refs = (m.metadata?.entityRefs as string[]) ?? [];
+    // Find which of our target entity keys this memory matches
+    for (const ref of refs) {
+      if (entityKeys.has(ref)) {
+        if (!cardsByEntity.has(ref)) {
+          cardsByEntity.set(ref, []);
+        }
+        const facts = cardsByEntity.get(ref)!;
+        if (facts.length < MAX_FACTS_PER_CARD) {
+          facts.push(m.content);
+        }
+        break; // Only assign to first matching entity to avoid duplication
+      }
+    }
+  }
+
+  // Format cards: [entity_key]: fact1; fact2; fact3
+  const cardStrings: string[] = [];
+  for (const [entityKey, facts] of cardsByEntity) {
+    if (facts.length > 0) {
+      const uniqueFacts = [...new Set(facts)];
+      cardStrings.push(`[${entityKey}]: ${uniqueFacts.join("; ")}`);
+    }
+  }
+
+  return cardStrings.slice(0, MAX_ENTITY_CARDS);
+}
+
 function normalizeText(value: string) {
   return value
     .trim()
@@ -39,7 +140,9 @@ function normalizeText(value: string) {
     .replace(/[.,!?;:]+$/g, "");
 }
 
-function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
+function selectRelevantMemories<T extends { id: string; type: string; content: string }>(
+  memories: T[]
+): T[] {
   const allowedTypes = new Set(["PROFILE", "PEOPLE", "PROJECT"]);
   const perTypeCaps: Record<string, number> = {
     PROFILE: 2,
@@ -52,7 +155,7 @@ function selectRelevantMemories(memories: Array<{ type: string; content: string 
     PROJECT: 0,
   };
   const seen = new Set<string>();
-  const selected: Array<{ type: string; content: string }> = [];
+  const selected: T[] = [];
 
   for (const memory of memories) {
     if (!allowedTypes.has(memory.type)) continue;
@@ -196,6 +299,8 @@ export async function buildContext(
     const sortedFoundation = [...foundationMemories];
 
     const relevantMemories = await searchMemories(userId, personaId, userMessage, 12);
+
+    // Filter out foundation (pinned) memories first - they go to separate block
     const foundationSet = new Set(
       foundationMemories.map((memory) => normalizeText(memory.content))
     );
@@ -203,7 +308,25 @@ export async function buildContext(
       (memory) => !foundationSet.has(normalizeText(memory.content))
     );
     const selectedRelevant = selectRelevantMemories(filteredRelevant);
-    const relevantMemoryStrings = selectedRelevant.map(formatMemory);
+
+    // Entity card expansion (1-hop) - gated by feature flag
+    // Extract entity keys from ALL relevant memories (including ones going to foundation)
+    // But only exclude IDs of memories that will appear in the final relevant memories
+    let entityCardStrings: string[] = [];
+    if (env.FEATURE_ENTITY_PIPELINE !== "false") {
+      const entityKeys = extractEntityKeysFromMemories(relevantMemories);
+      if (entityKeys.size > 0) {
+        // Only exclude memories that will appear in final relevantMemories
+        const excludeIds = new Set(selectedRelevant.map((m) => m.id));
+        entityCardStrings = await buildEntityCards(userId, personaId, entityKeys, excludeIds);
+      }
+    }
+
+    // Inject entity cards at TOP of relevant memories block
+    const relevantMemoryStrings = [
+      ...entityCardStrings,
+      ...selectedRelevant.map(formatMemory),
+    ];
     const foundationMemoryStrings = sortedFoundation.map(formatMemory);
 
     const commitmentTodos = await prisma.todo.findMany({

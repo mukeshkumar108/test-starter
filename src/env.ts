@@ -30,6 +30,7 @@ const envSchema = z.object({
   FEATURE_SUMMARY_TEST_STALL: z.string().optional(),
   FEATURE_JUDGE_TEST_MODE: z.string().optional(),
   FEATURE_SUMMARY_SPINE_GLOBAL: z.string().optional(),
+  FEATURE_ENTITY_PIPELINE: z.string().optional(),
   SUMMARY_TIMEOUT_MS: z.string().optional(),
 });
 
