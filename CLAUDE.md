@@ -1,144 +1,80 @@
-# Project: Walkie-Talkie Voice Companion (Memory Spine)
+# CLAUDE.md — Project Context & Guardrails (READ FIRST)
 
-## Product Goal
-This app is a voice-first thinking partner and mentor.
-User presses and holds a button to talk, releases to send, and hears a spoken response.
-The system maintains emotional continuity, project continuity, and decision continuity over time.
+## Project context (what this is)
+This repo implements a single chat+voice endpoint `/api/chat` that handles:
+- Clerk auth (cookie) or Bearer token verification
+- Session lifecycle (open/close + summaries)
+- Context building (memories/todos/summaries/messages)
+- LLM response generation (OpenRouter)
+- STT + TTS (voice is not a separate route)
+- Async “Shadow Judge” extraction + optional curator
 
-Primary UX use case: walking + talking + thinking out loud.
+Goal: improve the memory + context pipeline without breaking API behavior or latency.
 
-## Tech Stack (DO NOT CHANGE)
-- Framework: Next.js App Router
-- Auth: Clerk (all /app/* routes protected)
-- DB: Neon Postgres
-- ORM: Prisma v6 (already configured)
-- LLM Router: OpenRouter
-- STT: LemonFox (Whisper)
-- TTS: ElevenLabs (streaming preferred)
+## Critical invariants (DO NOT BREAK)
+1) `/api/chat` API contract must remain compatible with the Expo client:
+   - multipart form fields: `personaId`, `language`, `audioBlob` (m4a)
+   - header: `Authorization: Bearer <token>` (when no Clerk cookie)
+2) All DB reads must always be correctly scoped:
+   - ALWAYS filter by `userId`
+   - Use `personaId` where the concept is persona-specific (Messages, Todos, Sessions)
+3) Do not change auth/session semantics unless explicitly requested in the spec.
+4) Never drop these prompt blocks:
+   - Real-time context
+   - Persona prompt
+   - Last 6 turns (`recentMessages`)
+   - Current user message
+5) Keep voice viable:
+   - Avoid adding extra network calls on the synchronous request path.
+   - Prefer batching DB queries or reducing call count.
+6) No new infra/dependencies:
+   - No Neo4j, no external memory vendors, no GraphQL layer.
+   - Stay Postgres + Prisma + pgvector.
 
-## Core Architectural Pattern
+## Source of truth docs
+- `AUDIT.md` describes current message lifecycle, prompt block order, and current retrieval behavior.
+- `prisma/schema.prisma` defines the DB contract.
+- `src/env.ts` defines feature flags; do not remove existing flags.
 
-### Two-Call Shadow Pattern
-Every user interaction triggers:
+## Key directories / files
+### API
+- `src/app/api/chat/route.ts` — main entrypoint: prompt assembly, LLM call, message writes, async hooks
+- `src/app/api/personas/route.ts` — persona list
 
-1. FAST PATH (blocking):
-   - STT
-   - Context build
-   - LLM response
-   - TTS playback to user
+### Memory + context
+- `src/lib/services/memory/contextBuilder.ts` — builds context pack blocks
+- `src/lib/services/memory/memoryStore.ts` — vector search + memory CRUD
+- `src/lib/services/memory/shadowJudge.ts` — async extraction; updates Memory/Todo/SessionState
+- `src/lib/services/memory/memoryCurator.ts` — optional curator (async)
 
-2. SHADOW PATH (non-blocking):
-   - Memory extraction
-   - Summary spine update
-   - Session state update
+### Sessions + summaries
+- `src/lib/services/session/sessionService.ts` — session open/close; triggers summaries
+- `src/lib/services/session/sessionSummarizer.ts` — sessionSummary + rollingSummary generation
 
-Shadow path must never block user audio response.
+### Voice services (same endpoint)
+- `src/lib/services/voice/sttService.ts`
+- `src/lib/services/voice/llmService.ts`
+- `src/lib/services/voice/ttsService.ts`
 
-## Memory Model
+## Current prompt block order (must respect contract)
+Prompt assembly happens in `src/app/api/chat/route.ts`.
+Current contract (do not change unless spec says so):
+- First: real-time block, optional session-state block, then persona prompt.
+- Last: last 6 messages + current user message.
+Budget guard drops blocks in order: relevantMemories → sessionSummary → threads → non-pinned foundation overflow.
 
-There are four context layers:
+## Testing and quality bar
+Before committing changes:
+- Run all existing tests (e.g. `pnpm test`, `pnpm test:core`, etc. use repo scripts)
+- Run typecheck/lint if scripts exist
+- Ensure Expo client still works unchanged (no API breakage)
 
-1. Persona (static, from /prompts)
-2. User Seed (static, per-user, stored in DB)
-3. Session State (short-term, per conversation, overwritten freely)
-4. Long-Term Memory (vectorized facts: PROFILE, PEOPLE, PROJECT, OPEN_LOOP)
-
-Plus:
-- Summary Spine: rolling compressed narrative of the conversation
-
-Only latest summary is used at runtime, but older versions may be stored.
-
-## Services Structure (MANDATORY)
-
-All intelligence and memory logic must live in:
-
-/lib/services/memory/
-
-Examples:
-- contextBuilder.ts
-- shadowJudge.ts
-- memoryStore.ts
-
-API routes must be thin orchestration layers only.
-
-## Prompt Management
-
-All system prompts must live in:
-
-/prompts/*.md
-
-No prompt strings hardcoded in TypeScript.
-
-## Profiles & Reskinning
-
-Persona templates live in repo.
-User-specific identity and seed context must live in DB.
-
-Profile config defines:
-- persona prompt path
-- LLM model
-- TTS voice
-- language
-
-## Persona Picker (v0.1 Requirement)
-
-On app open (post-login), user must be able to choose from 3–5 preset personas (“mentors”).
-Each persona has:
-- persona prompt path (/prompts/*.md)
-- LLM model name (OpenRouter)
-- ElevenLabs voiceId
-- language (en/es)
-
-The chosen persona affects style/voice/model, but long-term memory + summary spine are shared per user.
-Session state may be per persona (recommended) to avoid tone carryover.
-
-## UI & Aesthetic Principles (High-End Minimalist)
-
-The UI must feel emotional, alive, and premium — not like a utility dashboard.
-
-### Core Interaction
-- Single central interactive element (orb / button hybrid).
-- Clear visual communication of system state:
-  - IDLE
-  - LISTENING
-  - THINKING
-  - SPEAKING
-
-### Motion & Feedback
-- Subtle motion is preferred over static UI.
-- State changes should be animated (scale, glow, opacity, pulse).
-- Animations must not block interaction or audio playback.
-- Audio playback may optionally drive visual intensity (future enhancement).
-
-### Design Style
-- Dark-mode first.
-- Soft glows, gradients, or blur allowed but must remain minimal.
-- Avoid heavy glassmorphism or overdone neon effects.
-
-### Mobile First
-- Zero scroll layout.
-- Thumb-centered interaction zone.
-- Large hit targets.
-- Haptic feedback if supported by platform.
-
-### Progressive Enhancement Rule
-For v1:
-- Prioritize responsiveness and clarity over visual complexity.
-- Implement simple animated states first.
-- Advanced visualizers and effects may be added later.
-
-Do not introduce animation systems that complicate the voice pipeline.
-
-## Performance Requirements
-
-Latency is critical.
-Audio playback should begin as soon as partial LLM output is available if possible.
-
-## Forbidden Patterns
-
-- No business logic in React components
-- No memory logic inside API routes
-- No direct prompt strings in code
-- No blocking memory writes before responding to user
-
-If unsure, prefer simpler implementation over clever abstraction.
+## Working style rules (very important)
+- Prefer minimal, surgical changes over refactors.
+- If uncertain about behavior, READ the relevant file; do not guess.
+- If you want to change schemas or introduce new tables/columns, STOP and ask first.
+- Every change must include:
+  - Files changed list
+  - Why it’s safe
+  - Tests run
+  - Any performance impact (DB calls added/removed)
