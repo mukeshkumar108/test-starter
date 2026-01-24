@@ -65,7 +65,7 @@ Budget guard drops blocks in order: relevantMemories → sessionSummary → thre
 
 ## Testing and quality bar
 Before committing changes:
-- Run all existing tests (e.g. `pnpm test`, `pnpm test:core`, etc. use repo scripts)
+- Run all existing tests (e.g. `pnpm build`, `pnpm regress:core`, etc. use repo scripts)
 - Run typecheck/lint if scripts exist
 - Ensure Expo client still works unchanged (no API breakage)
 
@@ -78,3 +78,11 @@ Before committing changes:
   - Why it’s safe
   - Tests run
   - Any performance impact (DB calls added/removed)
+
+## Restricted Operations (Safety Guardrails)
+- **Filespace:** You are strictly limited to editing: 
+  `src/app/api/chat/route.ts`, `src/lib/services/memory/*`, `src/lib/services/session/*`.
+- **Schema:** NO Prisma migrations. Use `metadata` (JSONB) for new fields.
+- **Enums:** Do not modify Enums in `schema.prisma`.
+- **Non-Goals:** No reformatting, no file moving, no API contract changes.
+- **Verification:** Every plan must be reviewed by the Lead Engineer (Codex).
