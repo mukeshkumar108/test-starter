@@ -155,28 +155,31 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 
 **Pinned behavior**
 - Pinned applies only to foundation memory query (context builder). Shadow Judge does not set pinned.
+**Persona scoping (writes)**
+- Shadow Judge memory writes remain global (`Memory.personaId` is left NULL).
 
 
 ## 5) Retrieval Strategy (CURRENT)
 
 **Memory retrieval**
-- `searchMemories(userId, query, limit)` in `src/lib/services/memory/memoryStore.ts`
+- `searchMemories(userId, personaId, query, limit)` in `src/lib/services/memory/memoryStore.ts`
 - Uses pgvector cosine distance (`embedding <=> query`) with score `1 - distance`.
 - Filters:
-  - `userId` only (no personaId)
+  - `userId`
+  - `personaId = current OR personaId IS NULL`
   - `type` in PROFILE/PEOPLE/PROJECT
   - `embedding IS NOT NULL`
   - JS filter: `metadata.status != ARCHIVED`
 - No recency or importance weighting.
 
 **Foundation memory**
-- `contextBuilder` reads `Memory` where `pinned=true` only, capped 20.
+- `contextBuilder` reads `Memory` where `pinned=true` and `personaId = current OR personaId IS NULL`, capped 20.
 
 **Todos**
 - `commitments/threads/frictions` read from `Todo` scoped by userId + personaId + kind + status.
 
 **Messages**
-- `contextBuilder` recent messages query uses `userId` only (not personaId).
+- `contextBuilder` recent messages query uses `userId` + `personaId` (null personaId excluded).
 
 
 ## 6) Feature Flags + Defaults
@@ -231,6 +234,7 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 **Index suggestions (notes only)**
 - If recent messages should be persona-scoped, index `(userId, personaId, createdAt)` on `Message`.
 - Ensure `Memory(userId, type)` index exists (it does).
+- `Memory(userId, personaId, type)` index exists (schema).
 - `Todo(userId, personaId, kind, status, dedupeKey)` index exists (schema).
 
 
@@ -256,7 +260,7 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 - `src/lib/services/voice/ttsService.ts`
 
 **Schema / Config / Seeds**
-- `prisma/schema.prisma` — Memory, Todo, Session, SessionSummary, SessionState, PersonaProfile.
+- `prisma/schema.prisma` — Memory (includes `personaId`), Todo, Session, SessionSummary, SessionState, PersonaProfile.
 - `src/lib/seed.ts` — persona seeds (slugs and prompts).
 - `src/lib/providers/models.ts` — model IDs.
 - `src/env.ts` — feature flags and required keys.

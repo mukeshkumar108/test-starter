@@ -3,7 +3,8 @@
 ## v1.3.6+ Changes
 - Commitments/threads/frictions replace the previous open-loops block.
 - Cross-block dedupe: relevant memories exclude any content already in foundation.
-- Seeded-first foundation ordering by `metadata.source === "seeded_profile"`.
+- Foundation memories are pinned-only and persona-scoped (personaId or NULL).
+- Relevant memory retrieval is persona-scoped (personaId or NULL).
 - Soft prompt-size warning at 20,000 chars (`[chat.prompt.warn]`).
 - Shadow Judge test mode (`FEATURE_JUDGE_TEST_MODE`) and Judge timeout (`JUDGE_TIMEOUT_MS`).
 
@@ -25,6 +26,8 @@
     const threadStrings = context.threads.join("\n");
     const frictionStrings = context.frictions.join("\n");
     const recentWinStrings = context.recentWins.join("\n");
+    const rollingSummary = context.rollingSummary ?? "";
+    const sessionSummary = context.sessionSummary ?? "";
     const model = getChatModelForPersona(persona.slug);
     const messages = [
       { role: "system" as const, content: getCurrentContext({ lastMessageAt: lastMessage?.createdAt }) },
@@ -50,6 +53,9 @@
         : []),
       ...(context.userSeed ? [{ role: "system" as const, content: `User context: ${context.userSeed}` }] : []),
       ...(context.summarySpine ? [{ role: "system" as const, content: `Conversation summary: ${context.summarySpine}` }] : []),
+      ...(rollingSummary
+        ? [{ role: "system" as const, content: `CURRENT SESSION SUMMARY: ${rollingSummary}` }]
+        : []),
       ...(context.sessionSummary
         ? [{ role: "system" as const, content: `LATEST SESSION SUMMARY: ${context.sessionSummary}` }]
         : []),
@@ -66,6 +72,7 @@ const MAX_FRICTIONS = 3;
 const MAX_USER_SEED_CHARS = 800;
 const MAX_SUMMARY_SPINE_CHARS = 1200;
 const MAX_RECENT_MESSAGE_CHARS = 800;
+const MAX_ROLLING_SUMMARY_CHARS = 600;
 const MAX_SESSION_SUMMARY_CHARS = 600;
 
 function selectRelevantMemories(memories: Array<{ type: string; content: string }>) {
@@ -75,19 +82,19 @@ function selectRelevantMemories(memories: Array<{ type: string; content: string 
 }
 
 const foundationMemories = await prisma.memory.findMany({
-  where: { userId, type: { in: ["PROFILE", "PEOPLE", "PROJECT"] } },
+  where: {
+    userId,
+    type: { in: ["PROFILE", "PEOPLE", "PROJECT"] },
+    pinned: true,
+    OR: [{ personaId }, { personaId: null }],
+  },
   orderBy: { createdAt: "asc" },
-  take: 12,
+  take: 20,
 });
 
-const sortedFoundation = [...foundationMemories].sort((a, b) => {
-  const aSeeded = a.metadata?.source === "seeded_profile";
-  const bSeeded = b.metadata?.source === "seeded_profile";
-  if (aSeeded === bSeeded) return 0;
-  return aSeeded ? -1 : 1;
-});
+const sortedFoundation = [...foundationMemories];
 
-const relevantMemories = await searchMemories(userId, userMessage, 12);
+const relevantMemories = await searchMemories(userId, personaId, userMessage, 12);
 const foundationSet = new Set(foundationMemories.map((m) => normalizeText(m.content)));
 const filteredRelevant = relevantMemories.filter((m) => !foundationSet.has(normalizeText(m.content)));
 const selectedRelevant = selectRelevantMemories(filteredRelevant);
@@ -137,19 +144,20 @@ export async function getLatestSessionSummary(userId: string, personaId: string)
 
 | Block Name | Source | Data | Caps | Dedupe | Notes/Risks |
 | --- | --- | --- | --- | --- | --- |
-| [REAL-TIME CONTEXT] | `route.ts#getCurrentContext` | lastMessageAt, fixed location/weather | n/a | n/a | Weather is static placeholder. |
+| [REAL-TIME CONTEXT] | `route.ts#getCurrentContext` | lastMessageAt, timezone, cached WeatherAPI | n/a | n/a | Weather cached per user/coords; non-blocking fetch. |
 | [SESSION STATE] | `route.ts#getSessionContext` | SessionState JSON | n/a | n/a | Derived from SessionState, not Session. |
 | Persona Prompt | `contextBuilder.ts` file read | promptPath content | n/a | n/a | Full prompt text. |
-| [FOUNDATION MEMORIES] | `contextBuilder.ts` | Memory PROFILE/PEOPLE/PROJECT | 12 entries | none | Seeded-first ordering by metadata.source. |
-| [RELEVANT MEMORIES] | `memoryStore.ts` + `contextBuilder.ts` | Memory PROFILE/PEOPLE/PROJECT | max 8 selected | normalized content | Cross-block dedupe vs foundation. |
+| [FOUNDATION MEMORIES] | `contextBuilder.ts` | Memory PROFILE/PEOPLE/PROJECT | 20 entries | none | Pinned-only; personaId = current or NULL. |
+| [RELEVANT MEMORIES] | `memoryStore.ts` + `contextBuilder.ts` | Memory PROFILE/PEOPLE/PROJECT | max 8 selected | normalized content | Persona-scoped + cross-block dedupe vs foundation. |
 | COMMITMENTS (pending) | `contextBuilder.ts` | Todo kind=COMMITMENT | max 5 | normalized content | Status=PENDING only. |
 | ACTIVE THREADS | `contextBuilder.ts` | Todo kind=THREAD | max 3 | normalized content | Status=PENDING only. |
 | FRICTIONS / PATTERNS | `contextBuilder.ts` | Todo kind=FRICTION | max 3 | normalized content | Status=PENDING only. |
 | Recent wins | `contextBuilder.ts` | Todo kind=COMMITMENT, COMPLETED (48h) | max 3 | none | Content only. |
 | User context | `contextBuilder.ts` | UserSeed.content | 800 chars | none | Optional. |
-| Conversation summary | `contextBuilder.ts` | SummarySpine.content | 1200 chars | none | Optional. |
+| Conversation summary | `contextBuilder.ts` | SummarySpine.content | 1200 chars | none | Optional; persona flag + global env. |
+| CURRENT SESSION SUMMARY | `contextBuilder.ts` | SessionState.rollingSummary | 600 chars | none | Optional. |
 | LATEST SESSION SUMMARY | `contextBuilder.ts` | SessionSummary.summary | 600 chars | none | JSON normalized to one-line string. |
-| Recent messages | `contextBuilder.ts` | Message history | 10 messages; 800 chars each | none | Chronological order. |
+| Recent messages | `contextBuilder.ts` | Message history | 6 messages; 800 chars each | none | Chronological order; persona-scoped. |
 | User message | `route.ts` | STT transcript | n/a | n/a | Final user input. |
 
 ## Duplications / Contradictions
