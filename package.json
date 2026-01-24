@@ -21,6 +21,8 @@
     "synth:shadow-embedding:v1": "pnpm tsx scripts/synth-shadow-embedding-v1.ts",
     "synth:memory-hygiene:v1": "pnpm tsx scripts/synth-memory-hygiene-v1.ts",
     "synth:entity-pipeline:v1": "pnpm tsx scripts/synth-entity-pipeline-v1.ts",
+    "synth:rolling-summary:v1": "pnpm tsx scripts/synth-rolling-summary-v1.ts",
+    "synth:rolling-summary:v1:fail": "pnpm tsx scripts/synth-rolling-summary-v1-fail.ts",
     "test:entity-normalizer": "pnpm tsx src/lib/services/memory/__tests__/entityNormalizer.test.ts"
   },
   "dependencies": {

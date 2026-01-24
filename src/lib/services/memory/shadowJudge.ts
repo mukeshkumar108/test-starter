@@ -71,8 +71,27 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
       typeof updatedSessionState?.messageCount === "number"
         ? updatedSessionState.messageCount
         : null;
-    if (messageCount && messageCount % ROLLING_SUMMARY_TURN_INTERVAL === 0) {
-      void triggerRollingSummaryUpdate(userId, personaId, requestId);
+    const shouldTriggerRollingSummary =
+      Boolean(messageCount) && messageCount % ROLLING_SUMMARY_TURN_INTERVAL === 0;
+    console.log("Shadow Judge rolling summary check:", {
+      requestId,
+      messageCount,
+      shouldTriggerRollingSummary,
+    });
+    if (shouldTriggerRollingSummary) {
+      const timeoutMs = Number.parseInt(env.SUMMARY_TIMEOUT_MS ?? "", 10);
+      const rollingTimeout = Number.isFinite(timeoutMs) ? timeoutMs : 4000;
+      try {
+        await withTimeout(
+          triggerRollingSummaryUpdate(userId, personaId, requestId, messageCount),
+          rollingTimeout
+        );
+      } catch (error) {
+        await updateRollingDiagnostics(userId, personaId, {
+          lastRollingError: { reason: "timeout_or_exception", detail: String(error) },
+        });
+        console.warn("Shadow Judge rolling summary timed out:", { requestId, error });
+      }
     }
 
     // Update summary spine
@@ -89,12 +108,18 @@ const ROLLING_SUMMARY_TURN_INTERVAL = 4;
 async function triggerRollingSummaryUpdate(
   userId: string,
   personaId: string,
-  requestId: string
+  requestId: string,
+  messageCount?: number | null
 ) {
   try {
     const sessionState = await prisma.sessionState.findUnique({
       where: { userId_personaId: { userId, personaId } },
-      select: { rollingSummary: true },
+      select: { rollingSummary: true, state: true },
+    });
+
+    await updateRollingDiagnostics(userId, personaId, {
+      lastRollingAttemptAt: new Date().toISOString(),
+      lastRollingMessageCount: messageCount ?? null,
     });
 
     const summary = await summarizeRollingSession({
@@ -102,7 +127,12 @@ async function triggerRollingSummaryUpdate(
       personaId,
       previousSummary: sessionState?.rollingSummary,
     });
-    if (!summary) return;
+    if (!summary) {
+      await updateRollingDiagnostics(userId, personaId, {
+        lastRollingError: { reason: "summary_empty_or_failed" },
+      });
+      return;
+    }
 
     await prisma.sessionState.update({
       where: { userId_personaId: { userId, personaId } },
@@ -111,10 +141,48 @@ async function triggerRollingSummaryUpdate(
         updatedAt: new Date(),
       },
     });
+    await updateRollingDiagnostics(userId, personaId, {
+      lastRollingSuccessAt: new Date().toISOString(),
+      lastRollingError: null,
+    });
     console.log("Shadow Judge rolling summary updated:", { requestId });
   } catch (error) {
+    await updateRollingDiagnostics(userId, personaId, {
+      lastRollingError: { reason: "exception", detail: String(error) },
+    });
     console.warn("Shadow Judge rolling summary failed:", { requestId, error });
   }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: NodeJS.Timeout;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("Rolling summary timeout")), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId!);
+  }
+}
+
+async function updateRollingDiagnostics(
+  userId: string,
+  personaId: string,
+  patch: Record<string, unknown>
+) {
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const currentState =
+    existing?.state && typeof existing.state === "object"
+      ? (existing.state as Record<string, unknown>)
+      : {};
+  await prisma.sessionState.update({
+    where: { userId_personaId: { userId, personaId } },
+    data: { state: { ...currentState, ...patch } as any },
+  });
 }
 
 async function getUserWindow(userId: string, userMessage: string) {

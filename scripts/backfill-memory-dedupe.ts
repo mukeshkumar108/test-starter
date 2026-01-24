@@ -83,10 +83,9 @@ async function backfillMemoryKeys() {
     const rows = await prisma.memory.findMany({
       where: {
         memoryKey: null,
-        OR: [
-          { metadata: { equals: null } },
-          { metadata: { path: ["status"], not: "ARCHIVED" } },
-        ],
+        NOT: {
+          metadata: { path: ["status"], equals: "ARCHIVED" },
+        },
       },
       take: BATCH_SIZE,
       select: {
@@ -138,15 +137,14 @@ async function backfillMemoryKeys() {
           } as MemoryRow,
         ]);
 
+        const existingMeta =
+          existing.metadata && typeof existing.metadata === "object"
+            ? (existing.metadata as Record<string, unknown>)
+            : {};
         await prisma.memory.update({
           where: { id: existing.id },
           data: {
-            metadata: {
-              ...(existing.metadata && typeof existing.metadata === "object"
-                ? (existing.metadata as Record<string, unknown>)
-                : {}),
-              ...mergedMetadata,
-            },
+            metadata: { ...existingMeta, ...mergedMetadata } as any,
             pinned: existing.pinned,
           },
         });
@@ -162,7 +160,7 @@ async function backfillMemoryKeys() {
               ...archiveMeta,
               status: "ARCHIVED",
               archivedAt: new Date().toISOString(),
-            },
+            } as any,
           },
         });
         progressed += 1;
@@ -223,15 +221,14 @@ async function dedupeByMemoryKey() {
     const mergedMetadata = mergeMetadata(rows);
     const pinned = rows.some((row) => row.pinned);
 
+    const keepMeta =
+      rows[0].metadata && typeof rows[0].metadata === "object"
+        ? (rows[0].metadata as Record<string, unknown>)
+        : {};
     await prisma.memory.update({
       where: { id: keepId },
       data: {
-        metadata: {
-          ...(rows[0].metadata && typeof rows[0].metadata === "object"
-            ? (rows[0].metadata as Record<string, unknown>)
-            : {}),
-          ...mergedMetadata,
-        },
+        metadata: { ...keepMeta, ...mergedMetadata } as any,
         pinned,
       },
     });
@@ -253,7 +250,7 @@ async function dedupeByMemoryKey() {
                 ...existingMeta,
                 status: "ARCHIVED",
                 archivedAt: new Date().toISOString(),
-              },
+              } as any,
             },
           });
         })
