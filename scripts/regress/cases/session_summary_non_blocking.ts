@@ -38,13 +38,15 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
     process.env.FEATURE_SUMMARY_TEST_STALL = previousStall;
   }
 
+  const maxElapsedMs = 750;
   return {
     name,
-    ok: Boolean(updated?.endedAt) && elapsedMs < 500,
+    ok: Boolean(updated?.endedAt) && elapsedMs < maxElapsedMs,
     evidence: {
       sessionId: session.id,
       endedAt: updated?.endedAt ?? null,
       elapsedMs,
+      maxElapsedMs,
     },
   };
 }

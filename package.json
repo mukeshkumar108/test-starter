@@ -12,10 +12,12 @@
     "db:generate": "prisma generate",
     "db:seed": "tsx src/lib/seed.ts",
     "db:studio": "prisma studio",
+    "backfill:memory-embeddings": "pnpm tsx scripts/backfill-memory-embeddings.ts",
     "regress:v1.1": "tsx scripts/regression-baseline-v1_1.ts",
     "regress:core": "pnpm tsx scripts/regress-core.ts",
     "synth:session-summary:v1.3": "pnpm tsx scripts/synth-session-summary-v1_3.ts",
     "synth:memory-b:v2": "pnpm tsx scripts/synth-shadow-memory-b-v2.ts",
+    "synth:shadow-embedding:v1": "pnpm tsx scripts/synth-shadow-embedding-v1.ts",
     "synth:entity-pipeline:v1": "pnpm tsx scripts/synth-entity-pipeline-v1.ts",
     "test:entity-normalizer": "pnpm tsx src/lib/services/memory/__tests__/entityNormalizer.test.ts"
   },

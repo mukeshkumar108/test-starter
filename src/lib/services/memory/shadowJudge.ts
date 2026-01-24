@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { storeMemory } from "@/lib/services/memory/memoryStore";
 import { MemoryType, TodoKind } from "@prisma/client";
 import { MODELS } from "@/lib/providers/models";
 import { env } from "@/env";
@@ -214,22 +215,21 @@ async function writeMemories(
           importance: rawImportance,
         });
 
-        await prisma.memory.create({
-          data: {
-            userId,
-            type: memory.type,
-            content: memory.content,
-            metadata: {
-              source: "shadow_extraction",
-              confidence: memory.confidence,
-              // Memory B fields
-              ...(subtype && { subtype: subtype as Record<string, string> }),
-              ...(entityRefs.length > 0 && { entityRefs }),
-              ...(entityLabel && { entityLabel }),
-              importance: rawImportance,
-            },
+        await storeMemory(
+          userId,
+          memory.type,
+          memory.content,
+          {
+            source: "shadow_extraction",
+            confidence: memory.confidence,
+            // Memory B fields
+            ...(subtype && { subtype: subtype as Record<string, string> }),
+            ...(entityRefs.length > 0 && { entityRefs }),
+            ...(entityLabel && { entityLabel }),
+            importance: rawImportance,
           },
-        });
+          null
+        );
         console.log("Shadow Judge memory write success:", { requestId, content: memory.content });
       } catch (error) {
         console.error("Shadow Judge memory write failed:", { requestId, error });

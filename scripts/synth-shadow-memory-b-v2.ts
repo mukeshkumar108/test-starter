@@ -9,6 +9,7 @@
  * Run with: pnpm tsx scripts/synth-shadow-memory-b-v2.ts
  */
 
+import "dotenv/config";
 import { prisma } from "@/lib/prisma";
 import { processShadowPath } from "@/lib/services/memory/shadowJudge";
 import { createQaUser, getPersonaIdBySlug, cleanupQaUser } from "./regress/helpers";
