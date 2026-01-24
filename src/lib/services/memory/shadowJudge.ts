@@ -12,6 +12,7 @@ import {
   canonicalizeEntityRefs,
   type MemorySubtype,
 } from "./entityNormalizer";
+import { curatorTodoHygiene } from "./memoryCurator";
 
 interface ShadowProcessingParams {
   userId: string;
@@ -43,7 +44,12 @@ export async function processShadowPath(params: ShadowProcessingParams): Promise
     const dedupedLoops = dedupeLoops(normalizedLoops);
     const compressedLoops = dedupedLoops;
     await writeTodos(userId, personaId, compressedLoops, requestId);
-    await autoCompleteCommitment(userId, personaId, userMessage);
+
+    // Curator V1: Todo hygiene (completion, habits, thread cleanup)
+    // Runs async, gated by FEATURE_MEMORY_CURATOR
+    curatorTodoHygiene(userId, personaId, userMessage).catch((error) => {
+      console.error("[curator.v1.error]", { requestId, error });
+    });
 
     // Update session state
     const updatedSessionState = await updateSessionState(
@@ -413,26 +419,7 @@ async function writeTodos(
   );
 }
 
-async function autoCompleteCommitment(
-  userId: string,
-  personaId: string,
-  userMessage: string
-) {
-  const activeTodos = await prisma.todo.findMany({
-    where: { userId, personaId, status: "PENDING", kind: TodoKind.COMMITMENT },
-    orderBy: { createdAt: "asc" },
-    select: { id: true },
-  });
-  if (
-    activeTodos.length === 1 &&
-    /\b(done|finished|completed)\b/i.test(userMessage)
-  ) {
-    await prisma.todo.update({
-      where: { id: activeTodos[0].id },
-      data: { status: "COMPLETED", completedAt: new Date() },
-    });
-  }
-}
+// autoCompleteCommitment removed - replaced by curatorTodoHygiene in memoryCurator.ts
 
 function hasHedgeWords(content: string) {
   return /\b(maybe|might|could|wish|hope|if i|if we)\b/i.test(content);
