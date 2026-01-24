@@ -93,6 +93,28 @@ export function sanitizeEntityRefs(refs: unknown): string[] {
     .slice(0, 5); // Cap at 5 entity refs per memory
 }
 
+const CANONICAL_ENTITY_OVERRIDES: Record<string, string> = {
+  "person:makesh": "person:mukesh",
+};
+
+/**
+ * Canonicalize entity refs using a small override map.
+ * This keeps ASR variants aligned to a single canonical key.
+ */
+export function canonicalizeEntityRefs(refs: string[]): string[] {
+  const seen = new Set<string>();
+  const canonicalized: string[] = [];
+
+  for (const ref of refs) {
+    const mapped = CANONICAL_ENTITY_OVERRIDES[ref] ?? ref;
+    if (seen.has(mapped)) continue;
+    seen.add(mapped);
+    canonicalized.push(mapped);
+  }
+
+  return canonicalized;
+}
+
 /**
  * Validate and sanitize an importance score from LLM output.
  * Returns 1 (default) if invalid.

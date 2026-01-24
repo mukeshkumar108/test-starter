@@ -176,6 +176,7 @@ model Memory {
   personaId   String?
   type        MemoryType
   content     String
+  memoryKey   String?
   embedding   Unsupported("vector(1536)")?
   metadata    Json?
   pinned      Boolean                        @default(false)
@@ -186,6 +187,7 @@ model Memory {
   
   @@index([userId, type])
   @@index([userId, personaId, type])
+  @@unique([userId, memoryKey])
 }
 
 model SummarySpine {

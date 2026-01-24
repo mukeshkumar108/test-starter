@@ -18,6 +18,7 @@
     "synth:session-summary:v1.3": "pnpm tsx scripts/synth-session-summary-v1_3.ts",
     "synth:memory-b:v2": "pnpm tsx scripts/synth-shadow-memory-b-v2.ts",
     "synth:shadow-embedding:v1": "pnpm tsx scripts/synth-shadow-embedding-v1.ts",
+    "synth:memory-hygiene:v1": "pnpm tsx scripts/synth-memory-hygiene-v1.ts",
     "synth:entity-pipeline:v1": "pnpm tsx scripts/synth-entity-pipeline-v1.ts",
     "test:entity-normalizer": "pnpm tsx src/lib/services/memory/__tests__/entityNormalizer.test.ts"
   },

@@ -9,6 +9,7 @@ import {
   sanitizeEntityRefs,
   sanitizeImportance,
   sanitizeEntityLabel,
+  canonicalizeEntityRefs,
   type MemorySubtype,
 } from "./entityNormalizer";
 
@@ -201,7 +202,7 @@ async function writeMemories(
       try {
         // Sanitize Memory B fields
         const subtype = sanitizeSubtype(memory.subtype);
-        const entityRefs = sanitizeEntityRefs(memory.entityRefs);
+        const entityRefs = canonicalizeEntityRefs(sanitizeEntityRefs(memory.entityRefs));
         const entityLabel = sanitizeEntityLabel(memory.entityLabel);
         const rawImportance = sanitizeImportance(memory.importance);
 

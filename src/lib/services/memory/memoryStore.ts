@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { MODELS } from "@/lib/providers/models";
 import { env } from "@/env";
 import { MemoryType } from "@prisma/client";
+import { canonicalizeEntityRefs } from "@/lib/services/memory/entityNormalizer";
 
 export interface Memory {
   id: string;
@@ -145,17 +146,40 @@ export async function storeMemory(
   personaId?: string | null
 ): Promise<string> {
   try {
-    // Generate embedding
-    const embedding = await generateEmbedding(content);
+    const normalizedMetadata = normalizeMemoryMetadata(metadata);
+    const memoryKey = computeMemoryKey(type, content, normalizedMetadata);
 
+    if (memoryKey) {
+      const existing = await prisma.memory.findUnique({
+        where: { userId_memoryKey: { userId, memoryKey } },
+        select: { id: true, metadata: true },
+      });
+
+      if (existing) {
+        const mergedMetadata = mergeMemoryMetadata(existing.metadata, normalizedMetadata);
+        const updated = await prisma.memory.update({
+          where: { id: existing.id },
+          data: {
+            memoryKey,
+            metadata: mergedMetadata,
+          },
+        });
+        return updated.id;
+      }
+    }
+
+    const createMetadata = initializeMemoryMetadata(normalizedMetadata);
     const data: any = {
       userId,
       ...(personaId ? { personaId } : {}),
       type,
       content,
-      metadata,
+      metadata: createMetadata,
+      memoryKey,
     };
 
+    // Generate embedding only for new rows.
+    const embedding = await generateEmbedding(content);
     const created = await prisma.memory.create({ data });
     if (embedding) {
       const embeddingLiteral = `[${embedding.join(",")}]`;
@@ -170,6 +194,104 @@ export async function storeMemory(
     console.error("Memory storage failed:", error);
     throw error;
   }
+}
+
+function normalizeMemoryMetadata(metadata?: any): Record<string, unknown> {
+  if (!metadata || typeof metadata !== "object") return {};
+  const normalized: Record<string, unknown> = { ...metadata };
+
+  const refs = Array.isArray(normalized.entityRefs)
+    ? canonicalizeEntityRefs(normalized.entityRefs as string[])
+    : [];
+  if (refs.length > 0) {
+    normalized.entityRefs = refs;
+  } else {
+    delete normalized.entityRefs;
+  }
+
+  const importance = normalizeImportance(normalized.importance);
+  if (importance !== null) {
+    normalized.importance = importance;
+  } else {
+    delete normalized.importance;
+  }
+
+  return normalized;
+}
+
+function initializeMemoryMetadata(metadata: Record<string, unknown>) {
+  const base = { ...metadata };
+  if (typeof base.mentionCount !== "number") {
+    base.mentionCount = 1;
+  }
+  if (typeof base.importance !== "number") {
+    base.importance = 1;
+  }
+  return base;
+}
+
+function mergeMemoryMetadata(
+  existingMetadata: unknown,
+  incomingMetadata: Record<string, unknown>
+) {
+  const existing = (existingMetadata && typeof existingMetadata === "object"
+    ? (existingMetadata as Record<string, unknown>)
+    : {});
+
+  const existingRefs = Array.isArray(existing.entityRefs) ? (existing.entityRefs as string[]) : [];
+  const incomingRefs = Array.isArray(incomingMetadata.entityRefs)
+    ? (incomingMetadata.entityRefs as string[])
+    : [];
+  const mergedRefs = canonicalizeEntityRefs([...existingRefs, ...incomingRefs]);
+
+  const existingImportance = normalizeImportance(existing.importance) ?? 1;
+  const incomingImportance = normalizeImportance(incomingMetadata.importance) ?? 1;
+  const mergedImportance = Math.max(existingImportance, incomingImportance);
+
+  const existingCount =
+    typeof existing.mentionCount === "number" && Number.isFinite(existing.mentionCount)
+      ? (existing.mentionCount as number)
+      : 1;
+
+  return {
+    ...existing,
+    ...incomingMetadata,
+    ...(mergedRefs.length > 0 ? { entityRefs: mergedRefs } : {}),
+    importance: mergedImportance,
+    mentionCount: existingCount + 1,
+  };
+}
+
+function computeMemoryKey(
+  type: MemoryType,
+  content: string,
+  metadata: Record<string, unknown>
+): string | null {
+  const entityRefs = Array.isArray(metadata.entityRefs) ? (metadata.entityRefs as string[]) : [];
+  const primaryRef = entityRefs[0] ?? `content:${normalizeMemoryContent(content)}`;
+  const subtype = (metadata.subtype && typeof metadata.subtype === "object"
+    ? (metadata.subtype as Record<string, unknown>)
+    : {});
+  const factType = typeof subtype.factType === "string" ? subtype.factType : "fact";
+  const entityType = typeof subtype.entityType === "string" ? subtype.entityType : "none";
+  return `${type.toLowerCase()}|${entityType}|${primaryRef}|${factType}`;
+}
+
+function normalizeMemoryContent(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,!?;:'"(){}\[\]\\\/]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
+function normalizeImportance(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value < 0 || value > 3) return null;
+  return Math.round(value);
 }
 
 async function generateEmbedding(text: string): Promise<number[] | null> {
