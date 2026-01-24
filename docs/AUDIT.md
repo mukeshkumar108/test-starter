@@ -83,7 +83,7 @@ Source: `src/app/api/chat/route.ts` (messages array)
 - Stores two `Message` rows (user + assistant).
 
 **Async (non-blocking) paths**
-- Shadow Judge: `processShadowPath(...)` (fire-and-forget).
+- Shadow Judge: `processShadowPath(...)` (fire-and-forget). Inside shadow path, rolling summary updates are awaited every 4 user turns with a timeout guard.
 - Curator auto-trigger: `autoCurateMaybe(...)` (fire-and-forget).
 - Session summaries (on stale session close): `closeStaleSessionIfAny` triggers `createSessionSummary(...)` (fire-and-forget).
 
@@ -170,10 +170,19 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
   - `type` in PROFILE/PEOPLE/PROJECT
   - `embedding IS NOT NULL`
   - JS filter: `metadata.status != ARCHIVED`
-- No recency or importance weighting.
+- Stage 3 pipeline (enabled when `FEATURE_ENTITY_PIPELINE !== "false"`):
+  - Top‑K prefilter: `PREFILTER_K = 50` vector candidates.
+  - Blended re‑rank: similarity (0.4) + recency (0.3) + frequency (0.3), then sort by blended score.
 
 **Foundation memory**
 - `contextBuilder` reads `Memory` where `pinned=true` and `personaId = current OR personaId IS NULL`, capped 20.
+
+**Entity card expansion**
+- In `contextBuilder`, when `FEATURE_ENTITY_PIPELINE !== "false"`:
+  - Extracts `entityRefs` from **all** relevant memories (before per‑type caps).
+  - SQL‑filtered 1‑hop fetch with `metadata->'entityRefs' ?| ARRAY[...]` and `(pinned = true OR importance >= 2)`.
+  - Sorted by `pinned DESC → importance DESC → createdAt DESC`.
+  - Injected at **top** of `[RELEVANT MEMORIES]` block (max 5 cards, 3 facts each).
 
 **Todos**
 - `commitments/threads/frictions` read from `Todo` scoped by userId + personaId + kind + status.
@@ -187,6 +196,7 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 **Env flags (`src/env.ts`)**
 - `FEATURE_MEMORY_CURATOR` (default false) → enables curator.
 - `FEATURE_CONTEXT_DEBUG` (default false) → adds debug blocks to response.
+- `FEATURE_ENTITY_PIPELINE` (default true unless "false") → enables blended ranking + entity cards.
 - `FEATURE_SESSION_SUMMARY` (default true unless "false") → creates SessionSummary on session close.
 - `FEATURE_SUMMARY_TEST_STALL` (test only).
 - `FEATURE_JUDGE_TEST_MODE` (test only).
@@ -199,7 +209,7 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 - `Memory.pinned` (default false) controls foundation inclusion.
 
 **Rolling summary**
-- `SessionState.rollingSummary` set async every 4 turns in Shadow Judge.
+- `SessionState.rollingSummary` updated every 4 user turns in Shadow Judge, awaited with timeout guard; diagnostics stored in `SessionState.state` (attempt/success/error timestamps).
 
 
 ## 7) Latency / Perf Hotspots (Static Analysis Only)
@@ -223,7 +233,7 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 - message writes (2)
 
 **Async path DB calls**
-- Shadow Judge: recent messages (1), memory writes (0–N), todo writes (0–N), sessionState upsert (1), summarySpine create (0–1), rolling summary update (0–1).
+- Shadow Judge: recent messages (1), memory writes (0–N), todo writes (0–N), sessionState upsert (1), summarySpine create (0–1), rolling summary update (0–1) + diagnostic state updates (0–2).
 - Curator: `sessionState` read + memory reads + updates/creates.
 
 **Obvious hotspots**
@@ -260,7 +270,7 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 - `src/lib/services/voice/ttsService.ts`
 
 **Schema / Config / Seeds**
-- `prisma/schema.prisma` — Memory (includes `personaId`), Todo, Session, SessionSummary, SessionState, PersonaProfile.
+- `prisma/schema.prisma` — Memory (includes `personaId`, `memoryKey`, `pinned`), Todo, Session, SessionSummary, SessionState, PersonaProfile.
 - `src/lib/seed.ts` — persona seeds (slugs and prompts).
 - `src/lib/providers/models.ts` — model IDs.
 - `src/env.ts` — feature flags and required keys.
