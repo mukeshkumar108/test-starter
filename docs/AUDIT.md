@@ -83,8 +83,9 @@ Source: `src/app/api/chat/route.ts` (messages array)
 - Stores two `Message` rows (user + assistant).
 
 **Async (non-blocking) paths**
-- Shadow Judge: `processShadowPath(...)` (fire-and-forget). Inside shadow path, rolling summary updates are awaited every 4 user turns with a timeout guard.
-- Curator auto-trigger: `autoCurateMaybe(...)` (fire-and-forget).
+- Shadow Judge: `processShadowPath(...)` (fire-and-forget). Inside shadow path, rolling summary updates are awaited every 4 user turns with a timeout guard. Also triggers `curatorTodoHygiene(...)` for todo cleanup.
+- Curator V1 Todo Hygiene: `curatorTodoHygiene(...)` (fire-and-forget, called from shadow path). Handles commitment completion, habit promotion, thread cleanup.
+- Curator auto-trigger: `autoCurateMaybe(...)` (fire-and-forget). Memory folding and deduplication.
 - Session summaries (on stale session close): `closeStaleSessionIfAny` triggers `createSessionSummary(...)` (fire-and-forget).
 
 **DB reads/writes (chat path)**
@@ -157,6 +158,60 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 - Pinned applies only to foundation memory query (context builder). Shadow Judge does not set pinned.
 **Persona scoping (writes)**
 - Shadow Judge memory writes remain global (`Memory.personaId` is left NULL).
+
+**Curator V1 integration**
+- After todo writes, shadow path calls `curatorTodoHygiene(userId, personaId, userMessage)` async.
+- Gated by `FEATURE_MEMORY_CURATOR === "true"`.
+
+
+## 4b) Curator V1 Contract (CURRENT)
+
+**Source**: `src/lib/services/memory/memoryCurator.ts`
+
+**Trigger**
+- Called from `processShadowPath()` after todo writes (async, non-blocking).
+- Gated by `FEATURE_MEMORY_CURATOR === "true"`.
+
+**Todo Hygiene Operations**
+
+1. **Commitment Completion** (`curatorCompleteCommitment`)
+   - Detects completion signals: "I did", "I finished", "went for", "took", "had my", etc.
+   - Finds best matching PENDING COMMITMENT via keyword overlap scoring.
+   - Marks commitment as COMPLETED with timestamp.
+   - Creates Win record (Todo with `✓` prefix and `win:` dedupe key).
+   - Idempotent: checks for existing win by dedupe key.
+
+2. **Habit Promotion** (`curatorPromoteToHabit`)
+   - Detects recurrence signals: "every day", "daily", "routine", "weekly", etc.
+   - Finds matching recent COMMITMENT (within 24h) via keyword overlap.
+   - Creates HABIT if no similar habit exists (checks dedupeKey, content, keyword overlap).
+   - Marks original COMMITMENT as COMPLETED (not deleted).
+
+3. **Thread Cleanup** (`curatorCleanThreads`)
+   - Detects non-actionable threads: weather, "just thinking", "by the way", etc.
+   - Marks matching PENDING THREADs as SKIPPED.
+   - Processes up to 20 threads per run.
+
+4. **Memory Hygiene** (`curatorMemoryHygiene`)
+   - Archives duplicate low-importance memories (importance ≤ 1).
+   - Never touches pinned memories.
+   - Groups by normalized content, keeps newest, archives rest.
+
+**Win Records**
+- Stored as Todo with kind=COMMITMENT, status=COMPLETED.
+- Content prefixed with `✓` (e.g., "✓ Go for a walk").
+- Dedupe key format: `win:<original_dedupe_key>`.
+- Idempotent per commitment per day.
+
+**Keyword Matching**
+- Extracts action keywords (>2 chars, excludes stopwords).
+- Scores commitment match by counting keyword overlaps.
+- Requires score ≥ 1 or single pending commitment.
+
+**Guardrails**
+- No deletes — only status updates (COMPLETED, SKIPPED, ARCHIVED).
+- Async/non-blocking — never blocks user response.
+- Feature flagged — disabled by default.
 
 
 ## 5) Retrieval Strategy (CURRENT)
@@ -234,7 +289,8 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 
 **Async path DB calls**
 - Shadow Judge: recent messages (1), memory writes (0–N), todo writes (0–N), sessionState upsert (1), summarySpine create (0–1), rolling summary update (0–1) + diagnostic state updates (0–2).
-- Curator: `sessionState` read + memory reads + updates/creates.
+- Curator V1 (todo hygiene): pending todos (1–3), existing habits (0–1), todo updates (0–N), win creates (0–1).
+- Curator (memory folding): `sessionState` read + memory reads + updates/creates.
 
 **Obvious hotspots**
 - `searchMemories` triggers embedding call (network) + queryRaw.
