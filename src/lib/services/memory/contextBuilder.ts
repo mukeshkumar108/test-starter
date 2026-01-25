@@ -20,6 +20,8 @@ export interface ConversationContext {
   recentWins: string[];
   summarySpine?: string;
   sessionSummary?: string;
+  /** True if this is the first turn of a new session (for conditional SessionSummary injection) */
+  isSessionStart: boolean;
 }
 
 const MAX_COMMITMENTS = 5;
@@ -263,8 +265,8 @@ export async function buildContext(
       env.FEATURE_SUMMARY_SPINE_GLOBAL !== "false" &&
       persona.enableSummarySpine !== false;
 
-    // Get latest summary spine
-    const summarySpine = summarySpineEnabled
+    // Get latest summary spine (only if enabled)
+    const summarySpineRecord = summarySpineEnabled
       ? await prisma.summarySpine.findFirst({
           where: {
             userId,
@@ -274,7 +276,18 @@ export async function buildContext(
         })
       : null;
 
+    // Validate summarySpine content - return undefined if empty or placeholder
+    const summarySpineContent = summarySpineRecord?.content?.trim();
+    const isSpineEmpty = !summarySpineContent ||
+      summarySpineContent === "" ||
+      /^PROFILE:\s*-?\s*$/i.test(summarySpineContent) ||
+      summarySpineContent.length < 20;
+
     const latestSessionSummary = await getLatestSessionSummary(userId, personaId);
+
+    // Detect session start: no recent messages for this persona means new session
+    // This is used for conditional SessionSummary injection
+    const isSessionStart = messages.length === 0;
 
     const formatMemory = (memory: { content: string; metadata?: any }) => {
       const source = memory.metadata?.source;
@@ -398,11 +411,17 @@ export async function buildContext(
       select: { content: true },
     });
 
+    // Only include rollingSummary if non-empty
+    const rollingSummaryContent = sessionState?.rollingSummary?.trim();
+    const validRollingSummary = rollingSummaryContent && rollingSummaryContent.length > 0
+      ? rollingSummaryContent.slice(0, MAX_ROLLING_SUMMARY_CHARS)
+      : undefined;
+
     return {
       persona: personaPrompt,
       userSeed: userSeed?.content?.slice(0, MAX_USER_SEED_CHARS),
       sessionState: sessionState?.state,
-      rollingSummary: sessionState?.rollingSummary?.slice(0, MAX_ROLLING_SUMMARY_CHARS),
+      rollingSummary: validRollingSummary,
       recentMessages: messages
         .map((message) => ({
           ...message,
@@ -415,8 +434,12 @@ export async function buildContext(
       threads: threads.map((todo) => todo.content),
       frictions: frictions.map((todo) => todo.content),
       recentWins: recentWins.map((todo) => todo.content),
-      summarySpine: summarySpine?.content?.slice(0, MAX_SUMMARY_SPINE_CHARS),
+      // Only include summarySpine if enabled AND has meaningful content
+      summarySpine: (summarySpineEnabled && !isSpineEmpty)
+        ? summarySpineContent!.slice(0, MAX_SUMMARY_SPINE_CHARS)
+        : undefined,
       sessionSummary: formatSessionSummary(latestSessionSummary?.summary),
+      isSessionStart,
     };
   } catch (error) {
     console.error("Context Builder Error:", error);

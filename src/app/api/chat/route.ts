@@ -333,8 +333,15 @@ export async function POST(request: NextRequest) {
     const frictionStrings = context.frictions.join("\n");
     const recentWins = context.recentWins;
     const recentWinStrings = recentWins.join("\n");
+    // Rolling summary: only if non-empty (already validated in contextBuilder)
     const rollingSummary = context.rollingSummary ?? "";
-    let sessionSummary = context.sessionSummary ?? "";
+    // SessionSummary: only inject on session boundary (first turn or gap > 30m)
+    // Gap detection: if lastMessage is older than 30m, we're resuming
+    const hasGap = lastMessage?.createdAt
+      ? (now.getTime() - lastMessage.createdAt.getTime()) > 30 * 60 * 1000
+      : false;
+    const shouldInjectSessionSummary = context.isSessionStart || hasGap;
+    let sessionSummary = (shouldInjectSessionSummary && context.sessionSummary) ? context.sessionSummary : "";
     let relevantMemoryStrings = context.relevantMemories.join("\n");
     const nonPinnedFoundationStrings = "";
     const foundationMemoryStrings = context.foundationMemories.join("\n");

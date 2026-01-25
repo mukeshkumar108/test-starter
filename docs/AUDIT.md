@@ -50,13 +50,19 @@ Source: `src/app/api/chat/route.ts` (messages array)
     - Optional.
 11. **Conversation summary (SummarySpine)**
     - Source: `context.summarySpine`.
-    - Optional; persona-scoped via `persona.enableSummarySpine` and `FEATURE_SUMMARY_SPINE_GLOBAL`.
+    - **Conditional injection**: Fully omitted (returns undefined) when:
+      - `persona.enableSummarySpine === false`, OR
+      - `FEATURE_SUMMARY_SPINE_GLOBAL === "false"`, OR
+      - Content is empty/placeholder (e.g., "PROFILE: -" or < 20 chars)
 12. **CURRENT SESSION SUMMARY**
     - Source: `context.rollingSummary` (from SessionState.rollingSummary).
-    - Optional.
+    - **Conditional injection**: Only injected if non-empty string.
 13. **LATEST SESSION SUMMARY**
     - Source: `context.sessionSummary` (SessionSummary table).
-    - Optional; dropped second if budget exceeded.
+    - **Conditional injection**: Only injected on session boundary:
+      - `isSessionStart === true` (no recent messages for persona), OR
+      - `hasGap === true` (> 30 minutes since last message)
+    - Dropped second if budget exceeded.
 14. **Recent message history**
     - Source: `context.recentMessages` (last 6).
     - Always-on.
@@ -126,6 +132,13 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 **Budget drop order**
 - `relevantMemories` → `sessionSummary` → `threads` → `non-pinned foundation overflow` (placeholder).
 - Never dropped: real-time, persona prompt, commitments, frictions, pinned foundation, rolling summary, last 6 turns.
+
+**Conditional injection flags**
+- `isSessionStart`: True when no recent messages exist for this user+persona. Returned by `contextBuilder`.
+- `hasGap`: True when > 30 minutes since last message. Computed in `route.ts`.
+- SessionSummary is only injected when `isSessionStart || hasGap`.
+- SummarySpine is only included when enabled AND has meaningful content (>20 chars, not placeholder).
+- RollingSummary is only included when non-empty.
 
 
 ## 4) Shadow Judge Contract (CURRENT)
