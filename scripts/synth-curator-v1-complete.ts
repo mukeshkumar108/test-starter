@@ -1,10 +1,10 @@
 /**
- * Synth test for Curator V1: Commitment Completion + Win Extraction
+ * Synth test for Curator V1: Commitment Completion (Win Consolidation)
  *
  * Verifies:
  * - When user says "I did my walk today", the COMMITMENT is marked COMPLETED
- * - A Win record is created
- * - No duplicate Todos created
+ * - No separate Win record is created (win consolidation)
+ * - The completed commitment IS the win
  *
  * Run with: pnpm synth:curator-v1-complete
  */
@@ -19,7 +19,7 @@ async function main() {
   const personaId = await getPersonaIdBySlug("creative");
   const errors: string[] = [];
 
-  console.log("\n=== Curator V1 Completion Synth Test ===\n");
+  console.log("\n=== Curator V1 Completion Synth Test (Win Consolidation) ===\n");
   console.log(`User ID: ${user.id}`);
   console.log(`Persona ID: ${personaId}`);
 
@@ -77,25 +77,31 @@ async function main() {
     }
 
     // Assert: Original COMMITMENT is COMPLETED
-    const completedCommitments = todos.filter(
+    const completedCommitment = todos.find(
       (t) => t.kind === "COMMITMENT" && t.status === "COMPLETED" && t.content === "Go for a walk"
     );
-    if (completedCommitments.length === 0) {
+    if (!completedCommitment) {
       errors.push("COMMITMENT was not marked COMPLETED");
       console.log("[FAIL] COMMITMENT was not marked COMPLETED");
     } else {
       console.log("[PASS] COMMITMENT marked COMPLETED");
+      if (completedCommitment.completedAt) {
+        console.log(`[PASS] completedAt is set: ${completedCommitment.completedAt.toISOString()}`);
+      } else {
+        errors.push("completedAt not set on completed commitment");
+        console.log("[FAIL] completedAt not set");
+      }
     }
 
-    // Assert: A Win record exists (marked with ✓ prefix or has win dedupe key)
-    const winRecords = todos.filter(
+    // Assert: NO separate Win record created (win consolidation)
+    const legacyWinRecords = todos.filter(
       (t) => t.content.startsWith("✓") || (t.dedupeKey && t.dedupeKey.startsWith("win:"))
     );
-    if (winRecords.length === 0) {
-      errors.push("No Win record was created");
-      console.log("[FAIL] No Win record was created");
+    if (legacyWinRecords.length > 0) {
+      errors.push(`Unexpected legacy Win record(s) created: ${legacyWinRecords.map((w) => w.content).join(", ")}`);
+      console.log("[FAIL] Legacy Win record was created (should NOT happen with win consolidation)");
     } else {
-      console.log(`[PASS] Win record created: ${winRecords.map((w) => w.content).join(", ")}`);
+      console.log("[PASS] No separate Win record created (win consolidation working)");
     }
 
     // Assert: No pending commitment for "Go for a walk" remains
@@ -112,22 +118,21 @@ async function main() {
       console.log("[PASS] No PENDING walk commitment remains");
     }
 
-    // Assert: No duplicate wins
-    const walkWins = winRecords.filter((w) =>
-      w.content.toLowerCase().includes("walk")
-    );
-    if (walkWins.length > 1) {
-      errors.push("Duplicate Win records created");
-      console.log("[FAIL] Duplicate Win records");
-    } else if (walkWins.length === 1) {
-      console.log("[PASS] No duplicate Win records");
+    // Note: Shadow judge may create additional todos (e.g., HABIT from "I did my walk today")
+    // The key assertion is that NO separate ✓ win row is created
+    const commitmentTodos = todos.filter((t) => t.kind === "COMMITMENT");
+    if (commitmentTodos.length !== 1) {
+      errors.push(`Expected 1 COMMITMENT todo, got ${commitmentTodos.length}`);
+      console.log(`[FAIL] Expected 1 COMMITMENT todo, got ${commitmentTodos.length}`);
+    } else {
+      console.log("[PASS] Exactly 1 COMMITMENT todo (no duplicate win row)");
     }
 
     // Summary
     console.log("\n=== Summary ===\n");
     console.log(`Total todos: ${todos.length}`);
-    console.log(`Completed commitments: ${completedCommitments.length}`);
-    console.log(`Win records: ${winRecords.length}`);
+    console.log(`Completed commitment: ${completedCommitment ? "yes" : "no"}`);
+    console.log(`Legacy win records: ${legacyWinRecords.length}`);
 
     if (errors.length > 0) {
       console.log(`\n[FAIL] Curator V1 Completion Test FAILED with ${errors.length} error(s):`);

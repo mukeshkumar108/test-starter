@@ -396,7 +396,8 @@ export async function buildContext(
       );
     }
 
-    const recentWins = await prisma.todo.findMany({
+    // Recent wins: completed commitments (not legacy ✓ win rows)
+    const recentWinsRaw = await prisma.todo.findMany({
       where: {
         userId,
         personaId,
@@ -407,9 +408,13 @@ export async function buildContext(
         },
       },
       orderBy: { completedAt: "desc" },
-      take: 3,
-      select: { content: true },
+      take: 6, // Fetch more to filter out legacy win rows
+      select: { content: true, dedupeKey: true },
     });
+    // Filter out legacy ✓ win rows (created by old curator version)
+    const recentWins = recentWinsRaw
+      .filter((w) => !w.content.startsWith("✓") && !w.dedupeKey?.startsWith("win:"))
+      .slice(0, 3);
 
     // Only include rollingSummary if non-empty
     const rollingSummaryContent = sessionState?.rollingSummary?.trim();

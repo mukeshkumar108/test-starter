@@ -169,8 +169,16 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 
 **Pinned behavior**
 - Pinned applies only to foundation memory query (context builder). Shadow Judge does not set pinned.
-**Persona scoping (writes)**
-- Shadow Judge memory writes remain global (`Memory.personaId` is left NULL).
+
+**Persona scoping (writes) — Design Intent**
+- **Memory writes are GLOBAL** (`Memory.personaId` is NULL) by design.
+  - Rationale: User identity facts (name, job, relationships) should be shared across all personas.
+  - A fact learned by Sophie should be available to William.
+  - This enables unified identity across the companion system.
+- **Todo writes are PERSONA-SCOPED** (`Todo.personaId` is set) by design.
+  - Rationale: Commitments and threads are conversational artifacts, not durable facts.
+  - A commitment made to Coach persona is specific to that persona's context.
+  - Different personas may have different conversation threads active.
 
 **Curator V1 integration**
 - After todo writes, shadow path calls `curatorTodoHygiene(userId, personaId, userMessage)` async.
@@ -189,10 +197,16 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
 
 1. **Commitment Completion** (`curatorCompleteCommitment`)
    - Detects completion signals: "I did", "I finished", "went for", "took", "had my", etc.
-   - Finds best matching PENDING COMMITMENT via keyword overlap scoring.
+   - **Deterministic matching** (first attempt):
+     - Extracts action keywords from user message
+     - Scores commitment match by counting keyword overlaps
+     - Completes if score >= 1 OR single pending commitment
+   - **Semantic fallback** (when deterministic fails):
+     - Triggered when deterministic score == 0 AND multiple pending commitments
+     - Uses `MODELS.JUDGE` to match semantically (e.g., "took a stroll" → "go for a walk")
+     - Confidence threshold: >= 0.65
+     - Test mode: `FEATURE_CURATOR_SEMANTIC_TEST=true` uses stub values
    - Marks commitment as COMPLETED with timestamp.
-   - Creates Win record (Todo with `✓` prefix and `win:` dedupe key).
-   - Idempotent: checks for existing win by dedupe key.
 
 2. **Habit Promotion** (`curatorPromoteToHabit`)
    - Detects recurrence signals: "every day", "daily", "routine", "weekly", etc.
@@ -210,21 +224,24 @@ There is **no separate /api/voice route**. Voice is handled by `/api/chat`.
    - Never touches pinned memories.
    - Groups by normalized content, keeps newest, archives rest.
 
-**Win Records**
-- Stored as Todo with kind=COMMITMENT, status=COMPLETED.
-- Content prefixed with `✓` (e.g., "✓ Go for a walk").
-- Dedupe key format: `win:<original_dedupe_key>`.
-- Idempotent per commitment per day.
+**Win Consolidation** (v1.1)
+- **No separate win rows**: Completed commitments ARE the wins.
+- Legacy `✓` prefixed win rows are filtered out in context retrieval.
+- Query recent wins via: `Todo.kind=COMMITMENT AND status=COMPLETED` (last 48h by completedAt).
 
-**Keyword Matching**
-- Extracts action keywords (>2 chars, excludes stopwords).
-- Scores commitment match by counting keyword overlaps.
-- Requires score ≥ 1 or single pending commitment.
+**Observability (Semantic Matching)**
+- Diagnostics stored in `SessionState.state`:
+  - `lastCuratorSemanticAttemptAt`: ISO timestamp of last semantic attempt
+  - `lastCuratorSemanticMatch`: todoId or "NONE"
+  - `lastCuratorSemanticConfidence`: 0-1 confidence score
+  - `lastCuratorSemanticReason`: reason string from LLM
+  - `lastCuratorSemanticError`: error string if call failed
 
 **Guardrails**
 - No deletes — only status updates (COMPLETED, SKIPPED, ARCHIVED).
 - Async/non-blocking — never blocks user response.
 - Feature flagged — disabled by default.
+- Semantic matching requires confidence >= 0.65 (never completes on low confidence).
 
 
 ## 5) Retrieval Strategy (CURRENT)

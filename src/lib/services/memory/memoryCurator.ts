@@ -1,12 +1,153 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
 import { MemoryType, TodoKind, type Memory as MemoryRecord } from "@prisma/client";
+import { MODELS } from "@/lib/providers/models";
 
 const MAX_FOLDS_PER_RUN = 5;
+const SEMANTIC_CONFIDENCE_THRESHOLD = 0.65;
+const MAX_COMMITMENTS_FOR_SEMANTIC = 10;
 
 // ============================================================
 // CURATOR V1: TODO HYGIENE
 // ============================================================
+
+interface SemanticMatchResult {
+  match: string; // todoId or "NONE"
+  confidence: number;
+  reason: string;
+}
+
+/**
+ * Semantic fallback for commitment matching using LLM
+ * Only called when deterministic matching fails (score == 0)
+ */
+async function semanticCommitmentMatch(
+  userMessage: string,
+  pendingCommitments: Array<{ id: string; content: string; dedupeKey: string | null; createdAt: Date }>
+): Promise<SemanticMatchResult | null> {
+  if (pendingCommitments.length === 0) return null;
+
+  // Test mode: check for stub response
+  if (process.env.FEATURE_CURATOR_SEMANTIC_TEST === "true") {
+    const stubMatch = process.env.CURATOR_SEMANTIC_TEST_MATCH;
+    const stubConfidence = parseFloat(process.env.CURATOR_SEMANTIC_TEST_CONFIDENCE ?? "0.9");
+    if (stubMatch) {
+      return { match: stubMatch, confidence: stubConfidence, reason: "test_stub" };
+    }
+  }
+
+  const commitmentsForPrompt = pendingCommitments.slice(0, MAX_COMMITMENTS_FOR_SEMANTIC);
+  const commitmentsJson = commitmentsForPrompt.map((c) => ({
+    id: c.id,
+    content: c.content,
+    dedupeKey: c.dedupeKey,
+    createdAt: c.createdAt.toISOString(),
+  }));
+
+  const prompt = `Did the user complete any of these pending commitments?
+
+USER MESSAGE:
+"${userMessage}"
+
+PENDING COMMITMENTS:
+${JSON.stringify(commitmentsJson, null, 2)}
+
+RULES:
+- Match if the user is clearly stating they DID the commitment (past tense, completed action)
+- "took a stroll" matches "go for a walk" (same activity, different words)
+- "finished my morning walk" matches "walk" or "morning walk"
+- Do NOT match if the user is just discussing or planning
+- If multiple could match, pick the most specific one
+- If none match, return "NONE"
+
+Return ONLY valid JSON:
+{"match": "<todoId or NONE>", "confidence": 0.0-1.0, "reason": "..."}`;
+
+  try {
+    const timeoutMs = 3000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODELS.JUDGE,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 150,
+        temperature: 0,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      console.warn("[curator.semantic.error]", { status: response.status });
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content ?? "";
+
+    // Parse JSON response
+    const cleaned = content.trim().replace(/^```json?\s*/i, "").replace(/```$/i, "").trim();
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start === -1 || end === -1) return null;
+
+    const parsed = JSON.parse(cleaned.slice(start, end + 1)) as SemanticMatchResult;
+
+    // Validate response
+    if (
+      typeof parsed.match !== "string" ||
+      typeof parsed.confidence !== "number" ||
+      parsed.confidence < 0 ||
+      parsed.confidence > 1
+    ) {
+      return null;
+    }
+
+    return parsed;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      console.warn("[curator.semantic.timeout]");
+    } else {
+      console.warn("[curator.semantic.error]", { error });
+    }
+    return null;
+  }
+}
+
+/**
+ * Update SessionState with curator semantic matching diagnostics
+ */
+async function updateCuratorDiagnostics(
+  userId: string,
+  personaId: string,
+  patch: Record<string, unknown>
+) {
+  try {
+    const existing = await prisma.sessionState.findUnique({
+      where: { userId_personaId: { userId, personaId } },
+      select: { state: true },
+    });
+    const currentState =
+      existing?.state && typeof existing.state === "object"
+        ? (existing.state as Record<string, unknown>)
+        : {};
+    await prisma.sessionState.upsert({
+      where: { userId_personaId: { userId, personaId } },
+      update: { state: { ...currentState, ...patch } as any },
+      create: { userId, personaId, state: patch as any },
+    });
+  } catch (error) {
+    console.warn("[curator.diagnostics.error]", { error });
+  }
+}
 
 // Patterns for completion detection
 const COMPLETION_PATTERNS = [
@@ -61,32 +202,29 @@ function scoreCommitmentMatch(commitmentContent: string, actionKeywords: string[
 }
 
 /**
- * Check if a date is today (for win idempotency)
- */
-function isToday(date: Date): boolean {
-  const today = new Date();
-  return (
-    date.getFullYear() === today.getFullYear() &&
-    date.getMonth() === today.getMonth() &&
-    date.getDate() === today.getDate()
-  );
-}
-
-/**
- * Curator V1: Complete matching commitment and extract win
+ * Curator V1: Complete matching commitment
  *
  * When user confirms completion ("I did my walk", "I went out"):
- * 1. Find the most recent matching PENDING COMMITMENT
- * 2. Mark it COMPLETED with timestamp
- * 3. Create a Win record (idempotent)
+ * 1. Try deterministic keyword matching first
+ * 2. If score == 0, fall back to semantic LLM matching
+ * 3. Mark commitment COMPLETED with timestamp
+ *
+ * Win consolidation: No separate win rows created. The completed commitment
+ * IS the win (status=COMPLETED, completedAt set). Query recentWins via
+ * status=COMPLETED + kind=COMMITMENT.
  */
 export async function curatorCompleteCommitment(
   userId: string,
   personaId: string,
   userMessage: string
-): Promise<{ completed: boolean; winCreated: boolean; commitmentId?: string }> {
+): Promise<{
+  completed: boolean;
+  commitmentId?: string;
+  completionMethod?: "deterministic" | "semantic";
+  completionConfidence?: number;
+}> {
   if (!isCuratorEnabled()) {
-    return { completed: false, winCreated: false };
+    return { completed: false };
   }
 
   // Check if message signals completion
@@ -94,7 +232,7 @@ export async function curatorCompleteCommitment(
     pattern.test(userMessage)
   );
   if (!hasCompletionSignal) {
-    return { completed: false, winCreated: false };
+    return { completed: false };
   }
 
   // Get pending commitments
@@ -109,10 +247,10 @@ export async function curatorCompleteCommitment(
   });
 
   if (pendingCommitments.length === 0) {
-    return { completed: false, winCreated: false };
+    return { completed: false };
   }
 
-  // Extract keywords and find best matching commitment
+  // Extract keywords and find best matching commitment (deterministic)
   const actionKeywords = extractActionKeywords(userMessage);
   let bestMatch = pendingCommitments[0];
   let bestScore = 0;
@@ -125,15 +263,81 @@ export async function curatorCompleteCommitment(
     }
   }
 
-  // If only one commitment or we found a good match, complete it
-  const shouldComplete = pendingCommitments.length === 1 || bestScore >= 1;
-  if (!shouldComplete) {
-    return { completed: false, winCreated: false };
+  let completionMethod: "deterministic" | "semantic" = "deterministic";
+  let completionConfidence = 1.0;
+
+  // Deterministic path: single commitment or good keyword match
+  const deterministicMatch = pendingCommitments.length === 1 || bestScore >= 1;
+
+  if (!deterministicMatch) {
+    // Semantic fallback: score == 0 and multiple commitments
+    console.log("[curator.v1.semantic_fallback]", {
+      userId,
+      personaId,
+      deterministicScore: bestScore,
+      pendingCount: pendingCommitments.length,
+    });
+
+    await updateCuratorDiagnostics(userId, personaId, {
+      lastCuratorSemanticAttemptAt: new Date().toISOString(),
+    });
+
+    const semanticResult = await semanticCommitmentMatch(
+      userMessage,
+      pendingCommitments.map((c) => ({
+        id: c.id,
+        content: c.content,
+        dedupeKey: c.dedupeKey,
+        createdAt: c.createdAt,
+      }))
+    );
+
+    if (semanticResult) {
+      await updateCuratorDiagnostics(userId, personaId, {
+        lastCuratorSemanticMatch: semanticResult.match,
+        lastCuratorSemanticConfidence: semanticResult.confidence,
+        lastCuratorSemanticReason: semanticResult.reason,
+      });
+
+      // Check confidence threshold
+      if (
+        semanticResult.match !== "NONE" &&
+        semanticResult.confidence >= SEMANTIC_CONFIDENCE_THRESHOLD
+      ) {
+        // Find the matched commitment
+        const matched = pendingCommitments.find((c) => c.id === semanticResult.match);
+        if (matched) {
+          bestMatch = matched;
+          completionMethod = "semantic";
+          completionConfidence = semanticResult.confidence;
+        } else {
+          console.warn("[curator.v1.semantic_id_mismatch]", {
+            expectedId: semanticResult.match,
+            availableIds: pendingCommitments.map((c) => c.id),
+          });
+          return { completed: false };
+        }
+      } else {
+        // Semantic match failed confidence check or returned NONE
+        console.log("[curator.v1.semantic_no_match]", {
+          match: semanticResult.match,
+          confidence: semanticResult.confidence,
+          threshold: SEMANTIC_CONFIDENCE_THRESHOLD,
+        });
+        return { completed: false };
+      }
+    } else {
+      // Semantic call failed
+      await updateCuratorDiagnostics(userId, personaId, {
+        lastCuratorSemanticError: "semantic_call_failed",
+      });
+      return { completed: false };
+    }
   }
 
   const now = new Date();
 
-  // Mark commitment as completed
+  // Mark commitment as completed (no separate win row needed)
   await prisma.todo.update({
     where: { id: bestMatch.id },
     data: {
@@ -142,57 +346,22 @@ export async function curatorCompleteCommitment(
     },
   });
 
-  // Check for existing win today (idempotency)
-  const existingWin = await prisma.todo.findFirst({
-    where: {
-      userId,
-      personaId,
-      kind: TodoKind.COMMITMENT, // We use COMMITMENT + isWin metadata
-      status: "COMPLETED",
-      completedAt: {
-        gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-        lt: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1),
-      },
-    },
-  });
-
-  // Check if this specific commitment already has a win
-  const winDedupeKey = `win:${bestMatch.dedupeKey ?? normalizeContent(bestMatch.content)}`;
-  const existingWinForCommitment = await prisma.todo.findFirst({
-    where: {
-      userId,
-      personaId,
-      dedupeKey: winDedupeKey,
-    },
-  });
-
-  let winCreated = false;
-  if (!existingWinForCommitment) {
-    // Create win record using Todo with metadata flag
-    await prisma.todo.create({
-      data: {
-        userId,
-        personaId,
-        content: `✓ ${bestMatch.content}`,
-        kind: TodoKind.COMMITMENT, // Reuse COMMITMENT kind
-        status: "COMPLETED",
-        completedAt: now,
-        dedupeKey: winDedupeKey,
-      },
-    });
-    winCreated = true;
-  }
-
   console.log("[curator.v1.complete]", {
     userId,
     personaId,
     commitmentId: bestMatch.id,
     commitmentContent: bestMatch.content,
-    matchScore: bestScore,
-    winCreated,
+    completionMethod,
+    completionConfidence,
+    deterministicScore: bestScore,
   });
 
-  return { completed: true, winCreated, commitmentId: bestMatch.id };
+  return {
+    completed: true,
+    commitmentId: bestMatch.id,
+    completionMethod,
+    completionConfidence,
+  };
 }
 
 /**
@@ -460,13 +629,18 @@ export async function curatorTodoHygiene(
   personaId: string,
   userMessage: string
 ): Promise<{
-  completionResult: { completed: boolean; winCreated: boolean };
+  completionResult: {
+    completed: boolean;
+    commitmentId?: string;
+    completionMethod?: "deterministic" | "semantic";
+    completionConfidence?: number;
+  };
   habitResult: { promoted: boolean; habitCreated: boolean };
   threadResult: { cleaned: number };
 }> {
   if (!isCuratorEnabled()) {
     return {
-      completionResult: { completed: false, winCreated: false },
+      completionResult: { completed: false },
       habitResult: { promoted: false, habitCreated: false },
       threadResult: { cleaned: 0 },
     };

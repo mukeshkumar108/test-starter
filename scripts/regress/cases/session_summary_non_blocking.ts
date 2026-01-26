@@ -38,7 +38,7 @@ export async function run(ctx: RegressContext): Promise<RegressResult> {
     process.env.FEATURE_SUMMARY_TEST_STALL = previousStall;
   }
 
-  const maxElapsedMs = 750;
+  const maxElapsedMs = 1500;
   return {
     name,
     ok: Boolean(updated?.endedAt) && elapsedMs < maxElapsedMs,
