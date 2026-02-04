@@ -12,6 +12,7 @@ import { env } from "@/env";
 import { getChatModelForPersona } from "@/lib/providers/models";
 import { searchMemories } from "@/lib/services/memory/memoryStore";
 import { closeStaleSessionIfAny, ensureActiveSession } from "@/lib/services/session/sessionService";
+import * as synapseClient from "@/lib/services/synapseClient";
 
 export const runtime = "nodejs";
 
@@ -314,7 +315,7 @@ export async function POST(request: NextRequest) {
 
     const now = new Date();
     await closeStaleSessionIfAny(user.id, personaId, now);
-    await ensureActiveSession(user.id, personaId, now);
+    const session = await ensureActiveSession(user.id, personaId, now);
 
     // Step 2: Build conversation context
     const requestTimeZone = getRequestTimeZone(request);
@@ -563,6 +564,17 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    if (env.FEATURE_SYNAPSE_INGEST === "true") {
+      fireAndForgetSynapseIngest({
+        requestId,
+        userId: user.id,
+        personaId,
+        sessionId: session.id,
+        transcript: sttResult.transcript,
+        assistantText: llmResponse.content,
+      });
+    }
+
     // SHADOW PATH: Process memory updates asynchronously
     // Note: In production, use waitUntil() from @vercel/functions
     // For v0.1, using Promise without await to simulate non-blocking
@@ -606,3 +618,65 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+function fireAndForgetSynapseIngest(params: {
+  requestId: string;
+  userId: string;
+  personaId: string;
+  sessionId: string;
+  transcript: string;
+  assistantText: string;
+}) {
+  const { requestId, userId, personaId, sessionId, transcript, assistantText } = params;
+  const basePayload = {
+    tenantId: env.SYNAPSE_TENANT_ID,
+    userId,
+    personaId,
+    sessionId,
+    metadata: { sessionId },
+  };
+
+  const getIngest = () => {
+    const override = (globalThis as { __synapseIngestOverride?: typeof synapseClient.ingest })
+      .__synapseIngestOverride;
+    return typeof override === "function" ? override : synapseClient.ingest;
+  };
+
+  const ingestOne = (
+    role: "user" | "assistant",
+    text: string
+  ) => {
+    const start = Date.now();
+    getIngest()({
+        ...basePayload,
+        role,
+        text,
+        timestamp: new Date().toISOString(),
+      })
+      .then((result) => {
+        const ms = Date.now() - start;
+        const status =
+          result && typeof (result as { status?: number }).status === "number"
+            ? (result as { status?: number }).status
+            : null;
+        console.log("[synapse.ingest]", {
+          requestId,
+          role,
+          ms,
+          status,
+        });
+      })
+      .catch((error) => {
+        console.warn("[synapse.ingest.error]", {
+          requestId,
+          role,
+          error,
+        });
+      });
+  };
+
+  ingestOne("user", transcript);
+  ingestOne("assistant", assistantText);
+}
+
+export const __test__fireAndForgetSynapseIngest = fireAndForgetSynapseIngest;
