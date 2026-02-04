@@ -6,6 +6,7 @@ import { env } from "@/env";
 import { getLatestSessionSummary } from "@/lib/services/session/sessionService";
 import { Prisma } from "@prisma/client";
 import * as synapseClient from "@/lib/services/synapseClient";
+import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 
 export interface ConversationContext {
   persona: string;
@@ -175,6 +176,21 @@ function heuristicQuery(transcript: string) {
   return null;
 }
 
+function getQueryRouter() {
+  const override = (globalThis as { __queryRouterOverride?: typeof queryRouter })
+    .__queryRouterOverride;
+  return typeof override === "function" ? override : queryRouter;
+}
+
+function getLastAssistantTurn(
+  messages: Array<{ role: "user" | "assistant"; content: string }>
+) {
+  for (const message of messages) {
+    if (message.role === "assistant") return message.content;
+  }
+  return null;
+}
+
 type SynapseBriefResponse = {
   identity?: string | { name?: string; timezone?: string } | null;
   semanticContext?: Array<{ text?: string }>;
@@ -228,24 +244,6 @@ export async function buildContextFromSynapse(
   sessionId: string,
   isSessionStart: boolean
 ): Promise<ConversationContext | null> {
-  const brief = await getSynapseBrief()<{
-    tenantId?: string;
-    userId: string;
-    personaId: string;
-    sessionId: string;
-    now: string;
-    query: string | null;
-  }, SynapseBriefResponse>({
-    tenantId: env.SYNAPSE_TENANT_ID,
-    userId,
-    personaId,
-    sessionId,
-    now: new Date().toISOString(),
-    query: heuristicQuery(transcript),
-  });
-
-  if (!brief) return null;
-
   const persona = await prisma.personaProfile.findUnique({
     where: { id: personaId },
   });
@@ -267,6 +265,41 @@ export async function buildContextFromSynapse(
       createdAt: true,
     },
   });
+
+  const heuristic = heuristicQuery(transcript);
+  let selectedQuery = heuristic;
+  if (!selectedQuery && env.FEATURE_QUERY_ROUTER === "true") {
+    const lastAssistantTurn = getLastAssistantTurn(messages);
+    const routerResult: QueryRouterResult | null = await getQueryRouter()(
+      transcript,
+      lastAssistantTurn
+    );
+    if (
+      routerResult?.should_query &&
+      typeof routerResult.confidence === "number" &&
+      routerResult.confidence >= 0.6
+    ) {
+      selectedQuery = routerResult.query?.trim() || null;
+    }
+  }
+
+  const brief = await getSynapseBrief()<{
+    tenantId?: string;
+    userId: string;
+    personaId: string;
+    sessionId: string;
+    now: string;
+    query: string | null;
+  }, SynapseBriefResponse>({
+    tenantId: env.SYNAPSE_TENANT_ID,
+    userId,
+    personaId,
+    sessionId,
+    now: new Date().toISOString(),
+    query: selectedQuery ?? null,
+  });
+
+  if (!brief) return null;
 
   const identityLine = formatIdentity(brief.identity);
   const foundationMemories = identityLine ? [identityLine] : [];

@@ -35,6 +35,7 @@ const envSchema = z.object({
   FEATURE_SUMMARY_SPINE_GLOBAL: z.string().optional(),
   FEATURE_ENTITY_PIPELINE: z.string().optional(),
   FEATURE_SHADOW_JUDGE: z.string().optional(),
+  FEATURE_QUERY_ROUTER: z.string().optional(),
   FEATURE_SYNAPSE_BRIEF: z.string().optional(),
   FEATURE_SYNAPSE_INGEST: z.string().optional(),
   SUMMARY_TIMEOUT_MS: z.string().optional(),
