@@ -156,6 +156,72 @@ async function main() {
     expect(briefQuery).toBe(null);
   });
 
+  await runTest("messy transcript produces person relationship query", async () => {
+    seedEnv(true);
+    await setupPersona();
+    const { buildContextFromSynapse } = await import("../contextBuilder");
+    let briefQuery: string | null = null;
+
+    (globalThis as any).__queryRouterOverride = async () => ({
+      should_query: false,
+      query: null,
+      confidence: 0.1,
+    });
+    (globalThis as any).__synapseBriefOverride = async (payload: any) => {
+      briefQuery = payload.query ?? null;
+      return { semanticContext: [], activeLoops: [] };
+    };
+
+    await buildContextFromSynapse(
+      "user-4",
+      "persona-4",
+      "my girlfriend Ashley in Guatemala has 3 kids",
+      "session-4",
+      false
+    );
+
+    delete (globalThis as any).__queryRouterOverride;
+    delete (globalThis as any).__synapseBriefOverride;
+
+    const acceptable = new Set(["Ashley kids", "Ashley Guatemala"]);
+    if (!briefQuery || !acceptable.has(briefQuery)) {
+      throw new Error(`Expected Ashley kids or Ashley Guatemala, got ${briefQuery ?? "null"}`);
+    }
+  });
+
+  await runTest("invalid router query falls back to candidates", async () => {
+    seedEnv(true);
+    await setupPersona();
+    const { buildContextFromSynapse } = await import("../contextBuilder");
+    let briefQuery: string | null = null;
+
+    (globalThis as any).__queryRouterOverride = async () => ({
+      should_query: true,
+      query: "A few other things I want you to",
+      confidence: 0.9,
+    });
+    (globalThis as any).__synapseBriefOverride = async (payload: any) => {
+      briefQuery = payload.query ?? null;
+      return { semanticContext: [], activeLoops: [] };
+    };
+
+    await buildContextFromSynapse(
+      "user-5",
+      "persona-5",
+      "my girlfriend Ashley in Guatemala has 3 kids",
+      "session-5",
+      false
+    );
+
+    delete (globalThis as any).__queryRouterOverride;
+    delete (globalThis as any).__synapseBriefOverride;
+
+    const acceptable = new Set(["Ashley kids", "Ashley Guatemala"]);
+    if (!briefQuery || !acceptable.has(briefQuery)) {
+      throw new Error(`Expected Ashley kids or Ashley Guatemala, got ${briefQuery ?? "null"}`);
+    }
+  });
+
   const failed = results.filter((r) => !r.passed);
   if (failed.length > 0) {
     console.error("Test failures:");

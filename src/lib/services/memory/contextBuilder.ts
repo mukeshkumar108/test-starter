@@ -161,18 +161,6 @@ function heuristicQuery(transcript: string) {
     return limitWords(transcript, 8);
   }
 
-  const sentences = transcript.split(/(?<=[.!?])\s+/);
-  for (const sentence of sentences) {
-    const words = sentence.match(/\b[A-Za-z][A-Za-z'-]*\b/g) || [];
-    for (let i = 0; i < words.length; i += 1) {
-      if (i === 0) continue;
-      const word = words[i];
-      if (/^[A-Z][a-z]/.test(word)) {
-        return word;
-      }
-    }
-  }
-
   return null;
 }
 
@@ -200,6 +188,105 @@ function sanitizeQuery(value: string) {
   const words = cleaned.split(" ").slice(0, 8).join(" ");
   if (!words) return null;
   return words.slice(0, 48).trim() || null;
+}
+
+function extractQueryCandidates(transcript: string) {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const tokens = transcript.match(/\b[A-Za-z][A-Za-z'-]*\b/g) || [];
+  const stopTokens = new Set(["I", "Ok", "OK"]);
+  const relationshipNouns = new Set([
+    "girlfriend",
+    "wife",
+    "partner",
+    "kids",
+    "children",
+    "brother",
+    "sister",
+    "mom",
+    "dad",
+  ]);
+
+  const capitalized: string[] = [];
+  const relationships: string[] = [];
+  for (const token of tokens) {
+    if (stopTokens.has(token)) continue;
+    if (relationshipNouns.has(token.toLowerCase())) {
+      relationships.push(token.toLowerCase());
+    }
+    if (/^[A-Z][a-zA-Z'-]+$/.test(token) && token.length >= 3) {
+      capitalized.push(token);
+    }
+  }
+
+  const primaryPerson = capitalized[0];
+  const primaryLocation = capitalized[1];
+  const relationshipPriority = ["kids", "children"];
+  const primaryRelationship =
+    relationships.find((rel) => relationshipPriority.includes(rel)) ?? relationships[0];
+
+  const pushCandidate = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    candidates.push(trimmed);
+  };
+
+  if (primaryPerson && primaryRelationship) {
+    pushCandidate(`${primaryPerson} ${primaryRelationship}`);
+  }
+  if (primaryPerson && primaryLocation) {
+    pushCandidate(`${primaryPerson} ${primaryLocation}`);
+  }
+  if (primaryPerson) {
+    pushCandidate(primaryPerson);
+  }
+
+  return candidates.slice(0, 3);
+}
+
+function isValidQuery(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > 48) return false;
+  const words = trimmed.split(/\s+/);
+  if (words.length < 1 || words.length > 6) return false;
+
+  const lowered = trimmed.toLowerCase();
+  const rejectedPhrases = [
+    "i want you to",
+    "can you",
+    "please",
+    "a few other things",
+  ];
+  if (rejectedPhrases.some((phrase) => lowered.includes(phrase))) return false;
+
+  const endStop = new Set(["to", "you"]);
+  if (endStop.has(words[words.length - 1].toLowerCase())) return false;
+
+  const stopwords = new Set([
+    "i",
+    "you",
+    "to",
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "in",
+    "on",
+    "for",
+    "with",
+    "my",
+    "your",
+    "we",
+    "us",
+  ]);
+  const hasNonStopword = words.some((word) => !stopwords.has(word.toLowerCase()));
+  if (!hasNonStopword) return false;
+
+  return true;
 }
 
 type SynapseBriefResponse = {
@@ -285,12 +372,26 @@ export async function buildContextFromSynapse(
       transcript,
       lastAssistantTurn
     );
-    if (
-      routerResult?.should_query &&
-      typeof routerResult.confidence === "number" &&
-      routerResult.confidence >= 0.6
-    ) {
-      selectedQuery = routerResult.query ? sanitizeQuery(routerResult.query) : null;
+    if (routerResult?.should_query) {
+      const candidate = routerResult.query ? sanitizeQuery(routerResult.query) : null;
+      if (
+        typeof routerResult.confidence === "number" &&
+        routerResult.confidence >= 0.6 &&
+        candidate &&
+        isValidQuery(candidate)
+      ) {
+        selectedQuery = candidate;
+      }
+    }
+    if (!selectedQuery) {
+      const candidates = extractQueryCandidates(transcript);
+      for (const candidate of candidates) {
+        const sanitized = sanitizeQuery(candidate);
+        if (sanitized && isValidQuery(sanitized)) {
+          selectedQuery = sanitized;
+          break;
+        }
+      }
     }
   }
 
