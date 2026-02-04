@@ -54,14 +54,20 @@ Last assistant: ${lastAssistantTurn ?? ""}`;
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
   try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+    };
+    if (env.OPENROUTER_APP_URL) {
+      headers["HTTP-Referer"] = env.OPENROUTER_APP_URL;
+    }
+    if (env.OPENROUTER_APP_NAME) {
+      headers["X-Title"] = env.OPENROUTER_APP_NAME;
+    }
+
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://github.com/your-repo",
-        "X-Title": "Walkie-Talkie Voice Companion",
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         model: ROUTER_MODEL,
         messages: [{ role: "user", content: prompt }],

@@ -15,6 +15,8 @@ const envSchema = z.object({
   
   // Voice pipeline
   OPENROUTER_API_KEY: z.string().min(1),
+  OPENROUTER_APP_URL: z.string().optional(),
+  OPENROUTER_APP_NAME: z.string().optional(),
   ELEVENLABS_API_KEY: z.string().min(1),
   ELEVENLABS_DEFAULT_VOICE_ID: z.string().min(1),
   ELEVENLABS_VOICE_WILLIAM: z.string().min(1).optional(),

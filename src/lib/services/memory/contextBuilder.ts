@@ -185,10 +185,21 @@ function getQueryRouter() {
 function getLastAssistantTurn(
   messages: Array<{ role: "user" | "assistant"; content: string }>
 ) {
-  for (const message of messages) {
-    if (message.role === "assistant") return message.content;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "assistant") return messages[i].content;
   }
   return null;
+}
+
+function sanitizeQuery(value: string) {
+  let cleaned = value.trim();
+  cleaned = cleaned.replace(/^["']+|["']+$/g, "");
+  cleaned = cleaned.replace(/[^\w\s]+/g, " ");
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  const words = cleaned.split(" ").slice(0, 8).join(" ");
+  if (!words) return null;
+  return words.slice(0, 48).trim() || null;
 }
 
 type SynapseBriefResponse = {
@@ -279,7 +290,7 @@ export async function buildContextFromSynapse(
       typeof routerResult.confidence === "number" &&
       routerResult.confidence >= 0.6
     ) {
-      selectedQuery = routerResult.query?.trim() || null;
+      selectedQuery = routerResult.query ? sanitizeQuery(routerResult.query) : null;
     }
   }
 
