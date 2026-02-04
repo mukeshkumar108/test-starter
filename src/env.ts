@@ -23,6 +23,8 @@ const envSchema = z.object({
   ELEVENLABS_VOICE_ALEXANDER: z.string().min(1).optional(),
   LEMONFOX_API_KEY: z.string().min(1),
   OPENAI_API_KEY: z.string().min(1), // For embeddings
+  SYNAPSE_BASE_URL: z.string().min(1).optional(),
+  SYNAPSE_TENANT_ID: z.string().min(1).optional(),
   ADMIN_SECRET: z.string().min(1).optional(),
   FEATURE_MEMORY_CURATOR: z.string().optional(),
   FEATURE_CONTEXT_DEBUG: z.string().optional(),
@@ -31,6 +33,8 @@ const envSchema = z.object({
   FEATURE_JUDGE_TEST_MODE: z.string().optional(),
   FEATURE_SUMMARY_SPINE_GLOBAL: z.string().optional(),
   FEATURE_ENTITY_PIPELINE: z.string().optional(),
+  FEATURE_SYNAPSE_BRIEF: z.string().optional(),
+  FEATURE_SYNAPSE_INGEST: z.string().optional(),
   SUMMARY_TIMEOUT_MS: z.string().optional(),
 });
 

@@ -5,6 +5,7 @@ import { join } from "path";
 import { env } from "@/env";
 import { getLatestSessionSummary } from "@/lib/services/session/sessionService";
 import { Prisma } from "@prisma/client";
+import * as synapseClient from "@/lib/services/synapseClient";
 
 export interface ConversationContext {
   persona: string;
@@ -142,6 +143,189 @@ function normalizeText(value: string) {
     .replace(/[.,!?;:]+$/g, "");
 }
 
+function limitWords(input: string, maxWords: number) {
+  return input.trim().split(/\s+/).slice(0, maxWords).join(" ");
+}
+
+function heuristicQuery(transcript: string) {
+  const lowered = transcript.toLowerCase();
+  const triggers = [
+    "remember",
+    "remind",
+    "what did we",
+    "did i tell you",
+    "last time",
+  ];
+  if (triggers.some((phrase) => lowered.includes(phrase))) {
+    return limitWords(transcript, 8);
+  }
+
+  const sentences = transcript.split(/(?<=[.!?])\s+/);
+  for (const sentence of sentences) {
+    const words = sentence.match(/\b[A-Za-z][A-Za-z'-]*\b/g) || [];
+    for (let i = 0; i < words.length; i += 1) {
+      if (i === 0) continue;
+      const word = words[i];
+      if (/^[A-Z][a-z]/.test(word)) {
+        return word;
+      }
+    }
+  }
+
+  return null;
+}
+
+type SynapseBriefResponse = {
+  identity?: string | { name?: string; timezone?: string } | null;
+  semanticContext?: Array<{ text?: string }>;
+  activeLoops?: Array<{
+    type?: string;
+    salience?: number;
+    text?: string;
+    content?: string;
+  }>;
+  rollingSummary?: string | null;
+};
+
+function formatIdentity(identity: SynapseBriefResponse["identity"]) {
+  if (!identity) return null;
+  if (typeof identity === "string") {
+    const trimmed = identity.trim();
+    if (!trimmed || /^unknown$/i.test(trimmed)) return null;
+    return trimmed;
+  }
+  if (typeof identity === "object") {
+    const name = typeof identity.name === "string" ? identity.name.trim() : "";
+    const timezone =
+      typeof identity.timezone === "string" ? identity.timezone.trim() : "";
+    const parts: string[] = [];
+    if (name) parts.push(`Name: ${name}`);
+    if (timezone) parts.push(`Timezone: ${timezone}`);
+    if (parts.length === 0) return null;
+    return parts.join(" | ");
+  }
+  return null;
+}
+
+function normalizeLoopType(value?: string) {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  const base = normalized.endsWith("s") ? normalized.slice(0, -1) : normalized;
+  if (base === "commitment" || base === "thread" || base === "friction") return base;
+  return null;
+}
+
+function getSynapseBrief() {
+  const override = (globalThis as { __synapseBriefOverride?: typeof synapseClient.brief })
+    .__synapseBriefOverride;
+  return typeof override === "function" ? override : synapseClient.brief;
+}
+
+export async function buildContextFromSynapse(
+  userId: string,
+  personaId: string,
+  transcript: string,
+  sessionId: string,
+  isSessionStart: boolean
+): Promise<ConversationContext | null> {
+  const brief = await getSynapseBrief()<{
+    tenantId?: string;
+    userId: string;
+    personaId: string;
+    sessionId: string;
+    now: string;
+    query: string | null;
+  }, SynapseBriefResponse>({
+    tenantId: env.SYNAPSE_TENANT_ID,
+    userId,
+    personaId,
+    sessionId,
+    now: new Date().toISOString(),
+    query: heuristicQuery(transcript),
+  });
+
+  if (!brief) return null;
+
+  const persona = await prisma.personaProfile.findUnique({
+    where: { id: personaId },
+  });
+
+  if (!persona) {
+    throw new Error("Persona not found");
+  }
+
+  const promptPath = join(process.cwd(), persona.promptPath);
+  const personaPrompt = await readFile(promptPath, "utf-8");
+
+  const messages = await prisma.message.findMany({
+    where: { userId, personaId },
+    orderBy: { createdAt: "desc" },
+    take: 6,
+    select: {
+      role: true,
+      content: true,
+      createdAt: true,
+    },
+  });
+
+  const identityLine = formatIdentity(brief.identity);
+  const foundationMemories = identityLine ? [identityLine] : [];
+
+  const relevantMemories =
+    brief.semanticContext
+      ?.map((item) => item?.text)
+      .filter((value): value is string => Boolean(value && value.trim()))
+      .slice(0, 5) ?? [];
+
+  const loops = Array.isArray(brief.activeLoops) ? brief.activeLoops : [];
+  const grouped = {
+    commitments: [] as Array<{ text: string; salience: number }>,
+    threads: [] as Array<{ text: string; salience: number }>,
+    frictions: [] as Array<{ text: string; salience: number }>,
+  };
+
+  for (const loop of loops) {
+    const kind = normalizeLoopType(loop.type);
+    if (!kind) continue;
+    const textRaw =
+      (typeof loop.text === "string" ? loop.text : null) ??
+      (typeof loop.content === "string" ? loop.content : null);
+    const text = textRaw?.trim();
+    if (!text) continue;
+    const salience = typeof loop.salience === "number" ? loop.salience : 0;
+    if (kind === "commitment") grouped.commitments.push({ text, salience });
+    if (kind === "thread") grouped.threads.push({ text, salience });
+    if (kind === "friction") grouped.frictions.push({ text, salience });
+  }
+
+  const sortBySalience = (items: Array<{ text: string; salience: number }>) =>
+    items
+      .sort((a, b) => b.salience - a.salience)
+      .slice(0, 5)
+      .map((item) => item.text);
+
+  return {
+    persona: personaPrompt,
+    recentMessages: messages
+      .map((message) => ({
+        ...message,
+        content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+      }))
+      .reverse(),
+    foundationMemories,
+    relevantMemories,
+    commitments: sortBySalience(grouped.commitments),
+    threads: sortBySalience(grouped.threads),
+    frictions: sortBySalience(grouped.frictions),
+    recentWins: [],
+    rollingSummary:
+      typeof brief.rollingSummary === "string" && brief.rollingSummary.trim()
+        ? brief.rollingSummary
+        : undefined,
+    isSessionStart,
+  };
+}
+
 function selectRelevantMemories<T extends { id: string; type: string; content: string }>(
   memories: T[]
 ): T[] {
@@ -218,7 +402,7 @@ function formatSessionSummary(summary?: string | null) {
   }
 }
 
-export async function buildContext(
+async function buildContextLocal(
   userId: string,
   personaId: string,
   userMessage: string,
@@ -450,4 +634,50 @@ export async function buildContext(
     console.error("Context Builder Error:", error);
     throw new Error("Failed to build conversation context");
   }
+}
+
+function getLocalBuilder() {
+  const override = (globalThis as { __buildContextLocalOverride?: typeof buildContextLocal })
+    .__buildContextLocalOverride;
+  return typeof override === "function" ? override : buildContextLocal;
+}
+
+export async function buildContext(
+  userId: string,
+  personaId: string,
+  userMessage: string,
+): Promise<ConversationContext> {
+  const shouldUseSynapse = env.FEATURE_SYNAPSE_BRIEF === "true";
+  if (shouldUseSynapse) {
+    try {
+      const session = await prisma.session.findFirst({
+        where: { userId, personaId, endedAt: null },
+        orderBy: { lastActivityAt: "desc" },
+        select: { id: true },
+      });
+      const lastMessage = await prisma.message.findFirst({
+        where: { userId, personaId },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      const isSessionStart = !lastMessage;
+      const sessionId = session?.id ?? "";
+
+      const synapseContext = await buildContextFromSynapse(
+        userId,
+        personaId,
+        userMessage,
+        sessionId,
+        isSessionStart
+      );
+      if (synapseContext) {
+        return synapseContext;
+      }
+      console.warn("[context.synapse] brief unavailable, falling back");
+    } catch (error) {
+      console.warn("[context.synapse] brief failed, falling back", { error });
+    }
+  }
+
+  return getLocalBuilder()(userId, personaId, userMessage);
 }
