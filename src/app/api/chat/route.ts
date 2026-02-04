@@ -575,17 +575,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // SHADOW PATH: Process memory updates asynchronously
-    // Note: In production, use waitUntil() from @vercel/functions
-    // For v0.1, using Promise without await to simulate non-blocking
-    processShadowPath({
+    runShadowJudgeIfEnabled({
       userId: user.id,
       personaId,
       userMessage: sttResult.transcript,
       assistantResponse: llmResponse.content,
       currentSessionState: context.sessionState,
-    }).catch(error => {
-      console.error("Shadow path failed (non-blocking):", error);
     });
 
     autoCurateMaybe(user.id, personaId).catch((error) => {
@@ -680,3 +675,25 @@ function fireAndForgetSynapseIngest(params: {
 }
 
 export const __test__fireAndForgetSynapseIngest = fireAndForgetSynapseIngest;
+
+function getShadowJudge() {
+  const override = (globalThis as { __processShadowPathOverride?: typeof processShadowPath })
+    .__processShadowPathOverride;
+  return typeof override === "function" ? override : processShadowPath;
+}
+
+function runShadowJudgeIfEnabled(params: Parameters<typeof processShadowPath>[0]) {
+  const override = (globalThis as { __shadowJudgeFlagOverride?: boolean })
+    .__shadowJudgeFlagOverride;
+  const enabled =
+    typeof override === "boolean" ? override : env.FEATURE_SHADOW_JUDGE !== "false";
+  if (!enabled) return;
+  // SHADOW PATH: Process memory updates asynchronously
+  // Note: In production, use waitUntil() from @vercel/functions
+  // For v0.1, using Promise without await to simulate non-blocking
+  getShadowJudge()(params).catch((error) => {
+    console.error("Shadow path failed (non-blocking):", error);
+  });
+}
+
+export const __test__runShadowJudgeIfEnabled = runShadowJudgeIfEnabled;
