@@ -1,6 +1,14 @@
 import { env } from "@/env";
 
-const DEFAULT_TIMEOUT_MS = 800;
+const DEFAULT_TIMEOUT_MS = 3000;
+
+function resolveTimeoutMs() {
+  const raw = env.SYNAPSE_TIMEOUT_MS;
+  if (!raw) return DEFAULT_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_TIMEOUT_MS;
+  return parsed;
+}
 
 type RequestResult<TResponse> = {
   ok: boolean;
@@ -24,7 +32,8 @@ async function requestJson<TPayload, TResponse>(
 
   const url = `${env.SYNAPSE_BASE_URL}${path}`;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timeoutMs = resolveTimeoutMs();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const start = Date.now();
 
   try {
