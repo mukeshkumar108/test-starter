@@ -179,6 +179,28 @@ function getLastAssistantTurn(
   return null;
 }
 
+function getRecentTurns(
+  messages: Array<{ role: "user" | "assistant"; content: string }>
+) {
+  const turns: Array<{ user?: string; assistant?: string }> = [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === "assistant") {
+      turns.push({ assistant: message.content });
+      continue;
+    }
+    if (turns.length === 0 || turns[turns.length - 1].user) {
+      turns.push({ user: message.content });
+    } else {
+      turns[turns.length - 1].user = message.content;
+    }
+  }
+  return turns
+    .filter((turn) => Boolean(turn.user || turn.assistant))
+    .slice(0, 2)
+    .reverse();
+}
+
 function sanitizeQuery(value: string) {
   let cleaned = value.trim();
   cleaned = cleaned.replace(/^["']+|["']+$/g, "");
@@ -367,10 +389,23 @@ export async function buildContextFromSynapse(
   const heuristic = heuristicQuery(transcript);
   let selectedQuery = heuristic;
   if (!selectedQuery && env.FEATURE_QUERY_ROUTER === "true") {
+    const recentTurns = getRecentTurns(messages);
     const lastAssistantTurn = getLastAssistantTurn(messages);
+    const contextHint =
+      recentTurns.length > 0
+        ? recentTurns
+            .map((turn) => {
+              const parts = [];
+              if (turn.user) parts.push(`User: ${turn.user}`);
+              if (turn.assistant) parts.push(`Assistant: ${turn.assistant}`);
+              return parts.join("\n");
+            })
+            .join("\n\n")
+        : lastAssistantTurn ?? null;
+
     const routerResult: QueryRouterResult | null = await getQueryRouter()(
       transcript,
-      lastAssistantTurn
+      contextHint
     );
     if (routerResult?.should_query) {
       const candidate = routerResult.query ? sanitizeQuery(routerResult.query) : null;
