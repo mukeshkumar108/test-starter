@@ -17,6 +17,7 @@ process.env.LEMONFOX_API_KEY = "test";
 process.env.OPENAI_API_KEY = "test";
 process.env.SYNAPSE_BASE_URL = "https://synapse.test";
 process.env.SYNAPSE_TENANT_ID = "tenant-test";
+process.env.LIBRARIAN_TIMEOUT_MS = "5000";
 
 import {
   __test__runLibrarianReflex,

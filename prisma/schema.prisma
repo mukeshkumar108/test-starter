@@ -91,6 +91,7 @@ model User {
   sessions      Session[]
   sessionSummaries SessionSummary[]
   librarianTraces LibrarianTrace[]
+  synapseIngestTraces SynapseIngestTrace[]
 }
 
 model PersonaProfile {
@@ -111,6 +112,7 @@ model PersonaProfile {
   sessions      Session[]
   sessionSummaries SessionSummary[]
   librarianTraces LibrarianTrace[]
+  synapseIngestTraces SynapseIngestTrace[]
 }
 
 model UserSeed {
@@ -227,4 +229,25 @@ model LibrarianTrace {
 
   @@index([userId, personaId, createdAt])
   @@index([sessionId])
+}
+
+model SynapseIngestTrace {
+  id        String   @id @default(cuid())
+  userId    String
+  personaId String
+  sessionId String
+  requestId String?
+  role      String
+  status    Int?
+  ms        Int?
+  ok        Boolean  @default(false)
+  error     String?
+  createdAt DateTime @default(now())
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  persona PersonaProfile @relation(fields: [personaId], references: [id], onDelete: Cascade)
+
+  @@index([userId, personaId, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([ok, createdAt])
 }

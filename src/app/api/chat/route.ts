@@ -10,7 +10,7 @@ import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import { getChatModelForPersona } from "@/lib/providers/models";
-import { closeStaleSessionIfAny, ensureActiveSession } from "@/lib/services/session/sessionService";
+import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
 
 export const runtime = "nodejs";
@@ -26,10 +26,25 @@ const WEATHER_CACHE = new Map<
 >();
 const WEATHER_TTL_MS = 30 * 60 * 1000;
 const WEATHER_TIMEOUT_MS = 1500;
-const LIBRARIAN_TOTAL_TIMEOUT_MS = 800;
+const DEFAULT_LIBRARIAN_TIMEOUT_MS = 800;
 
 function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function getLibrarianTimeoutMs() {
+  const raw = env.LIBRARIAN_TIMEOUT_MS;
+  if (!raw) return DEFAULT_LIBRARIAN_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LIBRARIAN_TIMEOUT_MS;
+  return parsed;
+}
+function getActiveWindowMs() {
+  const raw = env.SESSION_ACTIVE_WINDOW_MS;
+  if (!raw) return 5 * 60 * 1000;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 5 * 60 * 1000;
+  return parsed;
 }
 
 function getRequestTimeZone(request: NextRequest) {
@@ -146,7 +161,8 @@ function getCurrentContext(params: {
   if (params.lastMessageAt) {
     const diffMs = now.getTime() - params.lastMessageAt.getTime();
     const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    if (diffMinutes > 15) {
+    const gapThresholdMinutes = Math.max(1, Math.floor(getActiveWindowMs() / 60000));
+    if (diffMinutes > gapThresholdMinutes) {
       const hours = Math.floor(diffMinutes / 60);
       const minutes = diffMinutes % 60;
       const parts = [];
@@ -210,6 +226,18 @@ function getSessionContext(sessionState?: any) {
       : "unknown";
 
   return `[SESSION STATE] Time Since Last Interaction: ${timeSince} Message Count: ${messageCount}`;
+}
+
+function isEndOfSessionIntent(transcript: string) {
+  const lowered = transcript.toLowerCase();
+  const patterns = [
+    "bye",
+    "talk later",
+    "see you",
+    "goodnight",
+    "catch you later",
+  ];
+  return patterns.some((pattern) => lowered.includes(pattern));
 }
 
 type MemoryGateResult = {
@@ -472,7 +500,7 @@ async function runLibrarianReflex(params: {
     return null;
   }
 
-  const deadline = Date.now() + LIBRARIAN_TOTAL_TIMEOUT_MS;
+  const deadline = Date.now() + getLibrarianTimeoutMs();
   const remaining = () => Math.max(0, deadline - Date.now());
 
   const lastTurns = extractLastTwoTurns(recentMessages)
@@ -899,6 +927,10 @@ export async function POST(request: NextRequest) {
     autoCurateMaybe(user.id, personaId).catch((error) => {
       console.warn("[curator.auto.err]", { userId: user.id, personaId, error });
     });
+
+    if (isEndOfSessionIntent(sttResult.transcript)) {
+      await closeSessionOnExplicitEnd(user.id, personaId, new Date());
+    }
 
     // Return fast response
     return NextResponse.json({

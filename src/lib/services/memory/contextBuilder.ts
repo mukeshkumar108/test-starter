@@ -15,6 +15,11 @@ export interface ConversationContext {
 }
 
 const MAX_RECENT_MESSAGE_CHARS = 800;
+const BRIEF_CACHE_TTL_MS = 3 * 60 * 1000;
+const briefCache = new Map<
+  string,
+  { fetchedAt: number; brief: SynapseBriefResponse }
+>();
 
 function limitWords(input: string, maxWords: number) {
   return input.trim().split(/\s+/).slice(0, maxWords).join(" ");
@@ -326,6 +331,24 @@ export async function buildContextFromSynapse(
     }
   }
 
+  const cacheKey = `${userId}:${personaId}:${sessionId}`;
+  const cached = briefCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < BRIEF_CACHE_TTL_MS) {
+    const situationalContext = buildSituationalContext(cached.brief);
+    return {
+      persona: personaPrompt,
+      situationalContext: situationalContext ?? undefined,
+      rollingSummary: undefined,
+      recentMessages: messages
+        .map((message) => ({
+          ...message,
+          content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+        }))
+        .reverse(),
+      isSessionStart,
+    };
+  }
+
   const brief = await getSynapseBrief()<{
     tenantId?: string;
     userId: string;
@@ -343,6 +366,7 @@ export async function buildContextFromSynapse(
   });
 
   if (!brief) return null;
+  briefCache.set(cacheKey, { fetchedAt: Date.now(), brief });
   const situationalContext = buildSituationalContext(brief);
 
   if (env.FEATURE_LIBRARIAN_TRACE === "true") {

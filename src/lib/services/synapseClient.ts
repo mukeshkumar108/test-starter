@@ -147,3 +147,9 @@ export async function sessionIngest<TPayload = unknown, TResponse = unknown>(
   if (!result?.ok) return null;
   return result.data;
 }
+
+export async function sessionIngestWithMeta<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<RequestResult<TResponse> | null> {
+  return requestJson<TPayload, TResponse>("POST", "/session/ingest", payload);
+}
