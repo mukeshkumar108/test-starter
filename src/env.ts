@@ -29,6 +29,7 @@ const envSchema = z.object({
   SYNAPSE_TENANT_ID: z.string().min(1).optional(),
   SYNAPSE_TIMEOUT_MS: z.string().optional(),
   ADMIN_SECRET: z.string().min(1).optional(),
+  ADMIN_API_KEY: z.string().min(1).optional(),
   FEATURE_MEMORY_CURATOR: z.string().optional(),
   FEATURE_CONTEXT_DEBUG: z.string().optional(),
   FEATURE_SESSION_SUMMARY: z.string().optional(),
