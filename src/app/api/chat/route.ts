@@ -212,10 +212,24 @@ function getSessionContext(sessionState?: any) {
   return `[SESSION STATE] Time Since Last Interaction: ${timeSince} Message Count: ${messageCount}`;
 }
 
-type BouncerResult = {
+type MemoryGateResult = {
   action: "memory_query" | "none";
-  search_string: string | null;
   confidence: number;
+  explicit: boolean;
+  reason?: string | null;
+};
+
+type MemoryQuerySpec = {
+  entities?: string[];
+  topics?: string[];
+  time_hint?: string | null;
+  intent?: string | null;
+};
+
+type RecallRelevanceResult = {
+  use: boolean;
+  confidence: number;
+  reason?: string | null;
 };
 
 type MemoryQueryResponse = {
@@ -251,7 +265,7 @@ function sanitizeSearchString(input: string) {
   const collapsed = cleaned.replace(/\s+/g, " ");
   if (!collapsed) return null;
   const words = collapsed.split(" ").slice(0, 4);
-  if (words.length < 3) return null;
+  if (words.length < 1) return null;
   const truncated = words.join(" ").slice(0, 48).trim();
   return truncated || null;
 }
@@ -260,6 +274,186 @@ function extractLastTwoTurns(
   messages: Array<{ role: "user" | "assistant"; content: string }>
 ) {
   return messages.slice(-4);
+}
+
+function isExplicitRecall(text: string) {
+  const lowered = text.toLowerCase();
+  const patterns = [
+    "what did i say",
+    "remind me",
+    "when did we",
+    "you mentioned",
+    "who was",
+    "do you remember",
+    "did i tell you",
+    "last time",
+    "remember when",
+  ];
+  return patterns.some((pattern) => lowered.includes(pattern));
+}
+
+function buildQueryFromSpec(spec: MemoryQuerySpec) {
+  const tokens: string[] = [];
+  const pushTokens = (values: string[] | undefined) => {
+    if (!values) return;
+    for (const value of values) {
+      const cleaned = sanitizeSearchString(String(value));
+      if (!cleaned) continue;
+      tokens.push(...cleaned.split(" "));
+    }
+  };
+  pushTokens(spec.entities);
+  pushTokens(spec.topics);
+  if (spec.time_hint) {
+    const cleaned = sanitizeSearchString(spec.time_hint);
+    if (cleaned) tokens.push(...cleaned.split(" "));
+  }
+  const unique = Array.from(new Set(tokens.map((token) => token.trim()).filter(Boolean)));
+  if (unique.length === 0) return null;
+  return unique.slice(0, 4).join(" ").slice(0, 48).trim();
+}
+
+async function callOpenRouterJson(
+  prompt: string,
+  model: string,
+  timeoutMs: number
+) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+    };
+    if (env.OPENROUTER_APP_URL) {
+      headers["HTTP-Referer"] = env.OPENROUTER_APP_URL;
+    }
+    if (env.OPENROUTER_APP_NAME) {
+      headers["X-Title"] = env.OPENROUTER_APP_NAME;
+    }
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 120,
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+    const data = await response.json();
+    const content = String(data?.choices?.[0]?.message?.content ?? "").trim();
+    if (!content) return null;
+    try {
+      return JSON.parse(content) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function runMemoryGate(params: {
+  transcript: string;
+  lastTurns: string;
+  timeoutMs: number;
+}) {
+  const { transcript, lastTurns, timeoutMs } = params;
+  const gatePrompt = `You are a Memory Gate. Decide if we should query memory.
+
+Return ONLY valid JSON:
+{"action":"memory_query"|"none","confidence":0-1,"explicit":true|false,"reason":"optional"}
+
+Rules:
+- explicit=true if the user directly asks to recall past info.
+- action=memory_query if recall is needed.
+- action=none if the user is only chatting about present/future.
+
+Recent conversation:
+${lastTurns}
+
+Current user message:
+${transcript}`;
+
+  const result = await callOpenRouterJson(gatePrompt, "meta-llama/llama-3.1-8b-instruct", timeoutMs);
+  if (!result) return null;
+  const action = result.action === "memory_query" ? "memory_query" : "none";
+  const confidence =
+    typeof result.confidence === "number" && Number.isFinite(result.confidence)
+      ? result.confidence
+      : 0;
+  const explicit = Boolean(result.explicit);
+  const reason = typeof result.reason === "string" ? result.reason : null;
+  return { action, confidence, explicit, reason } satisfies MemoryGateResult;
+}
+
+async function runMemoryQuerySpec(params: {
+  transcript: string;
+  lastTurns: string;
+  timeoutMs: number;
+}) {
+  const { transcript, lastTurns, timeoutMs } = params;
+  const specPrompt = `You are a Memory Query Specifier. Extract only entities/topics/time intent.
+
+Return ONLY valid JSON:
+{"entities":["..."],"topics":["..."],"time_hint":"optional","intent":"short reason"}
+
+Rules:
+- Entities are specific people/places/items.
+- Topics are specialized concepts or projects.
+- Keep entries short and concrete.
+
+Recent conversation:
+${lastTurns}
+
+Current user message:
+${transcript}`;
+
+  const result = await callOpenRouterJson(specPrompt, "meta-llama/llama-3.1-8b-instruct", timeoutMs);
+  if (!result) return null;
+  return {
+    entities: Array.isArray(result.entities) ? result.entities.filter((v) => typeof v === "string") : [],
+    topics: Array.isArray(result.topics) ? result.topics.filter((v) => typeof v === "string") : [],
+    time_hint: typeof result.time_hint === "string" ? result.time_hint : null,
+    intent: typeof result.intent === "string" ? result.intent : null,
+  } satisfies MemoryQuerySpec;
+}
+
+async function runRecallRelevanceCheck(params: {
+  query: string;
+  facts: string[];
+  entities: string[];
+  timeoutMs: number;
+}) {
+  const { query, facts, entities, timeoutMs } = params;
+  const relevancePrompt = `You are a Recall Relevance Judge. Decide if retrieved memory is relevant.
+
+Return ONLY valid JSON:
+{"use":true|false,"confidence":0-1,"reason":"optional"}
+
+Query: ${query}
+Facts: ${facts.join(" | ")}
+Entities: ${entities.join(" | ")}`;
+
+  const result = await callOpenRouterJson(relevancePrompt, "meta-llama/llama-3.1-8b-instruct", timeoutMs);
+  if (!result) return null;
+  const use = Boolean(result.use);
+  const confidence =
+    typeof result.confidence === "number" && Number.isFinite(result.confidence)
+      ? result.confidence
+      : 0;
+  const reason = typeof result.reason === "string" ? result.reason : null;
+  return { use, confidence, reason } satisfies RecallRelevanceResult;
 }
 
 async function runLibrarianReflex(params: {
@@ -284,123 +478,49 @@ async function runLibrarianReflex(params: {
   const lastTurns = extractLastTwoTurns(recentMessages)
     .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
     .join("\n");
-  const bouncerPrompt = `You are a Senior Search Engineer. Your goal is to rewrite user intent into optimized search queries for a vector database.
+  if (remaining() <= 0) return null;
+  const gateResult = await runMemoryGate({
+    transcript,
+    lastTurns,
+    timeoutMs: remaining(),
+  });
+  if (!gateResult) return null;
 
-Return ONLY valid JSON:
-{"action":"memory_query"|"none","search_string":"keywords or null","confidence":0-1}
-
-RULES:
-1. Identify if the user is asking about past events, facts, or previously mentioned people/items.
-2. If YES: Extract only the 2-3 most \"High-Entropy\" keywords (Nouns/Proper Nouns).
-3. ABSOLUTELY STRIP: Pronouns (my, I, me), prepositions (about, with, for), and temporal filler (when, was, is, the).
-4. Trigger memory_query if a specific proper noun (person/place) or specialized topic is mentioned, even without a direct question (Ambient Recall).
-5. If the user is just chatting or talking about the present/future with no specific entities/topics, return \"none\".
-
-FEW-SHOT EXAMPLES:
-- \"What did I say about my walk when I was in London?\" -> {\"action\":\"memory_query\",\"search_string\":\"London walk\",\"confidence\":1.0}
-- \"Remind me about that diet with chicken thighs\" -> {\"action\":\"memory_query\",\"search_string\":\"diet chicken thighs\",\"confidence\":1.0}
-- \"Who was that person Ashley I mentioned?\" -> {\"action\":\"memory_query\",\"search_string\":\"Ashley\",\"confidence\":0.9}
-- \"Hey Sophie, how's your day?\" -> {\"action\":\"none\",\"search_string\":null,\"confidence\":1.0}
-
-Recent conversation:
-${lastTurns}
-
-Current user message:
-${transcript}`;
-
-  const bouncerController = new AbortController();
-  const bouncerTimeout = setTimeout(
-    () => bouncerController.abort(),
-    remaining()
-  );
-
-  let bouncerResult: BouncerResult | null = null;
-  try {
-    if (remaining() <= 0) return null;
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-    };
-    if (env.OPENROUTER_APP_URL) {
-      headers["HTTP-Referer"] = env.OPENROUTER_APP_URL;
-    }
-    if (env.OPENROUTER_APP_NAME) {
-      headers["X-Title"] = env.OPENROUTER_APP_NAME;
-    }
-
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "meta-llama/llama-3.1-8b-instruct",
-        messages: [{ role: "user", content: bouncerPrompt }],
-        max_tokens: 80,
-        temperature: 0,
-        response_format: { type: "json_object" },
-      }),
-      signal: bouncerController.signal,
-    });
-
-    if (!response.ok) {
-      console.warn("[librarian.bouncer] request failed", {
-        requestId,
-        status: response.status,
-      });
-      return null;
-    }
-
-    const data = await response.json();
-    const content = String(data?.choices?.[0]?.message?.content ?? "").trim();
-    if (!content) return null;
-    try {
-      const parsed = JSON.parse(content) as Partial<BouncerResult>;
-      bouncerResult = {
-        action: parsed.action === "memory_query" ? "memory_query" : "none",
-        search_string:
-          typeof parsed.search_string === "string" ? parsed.search_string : null,
-        confidence:
-          typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-            ? parsed.confidence
-            : 0,
-      };
-    } catch {
-      return null;
-    }
-
-    if (shouldTrace && bouncerResult) {
-      try {
-        await prisma.librarianTrace.create({
-          data: {
-            userId,
-            personaId,
-            sessionId,
-            requestId,
-            kind: "bouncer",
-            transcript,
-            bouncer: bouncerResult,
-          },
-        });
-      } catch (error) {
-        console.warn("[librarian.trace] failed to log bouncer", { error });
-      }
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      console.warn("[librarian.bouncer] timeout", { requestId });
-      return null;
-    }
-    console.warn("[librarian.bouncer] error", { requestId, error });
+  const explicitSignal = isExplicitRecall(transcript);
+  const explicit = gateResult.explicit || explicitSignal;
+  const threshold = explicit ? 0.55 : 0.8;
+  if (gateResult.action !== "memory_query" || gateResult.confidence < threshold) {
     return null;
-  } finally {
-    clearTimeout(bouncerTimeout);
   }
 
-  if (!bouncerResult || bouncerResult.action !== "memory_query") return null;
-  if (bouncerResult.confidence <= 0.6) return null;
+  if (shouldTrace) {
+    try {
+      await prisma.librarianTrace.create({
+        data: {
+          userId,
+          personaId,
+          sessionId,
+          requestId,
+          kind: "gate",
+          transcript,
+          bouncer: gateResult,
+        },
+      });
+    } catch (error) {
+      console.warn("[librarian.trace] failed to log gate", { error });
+    }
+  }
 
-  const sanitized = bouncerResult.search_string
-    ? sanitizeSearchString(bouncerResult.search_string)
-    : null;
+  if (remaining() <= 0) return null;
+  const spec = await runMemoryQuerySpec({
+    transcript,
+    lastTurns,
+    timeoutMs: remaining(),
+  });
+  if (!spec) return null;
+
+  const compiledQuery = buildQueryFromSpec(spec);
+  const sanitized = compiledQuery ? sanitizeSearchString(compiledQuery) : null;
   if (!sanitized) return null;
   if (remaining() <= 0) return null;
 
@@ -442,10 +562,22 @@ ${transcript}`;
           .filter(Boolean)
       : [];
 
-    const supplemental =
-      facts.length === 0 && entities.length === 0
-        ? `No matching memories found for "${sanitized}".`
-        : buildRecallSheet({ query: sanitized, facts, entities });
+    if (facts.length === 0 && entities.length === 0) {
+      return explicit ? `No matching memories found for "${sanitized}".` : null;
+    }
+
+    if (remaining() <= 0) return explicit ? `No matching memories found for "${sanitized}".` : null;
+    const relevance = await runRecallRelevanceCheck({
+      query: sanitized,
+      facts,
+      entities,
+      timeoutMs: remaining(),
+    });
+    if (!relevance || !relevance.use || relevance.confidence < 0.6) {
+      return explicit ? `No matching memories found for "${sanitized}".` : null;
+    }
+
+    const supplemental = buildRecallSheet({ query: sanitized, facts, entities });
 
     if (shouldTrace) {
       try {
@@ -457,8 +589,8 @@ ${transcript}`;
             requestId,
             kind: "librarian",
             transcript,
-            bouncer: bouncerResult,
-            memoryQuery: { query: sanitized, limit: 10 },
+            bouncer: gateResult,
+            memoryQuery: { query: sanitized, limit: 10, spec, relevance },
             memoryResponse: data,
             supplementalContext: supplemental,
           },

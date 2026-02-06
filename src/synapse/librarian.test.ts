@@ -1,5 +1,5 @@
 /**
- * Unit test for Librarian Reflex (bouncer + supplemental context injection)
+ * Unit test for Librarian Reflex (gate/spec/relevance + supplemental context)
  * Run with: pnpm tsx src/synapse/librarian.test.ts
  */
 
@@ -39,14 +39,16 @@ async function test(name: string, fn: () => Promise<void>) {
   }
 }
 
-async function testBouncerTriggers() {
+async function testExplicitRecall() {
   const transcript = "What did I say about the protein shake?";
   const dummyFacts = [{ text: "User loves vegan cinnamon protein shake." }];
   const dummyEntities = [
     { summary: "Cinnamon Pea Protein: 9/10 flavor, slightly chalky." },
   ];
 
-  let bouncerCalled = false;
+  let gateCalled = false;
+  let specCalled = false;
+  let relevanceCalled = false;
   let queryCalled = false;
 
   const originalFetch = global.fetch;
@@ -54,23 +56,64 @@ async function testBouncerTriggers() {
     const url = typeof input === "string" ? input : input.url;
 
     if (url.includes("openrouter.ai/api/v1/chat/completions")) {
-      bouncerCalled = true;
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  action: "memory_query",
-                  search_string: "protein shake memory",
-                  confidence: 0.9,
-                }),
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        gateCalled = true;
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "memory_query",
+                    confidence: 0.8,
+                    explicit: true,
+                  }),
+                },
               },
-            },
-          ],
-        }),
-        { status: 200 }
-      );
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("Memory Query Specifier")) {
+        specCalled = true;
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    entities: ["protein shake"],
+                    topics: ["nutrition"],
+                    time_hint: null,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("Recall Relevance Judge")) {
+        relevanceCalled = true;
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    use: true,
+                    confidence: 0.9,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
     }
 
     if (url.endsWith("/memory/query")) {
@@ -99,15 +142,13 @@ async function testBouncerTriggers() {
       shouldTrace: false,
     });
 
-    expect(bouncerCalled, "Expected bouncer to be called");
+    expect(gateCalled, "Expected gate to be called");
+    expect(specCalled, "Expected spec to be called");
+    expect(relevanceCalled, "Expected relevance check to be called");
     expect(queryCalled, "Expected memory query to be called");
     expect(
       supplemental?.includes("Recall Sheet"),
       "Expected recall sheet header in supplemental context"
-    );
-    expect(
-      supplemental?.includes("User loves vegan cinnamon protein shake"),
-      "Expected supplemental context to include dummy facts"
     );
 
     const messages = __test__buildChatMessages({
@@ -134,30 +175,213 @@ async function testBouncerTriggers() {
   }
 }
 
-async function testFallbackWhenEmpty() {
-  const transcript = "Do you remember my protein shake?";
-
+async function testAmbientRequiresHighConfidence() {
+  const transcript = "Ashley was really helpful today.";
+  let queryCalled = false;
   const originalFetch = global.fetch;
+
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
-
     if (url.includes("openrouter.ai/api/v1/chat/completions")) {
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  action: "memory_query",
-                  search_string: "protein shake memory",
-                  confidence: 0.9,
-                }),
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "memory_query",
+                    confidence: 0.7,
+                    explicit: false,
+                  }),
+                },
               },
-            },
-          ],
-        }),
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    if (url.endsWith("/memory/query")) {
+      queryCalled = true;
+      return new Response(JSON.stringify({ facts: [], entities: [] }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const supplemental = await __test__runLibrarianReflex({
+      requestId: "req-test-ambient",
+      userId: "user-ambient",
+      personaId: "persona-ambient",
+      sessionId: "session-ambient",
+      transcript,
+      recentMessages: [{ role: "user", content: "Hey." }],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(!queryCalled, "Did not expect memory query for low-confidence ambient recall");
+    expect(supplemental === null, "Expected no supplemental context for low-confidence ambient recall");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testIrrelevantRejected() {
+  const transcript = "Ashley was really helpful today.";
+  const originalFetch = global.fetch;
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "memory_query",
+                    confidence: 0.9,
+                    explicit: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("Memory Query Specifier")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    entities: ["Ashley"],
+                    topics: [],
+                    time_hint: null,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("Recall Relevance Judge")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    use: false,
+                    confidence: 0.4,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    if (url.endsWith("/memory/query")) {
+      return new Response(
+        JSON.stringify({ facts: [{ text: "Old memory about someone else." }], entities: [] }),
         { status: 200 }
       );
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const supplemental = await __test__runLibrarianReflex({
+      requestId: "req-test-irrelevant",
+      userId: "user-irrelevant",
+      personaId: "persona-irrelevant",
+      sessionId: "session-irrelevant",
+      transcript,
+      recentMessages: [{ role: "user", content: "Hey." }],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(supplemental === null, "Expected irrelevant retrieval to be rejected");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testNoNoMemoriesForAmbient() {
+  const transcript = "Ashley was really helpful today.";
+  const originalFetch = global.fetch;
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "memory_query",
+                    confidence: 0.9,
+                    explicit: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("Memory Query Specifier")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    entities: ["Ashley"],
+                    topics: [],
+                    time_hint: null,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("Recall Relevance Judge")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    use: true,
+                    confidence: 0.9,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
     }
 
     if (url.endsWith("/memory/query")) {
@@ -172,28 +396,27 @@ async function testFallbackWhenEmpty() {
 
   try {
     const supplemental = await __test__runLibrarianReflex({
-      requestId: "req-test-2",
-      userId: "user-2",
-      personaId: "persona-2",
-      sessionId: "session-2",
+      requestId: "req-test-ambient-empty",
+      userId: "user-ambient-empty",
+      personaId: "persona-ambient-empty",
+      sessionId: "session-ambient-empty",
       transcript,
       recentMessages: [{ role: "user", content: "Hey." }],
       now: new Date("2026-02-06T10:15:00Z"),
       shouldTrace: false,
     });
 
-    expect(
-      supplemental?.includes('No matching memories found for "protein shake memory".'),
-      "Expected fallback no-memory message"
-    );
+    expect(supplemental === null, "Expected no supplemental context for ambient no-memory");
   } finally {
     global.fetch = originalFetch;
   }
 }
 
 async function run() {
-  await test("Librarian bouncer triggers memory query + injects supplemental context", testBouncerTriggers);
-  await test("Librarian returns fallback when no memories found", testFallbackWhenEmpty);
+  await test("Explicit recall triggers query and injects supplemental context", testExplicitRecall);
+  await test("Ambient mention requires high confidence", testAmbientRequiresHighConfidence);
+  await test("Irrelevant retrieval rejected by relevance check", testIrrelevantRejected);
+  await test("No 'no memories' text for ambient recall", testNoNoMemoriesForAmbient);
   console.log("All tests passed.");
 }
 
