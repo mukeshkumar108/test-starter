@@ -289,7 +289,8 @@ RULES:
 1. Identify if the user is asking about past events, facts, or previously mentioned people/items.
 2. If YES: Extract only the 2-3 most \"High-Entropy\" keywords (Nouns/Proper Nouns).
 3. ABSOLUTELY STRIP: Pronouns (my, I, me), prepositions (about, with, for), and temporal filler (when, was, is, the).
-4. If the user is just chatting or talking about the present/future, return \"none\".
+4. Trigger memory_query if a specific proper noun (person/place) or specialized topic is mentioned, even without a direct question (Ambient Recall).
+5. If the user is just chatting or talking about the present/future with no specific entities/topics, return \"none\".
 
 FEW-SHOT EXAMPLES:
 - \"What did I say about my walk when I was in London?\" -> {\"action\":\"memory_query\",\"search_string\":\"London walk\",\"confidence\":1.0}
