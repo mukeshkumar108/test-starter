@@ -39,7 +39,7 @@ async function test(name: string, fn: () => Promise<void>) {
   }
 }
 
-test("Librarian bouncer triggers memory query + injects supplemental context", async () => {
+async function testBouncerTriggers() {
   const transcript = "What did I say about the protein shake?";
   const dummyFacts = [{ text: "User loves vegan cinnamon protein shake." }];
   const dummyEntities = [
@@ -49,6 +49,7 @@ test("Librarian bouncer triggers memory query + injects supplemental context", a
   let bouncerCalled = false;
   let queryCalled = false;
 
+  const originalFetch = global.fetch;
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
 
@@ -83,47 +84,114 @@ test("Librarian bouncer triggers memory query + injects supplemental context", a
     throw new Error(`Unexpected fetch URL: ${url}`);
   }) as typeof fetch;
 
-  const supplemental = await __test__runLibrarianReflex({
-    requestId: "req-test",
-    userId: "user-1",
-    transcript,
-    recentMessages: [
-      { role: "user", content: "I was talking about protein shakes." },
-      { role: "assistant", content: "Tell me more." },
-    ],
-    now: new Date("2026-02-06T10:15:00Z"),
-  });
+  try {
+    const supplemental = await __test__runLibrarianReflex({
+      requestId: "req-test",
+      userId: "user-1",
+      transcript,
+      recentMessages: [
+        { role: "user", content: "I was talking about protein shakes." },
+        { role: "assistant", content: "Tell me more." },
+      ],
+      now: new Date("2026-02-06T10:15:00Z"),
+    });
 
-  expect(bouncerCalled, "Expected bouncer to be called");
-  expect(queryCalled, "Expected memory query to be called");
-  expect(
-    supplemental?.includes("Recall Sheet"),
-    "Expected recall sheet header in supplemental context"
-  );
-  expect(
-    supplemental?.includes("User loves vegan cinnamon protein shake"),
-    "Expected supplemental context to include dummy facts"
-  );
+    expect(bouncerCalled, "Expected bouncer to be called");
+    expect(queryCalled, "Expected memory query to be called");
+    expect(
+      supplemental?.includes("Recall Sheet"),
+      "Expected recall sheet header in supplemental context"
+    );
+    expect(
+      supplemental?.includes("User loves vegan cinnamon protein shake"),
+      "Expected supplemental context to include dummy facts"
+    );
 
-  const messages = __test__buildChatMessages({
-    persona: "Persona",
-    situationalContext: "Brief",
-    supplementalContext: supplemental,
-    rollingSummary: "",
-    recentMessages: [],
-    transcript,
-  });
+    const messages = __test__buildChatMessages({
+      persona: "Persona",
+      situationalContext: "Brief",
+      supplementalContext: supplemental,
+      rollingSummary: "",
+      recentMessages: [],
+      transcript,
+    });
 
-  const supplementalBlock = messages.find((msg) =>
-    msg.content.startsWith("[SUPPLEMENTAL_CONTEXT]")
-  );
-  expect(Boolean(supplementalBlock), "Expected supplemental context block");
-  expect(
-    supplementalBlock?.content.includes(
-      "Cinnamon Pea Protein: 9/10 flavor, slightly chalky."
-    ) ?? false,
-    "Expected supplemental block to include entity summary"
-  );
+    const supplementalBlock = messages.find((msg) =>
+      msg.content.startsWith("[SUPPLEMENTAL_CONTEXT]")
+    );
+    expect(Boolean(supplementalBlock), "Expected supplemental context block");
+    expect(
+      supplementalBlock?.content.includes(
+        "Cinnamon Pea Protein: 9/10 flavor, slightly chalky."
+      ) ?? false,
+      "Expected supplemental block to include entity summary"
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testFallbackWhenEmpty() {
+  const transcript = "Do you remember my protein shake?";
+
+  const originalFetch = global.fetch;
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  action: "memory_query",
+                  search_string: "protein shake memory",
+                  confidence: 0.9,
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    }
+
+    if (url.endsWith("/memory/query")) {
+      return new Response(
+        JSON.stringify({ facts: [], entities: [] }),
+        { status: 200 }
+      );
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const supplemental = await __test__runLibrarianReflex({
+      requestId: "req-test-2",
+      userId: "user-2",
+      transcript,
+      recentMessages: [{ role: "user", content: "Hey." }],
+      now: new Date("2026-02-06T10:15:00Z"),
+    });
+
+    expect(
+      supplemental?.includes('No matching memories found for "protein shake memory".'),
+      "Expected fallback no-memory message"
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function run() {
+  await test("Librarian bouncer triggers memory query + injects supplemental context", testBouncerTriggers);
+  await test("Librarian returns fallback when no memories found", testFallbackWhenEmpty);
+  console.log("All tests passed.");
+}
+
+run().catch((error) => {
+  console.error("Unhandled test error:", error);
+  process.exit(1);
 });
-
-console.log("All tests passed.");

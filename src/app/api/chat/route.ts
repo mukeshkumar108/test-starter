@@ -412,7 +412,9 @@ ${transcript}`;
           .filter(Boolean)
       : [];
 
-    if (facts.length === 0 && entities.length === 0) return null;
+    if (facts.length === 0 && entities.length === 0) {
+      return `No matching memories found for "${sanitized}".`;
+    }
     return buildRecallSheet({ query: sanitized, facts, entities });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
