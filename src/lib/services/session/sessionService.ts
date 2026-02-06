@@ -1,9 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
-import { summarizeSession } from "@/lib/services/session/sessionSummarizer";
+import { summarizeRollingSessionFromMessages, summarizeSession } from "@/lib/services/session/sessionSummarizer";
 import * as synapseClient from "@/lib/services/synapseClient";
 
 const DEFAULT_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+const ROLLING_SUMMARY_TURN_INTERVAL = 4;
+const ROLLING_SUMMARY_RECENT_MESSAGES = 8;
+
+function isRollingSummaryEnabled() {
+  return env.FEATURE_ROLLING_SUMMARY !== "false";
+}
 
 function getActiveWindowMs() {
   const raw = env.SESSION_ACTIVE_WINDOW_MS;
@@ -317,6 +323,65 @@ export async function ensureActiveSession(
       startedAt: now,
       lastActivityAt: now,
       turnCount: 1,
+    },
+  });
+}
+
+export async function maybeUpdateRollingSummary(params: {
+  sessionId: string;
+  userId: string;
+  personaId: string;
+  turnCount: number;
+}) {
+  if (!isRollingSummaryEnabled()) return;
+  if (params.turnCount % ROLLING_SUMMARY_TURN_INTERVAL !== 0) return;
+
+  const session = await prisma.session.findUnique({
+    where: { id: params.sessionId },
+    select: { startedAt: true, endedAt: true },
+  });
+  if (!session) return;
+
+  const messages = await prisma.message.findMany({
+    where: {
+      userId: params.userId,
+      personaId: params.personaId,
+      createdAt: {
+        gte: session.startedAt,
+        lte: session.endedAt ?? new Date(),
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, content: true },
+  });
+
+  if (messages.length <= ROLLING_SUMMARY_RECENT_MESSAGES) return;
+
+  const olderMessages = messages
+    .slice(0, -ROLLING_SUMMARY_RECENT_MESSAGES)
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+  const previous = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    select: { rollingSummary: true },
+  });
+
+  const summary = await summarizeRollingSessionFromMessages({
+    messages: olderMessages,
+    previousSummary: previous?.rollingSummary ?? undefined,
+  });
+  if (!summary) return;
+
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    update: { rollingSummary: summary, updatedAt: new Date() },
+    create: {
+      userId: params.userId,
+      personaId: params.personaId,
+      rollingSummary: summary,
     },
   });
 }

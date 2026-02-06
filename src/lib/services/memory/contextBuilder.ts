@@ -279,12 +279,17 @@ export async function buildContextFromSynapse(
   const messages = await prisma.message.findMany({
     where: { userId, personaId },
     orderBy: { createdAt: "desc" },
-    take: 6,
+    take: 8,
     select: {
       role: true,
       content: true,
       createdAt: true,
     },
+  });
+
+  const sessionState = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { rollingSummary: true },
   });
 
   const heuristic = heuristicQuery(transcript);
@@ -338,7 +343,7 @@ export async function buildContextFromSynapse(
     return {
       persona: personaPrompt,
       situationalContext: situationalContext ?? undefined,
-      rollingSummary: undefined,
+      rollingSummary: sessionState?.rollingSummary ?? undefined,
       recentMessages: messages
         .map((message) => ({
           ...message,
@@ -390,7 +395,7 @@ export async function buildContextFromSynapse(
   return {
     persona: personaPrompt,
     situationalContext: situationalContext ?? undefined,
-    rollingSummary: undefined,
+    rollingSummary: sessionState?.rollingSummary ?? undefined,
     recentMessages: messages
       .map((message) => ({
         ...message,
@@ -420,7 +425,7 @@ async function buildContextLocal(
     const messages = await prisma.message.findMany({
       where: { userId, personaId },
       orderBy: { createdAt: "desc" },
-      take: 6,
+      take: 8,
       select: {
         role: true,
         content: true,
@@ -428,12 +433,17 @@ async function buildContextLocal(
       },
     });
 
+    const sessionState = await prisma.sessionState.findUnique({
+      where: { userId_personaId: { userId, personaId } },
+      select: { rollingSummary: true },
+    });
+
     const isSessionStart = messages.length === 0;
 
     return {
       persona: personaPrompt,
       situationalContext: undefined,
-      rollingSummary: undefined,
+      rollingSummary: sessionState?.rollingSummary ?? undefined,
       recentMessages: messages
         .map((message) => ({
           ...message,

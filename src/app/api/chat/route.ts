@@ -10,7 +10,7 @@ import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import { getChatModelForPersona } from "@/lib/providers/models";
-import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession } from "@/lib/services/session/sessionService";
+import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
 
 export const runtime = "nodejs";
@@ -926,6 +926,15 @@ export async function POST(request: NextRequest) {
 
     autoCurateMaybe(user.id, personaId).catch((error) => {
       console.warn("[curator.auto.err]", { userId: user.id, personaId, error });
+    });
+
+    void maybeUpdateRollingSummary({
+      sessionId: session.id,
+      userId: user.id,
+      personaId,
+      turnCount: session.turnCount,
+    }).catch((error) => {
+      console.warn("[rolling.summary.err]", { userId: user.id, personaId, error });
     });
 
     if (isEndOfSessionIntent(sttResult.transcript)) {

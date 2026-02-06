@@ -385,3 +385,57 @@ export async function summarizeRollingSession(params: {
   const cleaned = stripJsonFence(content);
   return cleaned.trim().slice(0, 600);
 }
+
+export async function summarizeRollingSessionFromMessages(params: {
+  messages: Array<{ role: string; content: string }>;
+  previousSummary?: string | null;
+}) {
+  if (!env.OPENROUTER_API_KEY) {
+    console.warn("Rolling session summarizer skipped: missing OPENROUTER_API_KEY");
+    return null;
+  }
+
+  if (params.messages.length === 0) return null;
+
+  const prompt = buildRollingPrompt(params.messages, params.previousSummary ?? undefined);
+  const model = MODELS.JUDGE || "xiaomi/mimo-v2-flash";
+
+  const timeoutMs = Number.parseInt(env.SUMMARY_TIMEOUT_MS ?? "", 10);
+  const effectiveTimeout = Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "HTTP-Referer": "https://github.com/your-repo",
+        "X-Title": "Walkie-Talkie Voice Companion",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 200,
+        temperature: 0.2,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      console.warn("Rolling session summarizer failed:", response.status);
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content ?? "";
+    const cleaned = stripJsonFence(content);
+    return cleaned.trim() || null;
+  } catch (error) {
+    console.warn("Rolling session summarizer failed:", error);
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
