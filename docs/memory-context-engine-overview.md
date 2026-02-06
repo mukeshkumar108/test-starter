@@ -23,6 +23,8 @@ Async path (never blocks response):
 - `rollingSummary` (optional, local)
 - `recentMessages` (last 6 turns)
 
+Supplemental recall (Recall Sheet) is added in `/api/chat` after the brief if the Librarian Reflex triggers a `/memory/query`.
+
 No Prisma‑based long‑term memory queries are used in this mode.
 
 ---

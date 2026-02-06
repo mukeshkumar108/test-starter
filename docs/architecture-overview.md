@@ -24,6 +24,10 @@ The system optimizes for continuity without bloating every request.
 - Episodic + semantic memory built from entire sessions
 - Returned as a **situational narrative** for new sessions
 
+### 4) Librarian Reflex (On‑Demand Recall)
+- A small “bouncer” LLM decides if extra memory is needed
+- If yes, call `/memory/query` and inject a Recall Sheet
+
 ---
 
 ## What Makes This Different

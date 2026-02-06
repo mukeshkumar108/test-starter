@@ -35,11 +35,13 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 5. Prompt assembly in `route.ts`
    - Persona (Identity Anchor)
    - SITUATIONAL_CONTEXT (Synapse brief)
+   - SUPPLEMENTAL_CONTEXT (Recall Sheet, if triggered)
    - Rolling summary (if present)
    - Last 6 turns + current user message
 6. LLM call (OpenRouter)
 7. TTS (ElevenLabs)
 8. Store messages
+9. Async updates (session ingest, legacy shadow judge if enabled)
 
 ---
 
@@ -74,10 +76,15 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 - When `FEATURE_SYNAPSE_BRIEF=true`
 - We call `/session/brief` to build `SITUATIONAL_CONTEXT`
 
-### 3) What goes into the prompt?
-Only four blocks, always in this order:
+### 3) When do we fetch extra memory (Librarian Reflex)?
+- Bouncer LLM decides if a memory query is needed
+- If confident, calls `/memory/query` and formats a Recall Sheet
+
+### 4) What goes into the prompt?
+Blocks are in this order:
 - Persona (Identity Anchor)
 - SITUATIONAL_CONTEXT (Synapse brief)
+- SUPPLEMENTAL_CONTEXT (Recall Sheet)
 - Rolling summary (if any)
 - Last 6 turns
 

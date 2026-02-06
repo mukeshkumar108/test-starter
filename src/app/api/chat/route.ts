@@ -26,6 +26,7 @@ const WEATHER_CACHE = new Map<
 >();
 const WEATHER_TTL_MS = 30 * 60 * 1000;
 const WEATHER_TIMEOUT_MS = 1500;
+const LIBRARIAN_TOTAL_TIMEOUT_MS = 800;
 
 function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");
@@ -211,6 +212,251 @@ function getSessionContext(sessionState?: any) {
   return `[SESSION STATE] Time Since Last Interaction: ${timeSince} Message Count: ${messageCount}`;
 }
 
+type BouncerResult = {
+  action: "memory_query" | "none";
+  search_string: string | null;
+  confidence: number;
+};
+
+type MemoryQueryResponse = {
+  facts?: Array<{ text?: string; relevance?: number | null; source?: string }>;
+  entities?: Array<{ summary?: string; type?: string; uuid?: string }>;
+  metadata?: { query?: string; facts?: number; entities?: number };
+};
+
+function buildRecallSheet(params: {
+  query: string;
+  facts: string[];
+  entities: string[];
+}) {
+  const lines: string[] = [];
+  lines.push(`Recall Sheet (query: ${params.query})`);
+  if (params.facts.length > 0) {
+    lines.push("Facts:");
+    for (const fact of params.facts.slice(0, 5)) {
+      lines.push(`- ${fact}`);
+    }
+  }
+  if (params.entities.length > 0) {
+    lines.push("Entities:");
+    for (const entity of params.entities.slice(0, 5)) {
+      lines.push(`- ${entity}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function sanitizeSearchString(input: string) {
+  const cleaned = input.replace(/[^a-zA-Z0-9\s]+/g, " ").trim();
+  const collapsed = cleaned.replace(/\s+/g, " ");
+  if (!collapsed) return null;
+  const words = collapsed.split(" ").slice(0, 4);
+  if (words.length < 3) return null;
+  const truncated = words.join(" ").slice(0, 48).trim();
+  return truncated || null;
+}
+
+function extractLastTwoTurns(
+  messages: Array<{ role: "user" | "assistant"; content: string }>
+) {
+  return messages.slice(-4);
+}
+
+async function runLibrarianReflex(params: {
+  requestId: string;
+  userId: string;
+  transcript: string;
+  recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  now: Date;
+}) {
+  const { requestId, userId, transcript, recentMessages, now } = params;
+  if (!env.OPENROUTER_API_KEY || !env.SYNAPSE_BASE_URL || !env.SYNAPSE_TENANT_ID) {
+    return null;
+  }
+
+  const deadline = Date.now() + LIBRARIAN_TOTAL_TIMEOUT_MS;
+  const remaining = () => Math.max(0, deadline - Date.now());
+
+  const lastTurns = extractLastTwoTurns(recentMessages)
+    .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
+    .join("\n");
+  const bouncerPrompt = `You are a memory bouncer. Decide if the user wants to recall past info.
+
+Return ONLY valid JSON:
+{"action":"memory_query"|"none","search_string":"3-4 word query or null","confidence":0-1}
+
+Rules:
+- Only return memory_query if past context is needed.
+- search_string must be 3-4 words, short, and specific.
+- If unsure, action=none.
+
+Recent conversation:
+${lastTurns}
+
+Current user message:
+${transcript}`;
+
+  const bouncerController = new AbortController();
+  const bouncerTimeout = setTimeout(
+    () => bouncerController.abort(),
+    remaining()
+  );
+
+  let bouncerResult: BouncerResult | null = null;
+  try {
+    if (remaining() <= 0) return null;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+    };
+    if (env.OPENROUTER_APP_URL) {
+      headers["HTTP-Referer"] = env.OPENROUTER_APP_URL;
+    }
+    if (env.OPENROUTER_APP_NAME) {
+      headers["X-Title"] = env.OPENROUTER_APP_NAME;
+    }
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "meta-llama/llama-3.1-8b-instruct",
+        messages: [{ role: "user", content: bouncerPrompt }],
+        max_tokens: 80,
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+      signal: bouncerController.signal,
+    });
+
+    if (!response.ok) {
+      console.warn("[librarian.bouncer] request failed", {
+        requestId,
+        status: response.status,
+      });
+      return null;
+    }
+
+    const data = await response.json();
+    const content = String(data?.choices?.[0]?.message?.content ?? "").trim();
+    if (!content) return null;
+    try {
+      const parsed = JSON.parse(content) as Partial<BouncerResult>;
+      bouncerResult = {
+        action: parsed.action === "memory_query" ? "memory_query" : "none",
+        search_string:
+          typeof parsed.search_string === "string" ? parsed.search_string : null,
+        confidence:
+          typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+            ? parsed.confidence
+            : 0,
+      };
+    } catch {
+      return null;
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      console.warn("[librarian.bouncer] timeout", { requestId });
+      return null;
+    }
+    console.warn("[librarian.bouncer] error", { requestId, error });
+    return null;
+  } finally {
+    clearTimeout(bouncerTimeout);
+  }
+
+  if (!bouncerResult || bouncerResult.action !== "memory_query") return null;
+  if (bouncerResult.confidence <= 0.6) return null;
+
+  const sanitized = bouncerResult.search_string
+    ? sanitizeSearchString(bouncerResult.search_string)
+    : null;
+  if (!sanitized) return null;
+  if (remaining() <= 0) return null;
+
+  const queryController = new AbortController();
+  const queryTimeout = setTimeout(() => queryController.abort(), remaining());
+  try {
+    const response = await fetch(`${env.SYNAPSE_BASE_URL}/memory/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tenantId: env.SYNAPSE_TENANT_ID,
+        userId,
+        query: sanitized,
+        limit: 10,
+        referenceTime: now.toISOString(),
+      }),
+      signal: queryController.signal,
+    });
+    if (!response.ok) {
+      console.warn("[librarian.query] failed", {
+        requestId,
+        status: response.status,
+      });
+      return null;
+    }
+    const data = (await response.json()) as MemoryQueryResponse;
+    const facts = Array.isArray(data.facts)
+      ? data.facts
+          .map((fact) =>
+            typeof fact?.text === "string" ? fact.text.trim() : ""
+          )
+          .filter(Boolean)
+      : [];
+    const entities = Array.isArray(data.entities)
+      ? data.entities
+          .map((entity) =>
+            typeof entity?.summary === "string" ? entity.summary.trim() : ""
+          )
+          .filter(Boolean)
+      : [];
+
+    if (facts.length === 0 && entities.length === 0) return null;
+    return buildRecallSheet({ query: sanitized, facts, entities });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      console.warn("[librarian.query] timeout", { requestId });
+      return null;
+    }
+    console.warn("[librarian.query] error", { requestId, error });
+    return null;
+  } finally {
+    clearTimeout(queryTimeout);
+  }
+}
+
+function buildChatMessages(params: {
+  persona: string;
+  situationalContext?: string;
+  supplementalContext?: string | null;
+  rollingSummary?: string;
+  recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  transcript: string;
+}) {
+  const situationalContext = params.situationalContext ?? "";
+  const rollingSummary = params.rollingSummary ?? "";
+  return [
+    { role: "system" as const, content: params.persona },
+    ...(situationalContext
+      ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
+      : []),
+    ...(params.supplementalContext
+      ? [
+          {
+            role: "system" as const,
+            content: `[SUPPLEMENTAL_CONTEXT]\n${params.supplementalContext}`,
+          },
+        ]
+      : []),
+    ...(rollingSummary
+      ? [{ role: "system" as const, content: `CURRENT SESSION SUMMARY: ${rollingSummary}` }]
+      : []),
+    ...params.recentMessages,
+    { role: "user" as const, content: params.transcript },
+  ];
+}
+
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   const traceId = request.headers.get("x-trace-id") || crypto.randomUUID();
@@ -322,19 +568,23 @@ export async function POST(request: NextRequest) {
     // Step 3: Generate LLM response
     const rollingSummary = context.rollingSummary ?? "";
     const situationalContext = context.situationalContext ?? "";
+    const supplementalContext = await runLibrarianReflex({
+      requestId,
+      userId: user.id,
+      transcript: sttResult.transcript,
+      recentMessages: context.recentMessages,
+      now,
+    });
     const model = getChatModelForPersona(persona.slug);
 
-    const messages = [
-      { role: "system" as const, content: context.persona },
-      ...(situationalContext
-        ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
-        : []),
-      ...(rollingSummary
-        ? [{ role: "system" as const, content: `CURRENT SESSION SUMMARY: ${rollingSummary}` }]
-        : []),
-      ...context.recentMessages,
-      { role: "user" as const, content: sttResult.transcript },
-    ];
+    const messages = buildChatMessages({
+      persona: context.persona,
+      situationalContext,
+      supplementalContext,
+      rollingSummary,
+      recentMessages: context.recentMessages,
+      transcript: sttResult.transcript,
+    });
 
     const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
     if (totalChars > 20000) {
@@ -349,6 +599,7 @@ export async function POST(request: NextRequest) {
           counts: {
             recentMessages: context.recentMessages.length,
             situationalContext: situationalContext ? 1 : 0,
+            supplementalContext: supplementalContext ? 1 : 0,
             rollingSummary: rollingSummary ? 1 : 0,
           },
           model,
@@ -367,6 +618,7 @@ export async function POST(request: NextRequest) {
         counts: {
           recentMessages: context.recentMessages.length,
           situationalContext: situationalContext ? 1 : 0,
+          supplementalContext: supplementalContext ? 1 : 0,
           rollingSummary: rollingSummary ? 1 : 0,
         },
       })
@@ -382,6 +634,7 @@ export async function POST(request: NextRequest) {
         contextBlocks: {
           persona: context.persona,
           situationalContext,
+          supplementalContext,
           rollingSummary,
         },
       };
@@ -564,3 +817,5 @@ function runShadowJudgeIfEnabled(params: Parameters<typeof processShadowPath>[0]
 }
 
 export const __test__runShadowJudgeIfEnabled = runShadowJudgeIfEnabled;
+export const __test__runLibrarianReflex = runLibrarianReflex;
+export const __test__buildChatMessages = buildChatMessages;

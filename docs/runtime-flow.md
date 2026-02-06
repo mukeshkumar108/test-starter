@@ -21,12 +21,15 @@ Two paths run in parallel:
    - Persona prompt
    - Last 6 messages
    - Synapse `/session/brief` if enabled
-7. **Prompt assembly** (`route.ts`)
-   - Persona → SITUATIONAL_CONTEXT → Rolling Summary (optional) → Last 6 turns → User msg
-8. **LLM call** (OpenRouter)
-9. **TTS** (ElevenLabs)
-10. **Store messages** (user + assistant)
-11. **Return response**
+7. **Librarian Reflex** (optional)
+   - Bouncer LLM decides if memory query is needed
+   - If yes, call `/memory/query` and format Recall Sheet
+8. **Prompt assembly** (`route.ts`)
+   - Persona → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → Rolling Summary → Last 6 turns → User msg
+9. **LLM call** (OpenRouter)
+10. **TTS** (ElevenLabs)
+11. **Store messages** (user + assistant)
+12. **Return response**
 
 ---
 
