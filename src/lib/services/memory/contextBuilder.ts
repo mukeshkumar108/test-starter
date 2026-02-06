@@ -353,7 +353,7 @@ export async function buildContextFromSynapse(
           personaId,
           sessionId: sessionId || null,
           kind: "brief",
-          memoryQuery: selectedQuery ? { query: selectedQuery } : null,
+          memoryQuery: selectedQuery ? { query: selectedQuery } : undefined,
           brief,
           supplementalContext: situationalContext ?? null,
         },
