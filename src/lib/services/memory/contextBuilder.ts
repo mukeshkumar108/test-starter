@@ -192,7 +192,9 @@ type SynapseBriefResponse = {
   activeLoops?: Array<{ text?: string; label?: string }> | string[];
 };
 
-function normalizeLoopText(loop: SynapseBriefResponse["activeLoops"][number]) {
+type ActiveLoopEntry = { text?: string; label?: string } | string;
+
+function normalizeLoopText(loop: ActiveLoopEntry) {
   if (typeof loop === "string") return loop.trim();
   if (!loop || typeof loop !== "object") return null;
   const text = typeof loop.text === "string" ? loop.text.trim() : "";
