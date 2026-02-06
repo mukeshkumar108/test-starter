@@ -195,7 +195,7 @@ function getCurrentContext(params: {
     })();
   }
 
-  return `[REAL-TIME]: ${formatted}. ${weather}.${sessionGap}${lateNightFlag}`;
+  return `[TIME_CONTEXT]: ${formatted}. ${weather}.${sessionGap}${lateNightFlag}`;
 }
 
 function getSessionContext(sessionState?: any) {
@@ -798,6 +798,18 @@ export async function POST(request: NextRequest) {
     });
     const model = getChatModelForPersona(persona.slug);
 
+    const timeZone = getRequestTimeZone(request);
+    const coords = getRequestCoords(request);
+    const timeContext = getCurrentContext({
+      lastMessageAt: context.recentMessages.at(-1)?.createdAt ?? null,
+      userId: user.id,
+      timeZone: timeZone || undefined,
+      coords,
+      userTimeZone: timeZone || undefined,
+    });
+
+    const nightGuidance = `[GUIDANCE]: If late night (11pm–5am), avoid suggesting outdoor activity; encourage rest or quiet indoor options. If evening (8pm–11pm), prefer wind-down and low-energy suggestions. If early morning (5am–7am), use gentle motivation and soft start.`;
+
     const messages = buildChatMessages({
       persona: context.persona,
       situationalContext,
@@ -806,6 +818,9 @@ export async function POST(request: NextRequest) {
       recentMessages: context.recentMessages,
       transcript: sttResult.transcript,
     });
+
+    messages.unshift({ role: "system" as const, content: nightGuidance });
+    messages.unshift({ role: "system" as const, content: timeContext });
 
     const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
     if (totalChars > 20000) {
