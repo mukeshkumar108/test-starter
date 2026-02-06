@@ -88,12 +88,15 @@ async function testBouncerTriggers() {
     const supplemental = await __test__runLibrarianReflex({
       requestId: "req-test",
       userId: "user-1",
+      personaId: "persona-1",
+      sessionId: "session-1",
       transcript,
       recentMessages: [
         { role: "user", content: "I was talking about protein shakes." },
         { role: "assistant", content: "Tell me more." },
       ],
       now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
     });
 
     expect(bouncerCalled, "Expected bouncer to be called");
@@ -171,9 +174,12 @@ async function testFallbackWhenEmpty() {
     const supplemental = await __test__runLibrarianReflex({
       requestId: "req-test-2",
       userId: "user-2",
+      personaId: "persona-2",
+      sessionId: "session-2",
       transcript,
       recentMessages: [{ role: "user", content: "Hey." }],
       now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
     });
 
     expect(

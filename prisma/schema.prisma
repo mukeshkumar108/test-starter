@@ -90,6 +90,7 @@ model User {
   todos         Todo[]
   sessions      Session[]
   sessionSummaries SessionSummary[]
+  librarianTraces LibrarianTrace[]
 }
 
 model PersonaProfile {
@@ -109,6 +110,7 @@ model PersonaProfile {
   todos         Todo[]
   sessions      Session[]
   sessionSummaries SessionSummary[]
+  librarianTraces LibrarianTrace[]
 }
 
 model UserSeed {
@@ -203,4 +205,26 @@ model SummarySpine {
   
   @@unique([userId, conversationId, version])
   @@index([userId, conversationId])
+}
+
+model LibrarianTrace {
+  id                   String   @id @default(cuid())
+  userId               String
+  personaId            String
+  sessionId            String?
+  requestId            String?
+  kind                 String
+  transcript           String?
+  bouncer              Json?
+  memoryQuery          Json?
+  memoryResponse       Json?
+  supplementalContext  String?
+  brief                Json?
+  createdAt            DateTime @default(now())
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  persona PersonaProfile @relation(fields: [personaId], references: [id], onDelete: Cascade)
+
+  @@index([userId, personaId, createdAt])
+  @@index([sessionId])
 }

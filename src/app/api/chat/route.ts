@@ -265,11 +265,15 @@ function extractLastTwoTurns(
 async function runLibrarianReflex(params: {
   requestId: string;
   userId: string;
+  personaId: string;
+  sessionId: string;
   transcript: string;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
   now: Date;
+  shouldTrace: boolean;
 }) {
-  const { requestId, userId, transcript, recentMessages, now } = params;
+  const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
+    params;
   if (!env.OPENROUTER_API_KEY || !env.SYNAPSE_BASE_URL || !env.SYNAPSE_TENANT_ID) {
     return null;
   }
@@ -362,6 +366,24 @@ ${transcript}`;
     } catch {
       return null;
     }
+
+    if (shouldTrace && bouncerResult) {
+      try {
+        await prisma.librarianTrace.create({
+          data: {
+            userId,
+            personaId,
+            sessionId,
+            requestId,
+            kind: "bouncer",
+            transcript,
+            bouncer: bouncerResult,
+          },
+        });
+      } catch (error) {
+        console.warn("[librarian.trace] failed to log bouncer", { error });
+      }
+    }
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       console.warn("[librarian.bouncer] timeout", { requestId });
@@ -420,10 +442,33 @@ ${transcript}`;
           .filter(Boolean)
       : [];
 
-    if (facts.length === 0 && entities.length === 0) {
-      return `No matching memories found for "${sanitized}".`;
+    const supplemental =
+      facts.length === 0 && entities.length === 0
+        ? `No matching memories found for "${sanitized}".`
+        : buildRecallSheet({ query: sanitized, facts, entities });
+
+    if (shouldTrace) {
+      try {
+        await prisma.librarianTrace.create({
+          data: {
+            userId,
+            personaId,
+            sessionId,
+            requestId,
+            kind: "librarian",
+            transcript,
+            bouncer: bouncerResult,
+            memoryQuery: { query: sanitized, limit: 10 },
+            memoryResponse: data,
+            supplementalContext: supplemental,
+          },
+        });
+      } catch (error) {
+        console.warn("[librarian.trace] failed to log librarian", { error });
+      }
     }
-    return buildRecallSheet({ query: sanitized, facts, entities });
+
+    return supplemental;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       console.warn("[librarian.query] timeout", { requestId });
@@ -578,12 +623,18 @@ export async function POST(request: NextRequest) {
     // Step 3: Generate LLM response
     const rollingSummary = context.rollingSummary ?? "";
     const situationalContext = context.situationalContext ?? "";
+    const shouldTraceLibrarian =
+      env.FEATURE_LIBRARIAN_TRACE === "true" ||
+      request.headers.get("x-debug-librarian") === "1";
     const supplementalContext = await runLibrarianReflex({
       requestId,
       userId: user.id,
+      personaId,
+      sessionId: session.id,
       transcript: sttResult.transcript,
       recentMessages: context.recentMessages,
       now,
+      shouldTrace: shouldTraceLibrarian,
     });
     const model = getChatModelForPersona(persona.slug);
 

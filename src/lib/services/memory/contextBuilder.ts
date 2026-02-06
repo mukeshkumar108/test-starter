@@ -345,6 +345,24 @@ export async function buildContextFromSynapse(
   if (!brief) return null;
   const situationalContext = buildSituationalContext(brief);
 
+  if (env.FEATURE_LIBRARIAN_TRACE === "true") {
+    try {
+      await prisma.librarianTrace.create({
+        data: {
+          userId,
+          personaId,
+          sessionId: sessionId || null,
+          kind: "brief",
+          memoryQuery: selectedQuery ? { query: selectedQuery } : null,
+          brief,
+          supplementalContext: situationalContext ?? null,
+        },
+      });
+    } catch (error) {
+      console.warn("[librarian.trace] failed to log brief", { error });
+    }
+  }
+
   return {
     persona: personaPrompt,
     situationalContext: situationalContext ?? undefined,
