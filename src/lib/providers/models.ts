@@ -4,11 +4,11 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "allenai/olmo-3.1-32b-instruct",
-    SUPPORTIVE: "allenai/olmo-3.1-32b-instruct", 
-    COACH: "allenai/olmo-3.1-32b-instruct",
-    CREATIVE: "allenai/olmo-3.1-32b-instruct",
-    ANALYTICAL: "allenai/olmo-3.1-32b-instruct",
+    MENTOR: "meta-llama/llama-4-maverick",
+    SUPPORTIVE: "meta-llama/llama-4-maverick", 
+    COACH: "meta-llama/llama-4-maverick",
+    CREATIVE: "meta-llama/llama-4-maverick",
+    ANALYTICAL: "meta-llama/llama-4-maverick",
   },
   
   // Cheap model for shadow processing/judging
