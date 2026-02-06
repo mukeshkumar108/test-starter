@@ -19,7 +19,7 @@ Two paths run in parallel:
    - Start or continue active session
 6. **Context build** (`contextBuilder.ts`)
    - Persona prompt
-   - Last 6 messages
+   - Last 8 messages
    - Synapse `/session/brief` if enabled
 7. **Librarian Reflex** (optional)
    - Gate decides if memory query is needed (explicit vs ambient)
@@ -27,7 +27,7 @@ Two paths run in parallel:
    - Relevance check validates retrieval
    - If yes, call `/memory/query` and format Recall Sheet
 8. **Prompt assembly** (`route.ts`)
-   - Persona → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → Rolling Summary → Last 6 turns → User msg
+   - Persona → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → Rolling Summary → Last 8 messages → User msg
 9. **LLM call** (OpenRouter)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)

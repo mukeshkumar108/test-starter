@@ -30,14 +30,14 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
    - Session close triggers Synapse `/session/ingest` (async)
 4. `buildContext(...)` in `contextBuilder.ts`
    - Load persona prompt
-   - Load last 6 messages (working memory)
+   - Load last 8 messages (working memory)
    - If `FEATURE_SYNAPSE_BRIEF=true`, call Synapse `/session/brief`
 5. Prompt assembly in `route.ts`
    - Persona (Identity Anchor)
    - SITUATIONAL_CONTEXT (Synapse brief)
    - SUPPLEMENTAL_CONTEXT (Recall Sheet, if triggered)
    - Rolling summary (if present)
-   - Last 6 turns + current user message
+   - Last 8 messages + current user message
 6. LLM call (OpenRouter)
 7. TTS (ElevenLabs)
 8. Store messages
@@ -60,8 +60,8 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 
 ## Working Memory (Local)
 In‑session context is kept locally for speed:
-- Last 6 turns (user + assistant)
-- Rolling summary (planned; currently optional)
+- Last 8 messages (user + assistant)
+- Rolling summary (generated every 4 turns from older messages)
 
 This keeps LLM context tight while Synapse handles long‑term memory.
 
@@ -88,7 +88,7 @@ Blocks are in this order:
 - SITUATIONAL_CONTEXT (Synapse brief)
 - SUPPLEMENTAL_CONTEXT (Recall Sheet)
 - Rolling summary (if any)
-- Last 6 turns
+- Last 8 messages
 
 ---
 

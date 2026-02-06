@@ -20,8 +20,8 @@ Async path (never blocks response):
 `buildContext()` now returns a minimal structure:
 - `persona` (prompt file)
 - `situationalContext` (from Synapse `/session/brief`)
-- `rollingSummary` (optional, local)
-- `recentMessages` (last 6 turns)
+- `rollingSummary` (rolling summary of older messages; updates every 4 turns)
+- `recentMessages` (last 8 messages)
 
 Supplemental recall (Recall Sheet) is added in `/api/chat` after the brief if the Librarian Reflex (gate → spec → relevance) triggers a `/memory/query`.
 

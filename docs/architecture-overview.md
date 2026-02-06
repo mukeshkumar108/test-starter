@@ -11,8 +11,8 @@ The system optimizes for continuity without bloating every request.
 
 ## Core Layers
 ### 1) Working Memory (Immediate)
-- Last 6 turns from the current session
-- Optional rolling summary
+- Last 8 messages from the current session
+- Rolling summary of older messages (updates every 4 turns)
 - Lives in the local DB only for the active session
 
 ### 2) Session Boundary (Bookends)

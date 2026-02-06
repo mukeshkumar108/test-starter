@@ -7,7 +7,7 @@ The prompt is intentionally small and ordered. No nested memory blocks.
 2. **SITUATIONAL_CONTEXT** (Synapse `/session/brief`)
 3. **SUPPLEMENTAL_CONTEXT** (Recall Sheet from `/memory/query`, optional)
 4. **Rolling Summary** (optional, local)
-5. **Recent Turns** (last 6 messages)
+5. **Recent Messages** (last 8 messages)
 6. **Current User Message**
 
 ## Notes
