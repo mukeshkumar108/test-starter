@@ -280,15 +280,22 @@ async function runLibrarianReflex(params: {
   const lastTurns = extractLastTwoTurns(recentMessages)
     .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
     .join("\n");
-  const bouncerPrompt = `You are a memory bouncer. Decide if the user wants to recall past info.
+  const bouncerPrompt = `You are a Senior Search Engineer. Your goal is to rewrite user intent into optimized search queries for a vector database.
 
 Return ONLY valid JSON:
-{"action":"memory_query"|"none","search_string":"3-4 word query or null","confidence":0-1}
+{"action":"memory_query"|"none","search_string":"keywords or null","confidence":0-1}
 
-Rules:
-- Only return memory_query if past context is needed.
-- search_string must be 3-4 words, short, and specific.
-- If unsure, action=none.
+RULES:
+1. Identify if the user is asking about past events, facts, or previously mentioned people/items.
+2. If YES: Extract only the 2-3 most \"High-Entropy\" keywords (Nouns/Proper Nouns).
+3. ABSOLUTELY STRIP: Pronouns (my, I, me), prepositions (about, with, for), and temporal filler (when, was, is, the).
+4. If the user is just chatting or talking about the present/future, return \"none\".
+
+FEW-SHOT EXAMPLES:
+- \"What did I say about my walk when I was in London?\" -> {\"action\":\"memory_query\",\"search_string\":\"London walk\",\"confidence\":1.0}
+- \"Remind me about that diet with chicken thighs\" -> {\"action\":\"memory_query\",\"search_string\":\"diet chicken thighs\",\"confidence\":1.0}
+- \"Who was that person Ashley I mentioned?\" -> {\"action\":\"memory_query\",\"search_string\":\"Ashley\",\"confidence\":0.9}
+- \"Hey Sophie, how's your day?\" -> {\"action\":\"none\",\"search_string\":null,\"confidence\":1.0}
 
 Recent conversation:
 ${lastTurns}
