@@ -77,8 +77,10 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 - We call `/session/brief` to build `SITUATIONAL_CONTEXT`
 
 ### 3) When do we fetch extra memory (Librarian Reflex)?
-- Bouncer LLM decides if a memory query is needed
-- If confident, calls `/memory/query` and formats a Recall Sheet
+- **Gate** decides if memory is needed (explicit vs ambient)
+- **Spec** extracts entities/topics/time intent
+- **Relevance** checks if retrieved memory should be injected
+- If used, we format a Recall Sheet as `SUPPLEMENTAL_CONTEXT`
 
 ### 4) What goes into the prompt?
 Blocks are in this order:

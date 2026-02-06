@@ -22,7 +22,9 @@ Two paths run in parallel:
    - Last 6 messages
    - Synapse `/session/brief` if enabled
 7. **Librarian Reflex** (optional)
-   - Bouncer LLM decides if memory query is needed
+   - Gate decides if memory query is needed (explicit vs ambient)
+   - Spec extracts entities/topics/time intent
+   - Relevance check validates retrieval
    - If yes, call `/memory/query` and format Recall Sheet
 8. **Prompt assembly** (`route.ts`)
    - Persona → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → Rolling Summary → Last 6 turns → User msg

@@ -25,8 +25,8 @@ The system optimizes for continuity without bloating every request.
 - Returned as a **situational narrative** for new sessions
 
 ### 4) Librarian Reflex (On‑Demand Recall)
-- A small “bouncer” LLM decides if extra memory is needed
-- If yes, call `/memory/query` and inject a Recall Sheet
+- Gate → Spec → Relevance (3-step) flow
+- If memory is needed, call `/memory/query` and inject a Recall Sheet
 
 ---
 
