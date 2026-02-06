@@ -18,6 +18,11 @@ type RequestResult<TResponse> = {
   data: TResponse | null;
 };
 
+type RequestResultWithError<TResponse> = RequestResult<TResponse> & {
+  errorBody?: string | null;
+  reason?: "timeout" | "exception" | "non_ok" | "missing_base_url";
+};
+
 async function requestJson<TPayload, TResponse>(
   method: "GET" | "POST",
   path: string,
@@ -150,6 +155,87 @@ export async function sessionIngest<TPayload = unknown, TResponse = unknown>(
 
 export async function sessionIngestWithMeta<TPayload = unknown, TResponse = unknown>(
   payload: TPayload
-): Promise<RequestResult<TResponse> | null> {
-  return requestJson<TPayload, TResponse>("POST", "/session/ingest", payload);
+): Promise<RequestResultWithError<TResponse> | null> {
+  const requestId = crypto.randomUUID();
+
+  if (!env.SYNAPSE_BASE_URL) {
+    console.warn("[synapse.client] missing SYNAPSE_BASE_URL", { requestId });
+    return {
+      ok: false,
+      status: null,
+      ms: 0,
+      url: "/session/ingest",
+      data: null,
+      errorBody: null,
+      reason: "missing_base_url",
+    };
+  }
+
+  const url = `${env.SYNAPSE_BASE_URL}/session/ingest`;
+  const controller = new AbortController();
+  const timeoutOverride = Number.parseInt(env.SYNAPSE_SESSION_INGEST_TIMEOUT_MS ?? "", 10);
+  const timeoutMs = Number.isFinite(timeoutOverride) ? timeoutOverride : 60_000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const start = Date.now();
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+      signal: controller.signal,
+    });
+    const ms = Date.now() - start;
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.warn("[synapse.client] request failed", {
+        requestId,
+        path: "/session/ingest",
+        url,
+        status: response.status,
+        ms,
+      });
+      return {
+        ok: false,
+        status: response.status,
+        ms,
+        url,
+        data: null,
+        errorBody,
+        reason: "non_ok",
+      };
+    }
+
+    const data = (await response.json()) as TResponse;
+    return {
+      ok: true,
+      status: response.status,
+      ms,
+      url,
+      data,
+    };
+  } catch (error) {
+    const ms = Date.now() - start;
+    const reason =
+      error instanceof Error && error.name === "AbortError" ? "timeout" : "exception";
+    console.warn("[synapse.client] request error", {
+      requestId,
+      path: "/session/ingest",
+      url,
+      reason,
+      ms,
+    });
+    return {
+      ok: false,
+      status: null,
+      ms,
+      url,
+      data: null,
+      errorBody: reason,
+      reason,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

@@ -34,30 +34,34 @@ export async function GET(request: NextRequest) {
   const userId = searchParams.get("userId") || undefined;
   const personaId = searchParams.get("personaId") || undefined;
   const sessionId = searchParams.get("sessionId") || undefined;
-  const onlyFailures = searchParams.get("onlyFailures") === "1";
   const includeText = searchParams.get("includeText") === "1";
   const limit = getLimit(searchParams);
   const since = getSince(searchParams);
 
-  const rows = await prisma.synapseIngestTrace.findMany({
+  const rows = await prisma.message.findMany({
     where: {
       ...(userId ? { userId } : {}),
       ...(personaId ? { personaId } : {}),
-      ...(sessionId ? { sessionId } : {}),
-      ...(onlyFailures ? { ok: false } : {}),
+      ...(sessionId ? { metadata: { path: ["sessionId"], equals: sessionId } } : {}),
       ...(since ? { createdAt: { gte: since } } : {}),
     },
     orderBy: { createdAt: "desc" },
     take: limit,
+    select: {
+      id: true,
+      userId: true,
+      personaId: true,
+      role: true,
+      content: true,
+      createdAt: true,
+      metadata: true,
+    },
   });
 
   const data = rows.map((row) => ({
     ...row,
-    error: includeText ? row.error : null,
+    content: includeText ? row.content : null,
   }));
 
-  return NextResponse.json({
-    count: data.length,
-    data,
-  });
+  return NextResponse.json({ count: data.length, data });
 }

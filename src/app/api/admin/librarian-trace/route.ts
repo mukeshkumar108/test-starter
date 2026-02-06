@@ -9,6 +9,13 @@ function getLimit(params: URLSearchParams) {
   return Math.min(Math.max(parsed, 1), 200);
 }
 
+function getSince(params: URLSearchParams) {
+  const raw = params.get("sinceMinutes");
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return new Date(Date.now() - parsed * 60 * 1000);
+}
+
 function isAuthorized(request: NextRequest) {
   if (!env.ADMIN_API_KEY) return false;
   const key = request.headers.get("x-admin-key");
@@ -29,12 +36,14 @@ export async function GET(request: NextRequest) {
   const sessionId = searchParams.get("sessionId") || undefined;
   const includeText = searchParams.get("includeText") === "1";
   const limit = getLimit(searchParams);
+  const since = getSince(searchParams);
 
   const rows = await prisma.librarianTrace.findMany({
     where: {
       ...(userId ? { userId } : {}),
       ...(personaId ? { personaId } : {}),
       ...(sessionId ? { sessionId } : {}),
+      ...(since ? { createdAt: { gte: since } } : {}),
     },
     orderBy: { createdAt: "desc" },
     take: limit,

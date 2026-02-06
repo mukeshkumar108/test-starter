@@ -118,6 +118,7 @@ async function fireAndForgetSynapseSessionIngest(session: {
       const ms = Date.now() - start;
       const status = result?.status ?? null;
       const ok = Boolean(result?.ok);
+      const errorBody = result?.errorBody ?? null;
       console.log("[synapse.session.ingest]", {
         requestId: null,
         role: "session",
@@ -136,13 +137,17 @@ async function fireAndForgetSynapseSessionIngest(session: {
             status,
             ms,
             ok,
-            error: ok ? null : "session_ingest_failed",
+            error: ok ? null : errorBody || "session_ingest_failed",
           },
         });
 
         const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const failedCount = await prisma.synapseIngestTrace.count({
-          where: { ok: false, createdAt: { gte: cutoff } },
+          where: {
+            ok: false,
+            createdAt: { gte: cutoff },
+            NOT: { error: "timeout" },
+          },
         });
         if (failedCount > 0) {
           console.warn("[synapse.session.ingest.failures.24h]", {
