@@ -1,4 +1,6 @@
-# Memory & Context Engine — Snapshot v1.3.6 (Replaces v1.3.3)
+# Memory & Context Engine — Snapshot v1.3.6 (Replaces v1.3.3) (Historical)
+
+Note: This snapshot predates the Great Simplification. Current memory architecture uses Synapse session briefs + session ingest. See `docs/orchestrator-overview.md`.
 
 Note: This file name is preserved for compatibility. The current, canonical snapshot is v1.3.6.
 See: docs/memory-context-engine-snapshot-v1.3.6.md

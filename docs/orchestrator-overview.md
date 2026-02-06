@@ -1,100 +1,102 @@
-# Orchestrator Overview (Plain‑English + Technical)
+# Orchestrator Overview (Great Simplification)
 
-## What “Orchestrator” Means Here
-The orchestrator is the glue that decides **what context to retrieve**, **what to send to the LLM**, and **what to store afterward**. It sits between:
+## What The Orchestrator Does
+The orchestrator is the glue between the app, Synapse, and the LLM. It decides:
+- When a session starts or ends
+- What context to fetch from Synapse
+- What working memory to include in the prompt
+- What to send to Synapse when the session closes
 
-- **Upstream:** voice input + auth + app requests
-- **Downstream:** memory services (Synapse + local DB), LLMs, and TTS
-
-Think of it as the “traffic controller” for a single chat turn.
-
----
-
-## One‑Turn Flow (Simple Version)
-1. **User speaks**
-2. **STT** turns audio into text
-3. **Orchestrator builds context**
-4. **LLM generates response**
-5. **TTS** turns response into audio
-6. **Memory is updated** (async)
-
-That’s it. The orchestrator doesn’t invent new data; it only decides what to use and where to save it.
+It is intentionally simple: **bookend memory** (brief at session start, ingest at session end) with **local working memory** in between.
 
 ---
 
-## One‑Turn Flow (Technical Version)
-1. `/api/chat` receives `audioBlob` + `personaId`
-2. Speech‑to‑Text (`transcribeAudio`)
-3. `buildContext(...)`:
-   - Loads persona prompt
-   - Reads recent messages
-   - If `FEATURE_SYNAPSE_BRIEF=true`: calls Synapse `/brief`
-   - Otherwise uses local memory retrieval
-4. Prompt assembly (system blocks + recent messages + user input)
-5. LLM call (OpenRouter)
-6. TTS call (ElevenLabs)
-7. Store user + assistant messages
-8. Async updates:
-   - Synapse `/ingest` (if enabled)
-   - Local Shadow Judge (if enabled)
+## One‑Turn Flow (Simple)
+1. User speaks
+2. STT → transcript
+3. Orchestrator builds prompt context
+4. LLM responds
+5. TTS speaks
+6. Memory updates happen async
 
 ---
 
-## Key Decisions the Orchestrator Makes
-### 1) “Should we query memory at all?”
-We avoid querying memory for every message. We only query when it’s useful:
-- If user asks: “remember”, “what did we decide”, etc.
-- Or the query router suggests a short query (cheap model)
-- Or we extract a good name/relationship/location candidate from the message
-
-The router sees the **current user message** plus up to the **last 2 full turns** (user + assistant) when available. If there’s no history (new chat), it uses the current message only.
-
-### 2) “Which memory source do we use?”
-Currently:
-- **Read path:** Synapse when `FEATURE_SYNAPSE_BRIEF=true`, otherwise local memory.
-- **Write path:** Synapse `/ingest` if enabled, plus local Shadow Judge if enabled.
-
-### 3) “What gets into the LLM prompt?”
-The orchestrator composes a **stack of context blocks** (persona, memories, summaries, etc.) in a fixed order, then adds recent messages and the current user message.
-
----
-
-## What a Non‑Technical Person Should Know
-- The orchestrator is the **brain of the pipeline**.
-- It chooses **what past info matters right now**.
-- It keeps the conversation consistent **without slowing down** the response.
+## One‑Turn Flow (Technical)
+1. `/api/chat` receives audio + personaId
+2. STT (`transcribeAudio`)
+3. Session lifecycle in `sessionService.ts`
+   - If `now - last_user_message > 15 min`, close session
+   - Open or continue the active session
+   - Session close triggers Synapse `/session/ingest` (async)
+4. `buildContext(...)` in `contextBuilder.ts`
+   - Load persona prompt
+   - Load last 6 messages (working memory)
+   - If `FEATURE_SYNAPSE_BRIEF=true`, call Synapse `/session/brief`
+5. Prompt assembly in `route.ts`
+   - Persona (Identity Anchor)
+   - SITUATIONAL_CONTEXT (Synapse brief)
+   - Rolling summary (if present)
+   - Last 6 turns + current user message
+6. LLM call (OpenRouter)
+7. TTS (ElevenLabs)
+8. Store messages
 
 ---
 
-## What a Technical Person Should Know
-- The orchestrator is implemented in:
-  - `src/lib/services/memory/contextBuilder.ts`
-  - `src/app/api/chat/route.ts`
-- It is **feature‑flagged** to switch between local memory and Synapse.
-- It uses a **cheap query router** to avoid unnecessary memory calls.
-- It uses **async writes** so user latency stays low.
+## Bookend Memory Model
+### Opening Book: Synapse Brief
+- Called via `/session/brief`
+- Provides a compact **situational narrative** for this user+persona+session
+- Injected as a single block: `SITUATIONAL_CONTEXT`
+
+### Closing Book: Synapse Ingest
+- Called via `/session/ingest` when a session ends
+- Sends **full transcript** for long‑term memory ingestion
+- Fire‑and‑forget so it never blocks user response
 
 ---
 
-## Current Flags That Change Orchestrator Behavior
+## Working Memory (Local)
+In‑session context is kept locally for speed:
+- Last 6 turns (user + assistant)
+- Rolling summary (planned; currently optional)
+
+This keeps LLM context tight while Synapse handles long‑term memory.
+
+---
+
+## Key Decisions The Orchestrator Makes
+### 1) When is a new session started?
+- If **no active session** exists
+- Or if **last user message > 15 minutes ago**
+
+### 2) When do we fetch Synapse context?
+- When `FEATURE_SYNAPSE_BRIEF=true`
+- We call `/session/brief` to build `SITUATIONAL_CONTEXT`
+
+### 3) What goes into the prompt?
+Only four blocks, always in this order:
+- Persona (Identity Anchor)
+- SITUATIONAL_CONTEXT (Synapse brief)
+- Rolling summary (if any)
+- Last 6 turns
+
+---
+
+## Flags That Change Behavior
 - `FEATURE_SYNAPSE_BRIEF`
-- `FEATURE_SYNAPSE_INGEST`
-- `FEATURE_QUERY_ROUTER`
-- `FEATURE_SHADOW_JUDGE`
+- `FEATURE_SYNAPSE_SESSION_INGEST`
+- `FEATURE_SHADOW_JUDGE` (legacy local pipeline)
+- `FEATURE_SESSION_SUMMARY` (legacy local summaries)
 
 ---
 
-## Is LangGraph (or Similar) Necessary?
-**Short answer:** Not yet, but it could help later.
+## Query Router Status
+A query router exists in code, but `/session/brief` currently ignores query hints. This is intentionally conservative until Synapse exposes query‑aware briefs for sessions.
 
-**When you do NOT need it:**
-- You only have a few steps (STT → context → LLM → TTS).
-- Logic is mostly linear with a couple of feature flags.
-- You can keep the code readable without a graph framework.
+---
 
-**When you might want it:**
-- You add **multiple branches** (tools, external systems, retries).
-- You need **explicit state machines** (auditability, replay).
-- You want **visual graphs** for non‑engineers.
-
-**Right now:** the current system is still simple enough to manage directly. Adding LangGraph now would add mental overhead without clear payoff. It’s a good future option if the orchestration grows more complex.
+## Is LangGraph Needed?
+Not yet.
+- The current flow is linear and easy to reason about.
+- If we add many tools, branching flows, or retries, a graph framework could help.

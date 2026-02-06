@@ -76,15 +76,9 @@ async function main() {
   ];
 
   (globalThis as any).__synapseBriefOverride = async () => ({
-    identity: { name: "Mukesh", timezone: "America/Los_Angeles" },
-    semanticContext: [{ text: "Likes hiking" }, { text: "Project Atlas" }],
-    activeLoops: [
-      { type: "COMMITMENT", salience: 0.9, text: "Finish proposal" },
-      { type: "FRICTION", salience: 0.8, text: "Gets stuck on revisions" },
-      { type: "THREAD", salience: 0.5, text: "Launch timeline" },
-      { type: "COMMITMENT", salience: 0.2, text: "Schedule meeting" },
-    ],
-    rollingSummary: "User is preparing a proposal.",
+    briefContext: "User is preparing a proposal.",
+    temporalVibe: "Late afternoon, focused",
+    activeLoops: ["Finish proposal", "Gets stuck on revisions"],
   });
 
   const context = await buildContextFromSynapse(
@@ -100,14 +94,18 @@ async function main() {
   if (!context) throw new Error("Expected context, got null");
 
   expect(context.persona).toBe("TEST PROMPT");
-  expect(context.foundationMemories).toEqual([
-    "Name: Mukesh | Timezone: America/Los_Angeles",
-  ]);
-  expect(context.relevantMemories).toEqual(["Likes hiking", "Project Atlas"]);
-  expect(context.commitments).toEqual(["Finish proposal", "Schedule meeting"]);
-  expect(context.threads).toEqual(["Launch timeline"]);
-  expect(context.frictions).toEqual(["Gets stuck on revisions"]);
-  expect(context.rollingSummary).toBe("User is preparing a proposal.");
+  if (!context.situationalContext) {
+    throw new Error("Expected situationalContext to be set");
+  }
+  if (!context.situationalContext.includes("Brief: User is preparing a proposal.")) {
+    throw new Error("Expected briefContext in situationalContext");
+  }
+  if (!context.situationalContext.includes("Temporal: Late afternoon, focused")) {
+    throw new Error("Expected temporalVibe in situationalContext");
+  }
+  if (!context.situationalContext.includes("Tensions:")) {
+    throw new Error("Expected tensions in situationalContext");
+  }
   expect(context.recentMessages.length).toBe(1);
   });
 
@@ -121,13 +119,9 @@ async function main() {
   (globalThis as any).__synapseBriefOverride = async () => null;
   const sentinel = {
     persona: "LOCAL",
+    situationalContext: undefined,
+    rollingSummary: undefined,
     recentMessages: [],
-    foundationMemories: [],
-    relevantMemories: [],
-    commitments: [],
-    threads: [],
-    frictions: [],
-    recentWins: [],
     isSessionStart: true,
   };
   (globalThis as any).__buildContextLocalOverride = async () => sentinel;

@@ -1,4 +1,6 @@
-# SPEC_memory_B.md — Universal Human Substrate & Entity-First Retrieval
+# SPEC_memory_B.md — Universal Human Substrate & Entity-First Retrieval (Historical)
+
+Note: This spec predates the Great Simplification. Current memory architecture uses Synapse session briefs + session ingest. See `docs/orchestrator-overview.md`.
 
 ## 1. Objective
 Transition the memory engine from "Semantic Top-K" (A) to "Entity-First Pipeline" (B). The goal is to enable multi-hop intelligence (e.g., connecting a person to a place or project) without a Graph DB.

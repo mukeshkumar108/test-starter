@@ -1,4 +1,6 @@
-# Memory & Context Engine — Snapshot v1.3.6
+# Memory & Context Engine — Snapshot v1.3.6 (Historical)
+
+Note: This snapshot predates the Great Simplification. Current memory architecture uses Synapse session briefs + session ingest. See `docs/orchestrator-overview.md`.
 
 This snapshot reflects current code paths as of v1.3.6. It is based on:
 - `src/app/api/chat/route.ts`

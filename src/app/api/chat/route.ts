@@ -10,7 +10,6 @@ import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import { getChatModelForPersona } from "@/lib/providers/models";
-import { searchMemories } from "@/lib/services/memory/memoryStore";
 import { closeStaleSessionIfAny, ensureActiveSession } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
 
@@ -146,7 +145,7 @@ function getCurrentContext(params: {
   if (params.lastMessageAt) {
     const diffMs = now.getTime() - params.lastMessageAt.getTime();
     const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    if (diffMinutes > 30) {
+    if (diffMinutes > 15) {
       const hours = Math.floor(diffMinutes / 60);
       const minutes = diffMinutes % 60;
       const parts = [];
@@ -318,134 +317,20 @@ export async function POST(request: NextRequest) {
     const session = await ensureActiveSession(user.id, personaId, now);
 
     // Step 2: Build conversation context
-    const requestTimeZone = getRequestTimeZone(request);
-    const requestCoords = getRequestCoords(request);
     const context = await buildContext(user.id, personaId, sttResult.transcript);
-    const lastMessage = await prisma.message.findFirst({
-      where: { userId: user.id },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    });
 
     // Step 3: Generate LLM response
-    const sessionContext = getSessionContext(context.sessionState);
-    const commitmentStrings = context.commitments.join("\n");
-    let threadStrings = context.threads.join("\n");
-    const frictionStrings = context.frictions.join("\n");
-    const recentWins = context.recentWins;
-    const recentWinStrings = recentWins.join("\n");
-    // Rolling summary: only if non-empty (already validated in contextBuilder)
     const rollingSummary = context.rollingSummary ?? "";
-    // SessionSummary: only inject on session boundary (first turn or gap > 30m)
-    // Gap detection: if lastMessage is older than 30m, we're resuming
-    const hasGap = lastMessage?.createdAt
-      ? (now.getTime() - lastMessage.createdAt.getTime()) > 30 * 60 * 1000
-      : false;
-    const shouldInjectSessionSummary = context.isSessionStart || hasGap;
-    let sessionSummary = (shouldInjectSessionSummary && context.sessionSummary) ? context.sessionSummary : "";
-    let relevantMemoryStrings = context.relevantMemories.join("\n");
-    const nonPinnedFoundationStrings = "";
-    const foundationMemoryStrings = context.foundationMemories.join("\n");
+    const situationalContext = context.situationalContext ?? "";
     const model = getChatModelForPersona(persona.slug);
-    const realTimeContext = getCurrentContext({
-      lastMessageAt: lastMessage?.createdAt,
-      userId: user.id,
-      timeZone: requestTimeZone,
-      coords: requestCoords,
-    });
-    const MAX_CONTEXT_TOKENS = 1200;
-    const estimateTokens = (value: string) => Math.ceil(value.length / 4);
-    const estimateMessageTokens = () => {
-      let total = 0;
-      total += estimateTokens(realTimeContext);
-      if (sessionContext) total += estimateTokens(sessionContext);
-      total += estimateTokens(context.persona);
-      if (foundationMemoryStrings) total += estimateTokens(foundationMemoryStrings);
-      if (relevantMemoryStrings) total += estimateTokens(relevantMemoryStrings);
-      if (commitmentStrings) total += estimateTokens(commitmentStrings);
-      if (threadStrings) total += estimateTokens(threadStrings);
-      if (frictionStrings) total += estimateTokens(frictionStrings);
-      if (recentWinStrings) total += estimateTokens(recentWinStrings);
-      if (context.userSeed) total += estimateTokens(context.userSeed);
-      if (context.summarySpine) total += estimateTokens(context.summarySpine);
-      if (rollingSummary) total += estimateTokens(rollingSummary);
-      if (sessionSummary) total += estimateTokens(sessionSummary);
-      total += context.recentMessages.reduce(
-        (sum, message) => sum + estimateTokens(message.content),
-        0
-      );
-      total += estimateTokens(sttResult.transcript);
-      return total;
-    };
-
-    let estimatedTokens = estimateMessageTokens();
-    const dropOrder = [
-      () => {
-        relevantMemoryStrings = "";
-      },
-      () => {
-        sessionSummary = "";
-      },
-      () => {
-        threadStrings = "";
-      },
-      () => {
-        // Placeholder for non-pinned foundation overflow (pinned-only foundation is kept).
-      },
-    ];
-    for (const drop of dropOrder) {
-      if (estimatedTokens <= MAX_CONTEXT_TOKENS) break;
-      drop();
-      estimatedTokens = estimateMessageTokens();
-    }
 
     const messages = [
-      {
-        role: "system" as const,
-        content: realTimeContext,
-      },
-      ...(sessionContext ? [{ role: "system" as const, content: sessionContext }] : []),
       { role: "system" as const, content: context.persona },
-      ...(foundationMemoryStrings
-        ? [{ role: "system" as const, content: `[FOUNDATION MEMORIES]:\n${foundationMemoryStrings}` }]
+      ...(situationalContext
+        ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
         : []),
-      ...(relevantMemoryStrings
-        ? [{ role: "system" as const, content: `[RELEVANT MEMORIES]:\n${relevantMemoryStrings}` }]
-        : []),
-      ...(commitmentStrings
-        ? [
-            {
-              role: "system" as const,
-              content: `COMMITMENTS (pending):\n${commitmentStrings}`,
-            },
-          ]
-        : []),
-      ...(threadStrings
-        ? [{ role: "system" as const, content: `ACTIVE THREADS:\n${threadStrings}` }]
-        : []),
-      ...(frictionStrings
-        ? [{ role: "system" as const, content: `FRICTIONS / PATTERNS:\n${frictionStrings}` }]
-        : []),
-      ...(recentWinStrings
-        ? [{ role: "system" as const, content: `Recent wins:\n${recentWinStrings}` }]
-        : []),
-      ...(context.userSeed ? [{ role: "system" as const, content: `User context: ${context.userSeed}` }] : []),
-      ...(context.summarySpine ? [{ role: "system" as const, content: `Conversation summary: ${context.summarySpine}` }] : []),
       ...(rollingSummary
-        ? [
-            {
-              role: "system" as const,
-              content: `CURRENT SESSION SUMMARY: ${rollingSummary}`,
-            },
-          ]
-        : []),
-      ...(sessionSummary
-        ? [
-            {
-              role: "system" as const,
-              content: `LATEST SESSION SUMMARY: ${sessionSummary}`,
-            },
-          ]
+        ? [{ role: "system" as const, content: `CURRENT SESSION SUMMARY: ${rollingSummary}` }]
         : []),
       ...context.recentMessages,
       { role: "user" as const, content: sttResult.transcript },
@@ -462,12 +347,9 @@ export async function POST(request: NextRequest) {
           totalChars,
           messageCount: messages.length,
           counts: {
-            foundation: context.foundationMemories.length,
-            relevant: context.relevantMemories.length,
-            commitments: context.commitments.length,
-            threads: context.threads.length,
-            frictions: context.frictions.length,
-            wins: context.recentWins.length,
+            recentMessages: context.recentMessages.length,
+            situationalContext: situationalContext ? 1 : 0,
+            rollingSummary: rollingSummary ? 1 : 0,
           },
           model,
         })
@@ -483,12 +365,9 @@ export async function POST(request: NextRequest) {
         model,
         token_usage: null,
         counts: {
-          foundationMemories: context.foundationMemories.length,
-          relevantMemories: context.relevantMemories.length,
-          commitments: context.commitments.length,
-          threads: context.threads.length,
-          frictions: context.frictions.length,
-          recentWins: context.recentWins.length,
+          recentMessages: context.recentMessages.length,
+          situationalContext: situationalContext ? 1 : 0,
+          rollingSummary: rollingSummary ? 1 : 0,
         },
       })
     );
@@ -499,26 +378,11 @@ export async function POST(request: NextRequest) {
 
     let debugPayload: Record<string, unknown> | undefined;
     if (debugEnabled) {
-      const rawRetrieval = await searchMemories(user.id, personaId, sttResult.transcript, 12);
       debugPayload = {
         contextBlocks: {
-          realTime: realTimeContext,
-          session: sessionContext,
           persona: context.persona,
-          foundationMemories: foundationMemoryStrings,
-          relevantMemories: relevantMemoryStrings,
-          commitments: commitmentStrings,
-          threads: threadStrings,
-          frictions: frictionStrings,
-          recentWins: recentWinStrings,
-          userSeed: context.userSeed,
-          summarySpine: context.summarySpine,
+          situationalContext,
           rollingSummary,
-          sessionSummary,
-        },
-        retrieval: {
-          query: sttResult.transcript,
-          results: rawRetrieval,
         },
       };
     }
@@ -564,7 +428,10 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (env.FEATURE_SYNAPSE_INGEST === "true") {
+    if (
+      env.FEATURE_SYNAPSE_INGEST === "true" &&
+      env.FEATURE_SYNAPSE_SESSION_INGEST !== "true"
+    ) {
       fireAndForgetSynapseIngest({
         requestId,
         userId: user.id,
@@ -580,7 +447,7 @@ export async function POST(request: NextRequest) {
       personaId,
       userMessage: sttResult.transcript,
       assistantResponse: llmResponse.content,
-      currentSessionState: context.sessionState,
+      currentSessionState: undefined,
     });
 
     autoCurateMaybe(user.id, personaId).catch((error) => {

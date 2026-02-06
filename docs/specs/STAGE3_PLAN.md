@@ -1,4 +1,6 @@
-# STAGE3_PLAN.md
+# STAGE3_PLAN.md (Historical)
+
+Note: This plan predates the Great Simplification. Current memory architecture uses Synapse session briefs + session ingest. See `docs/orchestrator-overview.md`.
 
 ## Exact Current Retrieval Flow
 
@@ -69,4 +71,3 @@ This makes frequency queries cheaper but is not required to implement Stage 3.
 
 **If recency must be computed in SQL**:
 - Use `WHERE id IN (...)` with the K ids from step 1, then compute `recency_score` for that set only.
-

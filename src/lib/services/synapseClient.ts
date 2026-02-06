@@ -99,6 +99,23 @@ export async function brief<TPayload = unknown, TResponse = unknown>(
   return result.data;
 }
 
+export async function sessionBrief<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const params = new URLSearchParams();
+  const asRecord = (payload ?? {}) as Record<string, unknown>;
+  for (const key of ["tenantId", "userId", "personaId", "sessionId", "now"]) {
+    const value = asRecord[key];
+    if (typeof value === "string" && value.length > 0) {
+      params.set(key, value);
+    }
+  }
+  const path = `/session/brief${params.toString() ? `?${params.toString()}` : ""}`;
+  const result = await requestJson<undefined, TResponse>("GET", path);
+  if (!result?.ok) return null;
+  return result.data;
+}
+
 export async function ingest<TPayload = unknown, TResponse = unknown>(
   payload: TPayload
 ): Promise<TResponse | null> {
@@ -121,4 +138,12 @@ export async function health(): Promise<{
     ms: result.ms,
     url: result.url,
   };
+}
+
+export async function sessionIngest<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const result = await requestJson<TPayload, TResponse>("POST", "/session/ingest", payload);
+  if (!result?.ok) return null;
+  return result.data;
 }
