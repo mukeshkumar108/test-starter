@@ -28,6 +28,7 @@ const WEATHER_TTL_MS = 30 * 60 * 1000;
 const WEATHER_TIMEOUT_MS = 1500;
 const DEFAULT_LIBRARIAN_TIMEOUT_MS = 5000;
 const DEFAULT_POSTURE_RESET_GAP_MINUTES = 180;
+const DEFAULT_USER_STATE_RESET_GAP_MINUTES = 180;
 
 function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");
@@ -53,6 +54,14 @@ function getPostureResetGapMinutes() {
   if (!raw) return DEFAULT_POSTURE_RESET_GAP_MINUTES;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_POSTURE_RESET_GAP_MINUTES;
+  return parsed;
+}
+
+function getUserStateResetGapMinutes() {
+  const raw = env.USER_STATE_RESET_GAP_MINUTES;
+  if (!raw) return DEFAULT_USER_STATE_RESET_GAP_MINUTES;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_USER_STATE_RESET_GAP_MINUTES;
   return parsed;
 }
 
@@ -259,6 +268,12 @@ type MemoryGateResult = {
   posture_confidence?: number;
   explicit_topic_shift?: boolean;
   posture_reason?: string | null;
+  mood?: "CALM" | "NEUTRAL" | "LOW" | "UPBEAT" | "FRUSTRATED" | "OVERWHELMED" | "ANXIOUS";
+  energy?: "LOW" | "MED" | "HIGH";
+  tone?: "PLAYFUL" | "SERIOUS" | "TENDER" | "DIRECT";
+  state_confidence?: number;
+  explicit_state_shift?: boolean;
+  state_reason?: string | null;
 };
 
 type MemoryQuerySpec = {
@@ -276,18 +291,24 @@ type RecallRelevanceResult = {
 
 type ConversationPosture = "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
 type ConversationPressure = "LOW" | "MED" | "HIGH";
+type UserMood = "CALM" | "NEUTRAL" | "LOW" | "UPBEAT" | "FRUSTRATED" | "OVERWHELMED" | "ANXIOUS";
+type UserEnergy = "LOW" | "MED" | "HIGH";
+type UserTone = "PLAYFUL" | "SERIOUS" | "TENDER" | "DIRECT";
 
 const DEFAULT_POSTURE: ConversationPosture = "COMPANION";
 const DEFAULT_PRESSURE: ConversationPressure = "MED";
+const DEFAULT_MOOD: UserMood = "NEUTRAL";
+const DEFAULT_ENERGY: UserEnergy = "MED";
+const DEFAULT_TONE: UserTone = "SERIOUS";
 
 const POSTURE_GUIDANCE: Record<ConversationPosture, string> = {
-  COMPANION: "Stay present, warm, and easy to talk to.",
-  MOMENTUM: "Nudge toward action and forward movement.",
-  REFLECTION: "Slow down and help things make sense.",
-  RELATIONSHIP: "Focus on people, feelings, and connection.",
-  IDEATION: "Explore possibilities and expand thinking.",
-  RECOVERY: "Lower pressure and support restoration.",
-  PRACTICAL: "Keep things concrete and actionable.",
+  COMPANION: "Warm, steady companionship and calm presence.",
+  MOMENTUM: "Action‑tilted, forward motion, gentle urgency.",
+  REFLECTION: "Slower pace, meaning‑making, emotional clarity.",
+  RELATIONSHIP: "People‑centered lens and relational nuance.",
+  IDEATION: "Exploratory, creative, option‑expanding.",
+  RECOVERY: "Gentle, low‑pressure, restorative tone.",
+  PRACTICAL: "Concrete, grounded, solution‑oriented.",
 };
 
 type PostureState = {
@@ -300,6 +321,7 @@ type PostureState = {
 };
 
 const postureStateCache = new Map<string, PostureState>();
+const userStateCache = new Map<string, UserStateState>();
 
 function normalizePosture(value?: string | null): ConversationPosture {
   if (value && value in POSTURE_GUIDANCE) {
@@ -311,6 +333,33 @@ function normalizePosture(value?: string | null): ConversationPosture {
 function normalizePressure(value?: string | null): ConversationPressure {
   if (value === "LOW" || value === "MED" || value === "HIGH") return value;
   return DEFAULT_PRESSURE;
+}
+
+function normalizeMood(value?: string | null): UserMood {
+  if (
+    value === "CALM" ||
+    value === "NEUTRAL" ||
+    value === "LOW" ||
+    value === "UPBEAT" ||
+    value === "FRUSTRATED" ||
+    value === "OVERWHELMED" ||
+    value === "ANXIOUS"
+  ) {
+    return value;
+  }
+  return DEFAULT_MOOD;
+}
+
+function normalizeEnergy(value?: string | null): UserEnergy {
+  if (value === "LOW" || value === "MED" || value === "HIGH") return value;
+  return DEFAULT_ENERGY;
+}
+
+function normalizeTone(value?: string | null): UserTone {
+  if (value === "PLAYFUL" || value === "SERIOUS" || value === "TENDER" || value === "DIRECT") {
+    return value;
+  }
+  return DEFAULT_TONE;
 }
 
 async function readPostureState(userId: string, personaId: string): Promise<PostureState | null> {
@@ -335,6 +384,159 @@ async function readPostureState(userId: string, personaId: string): Promise<Post
     lastConfidence: typeof raw.lastConfidence === "number" ? raw.lastConfidence : 0,
     lastSessionId: typeof raw.lastSessionId === "string" ? raw.lastSessionId : null,
   };
+}
+
+type UserStateState = {
+  currentMood: UserMood;
+  currentEnergy: UserEnergy;
+  currentTone: UserTone;
+  lastSuggestion?: UserMood | null;
+  streak?: number;
+  lastConfidence?: number;
+  lastSessionId?: string | null;
+  lastUpdatedAt?: string | null;
+};
+
+async function readUserState(userId: string, personaId: string): Promise<UserStateState | null> {
+  if (process.env.NODE_ENV === "test") {
+    return userStateCache.get(`${userId}:${personaId}`) ?? null;
+  }
+  const sessionState = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const state = sessionState?.state;
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const userState = (state as Record<string, unknown>).userStateState;
+  if (!userState || typeof userState !== "object" || Array.isArray(userState)) return null;
+  const raw = userState as Record<string, unknown>;
+  return {
+    currentMood: normalizeMood(typeof raw.currentMood === "string" ? raw.currentMood : null),
+    currentEnergy: normalizeEnergy(typeof raw.currentEnergy === "string" ? raw.currentEnergy : null),
+    currentTone: normalizeTone(typeof raw.currentTone === "string" ? raw.currentTone : null),
+    lastSuggestion:
+      typeof raw.lastSuggestion === "string" ? normalizeMood(raw.lastSuggestion) : null,
+    streak: typeof raw.streak === "number" ? raw.streak : 0,
+    lastConfidence: typeof raw.lastConfidence === "number" ? raw.lastConfidence : 0,
+    lastSessionId: typeof raw.lastSessionId === "string" ? raw.lastSessionId : null,
+    lastUpdatedAt: typeof raw.lastUpdatedAt === "string" ? raw.lastUpdatedAt : null,
+  };
+}
+
+async function writeUserState(userId: string, personaId: string, next: UserStateState) {
+  if (process.env.NODE_ENV === "test") {
+    userStateCache.set(`${userId}:${personaId}`, next);
+    return;
+  }
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const baseState =
+    existing?.state && typeof existing.state === "object" && !Array.isArray(existing.state)
+      ? (existing.state as Record<string, unknown>)
+      : {};
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId, personaId } },
+    update: {
+      state: {
+        ...baseState,
+        userStateState: next,
+      },
+    },
+    create: {
+      userId,
+      personaId,
+      state: { userStateState: next },
+    },
+  });
+}
+
+function isExplicitUserStateReset(transcript: string) {
+  const lowered = transcript.toLowerCase();
+  const phrases = ["i'm fine", "im fine", "i'm okay", "im okay", "not upset"];
+  return phrases.some((phrase) => lowered.includes(phrase));
+}
+
+async function resolveUserStateWithHysteresis(params: {
+  userId: string;
+  personaId: string;
+  sessionId: string;
+  timeGapMinutes: number | null;
+  suggestionMood: UserMood;
+  suggestionEnergy: UserEnergy;
+  suggestionTone: UserTone;
+  confidence: number;
+  explicitStateShift: boolean;
+  transcript: string;
+}) {
+  const previous = await readUserState(params.userId, params.personaId);
+  const currentMood = previous?.currentMood ?? DEFAULT_MOOD;
+  const currentEnergy = previous?.currentEnergy ?? DEFAULT_ENERGY;
+  const currentTone = previous?.currentTone ?? DEFAULT_TONE;
+  const lastSuggestion = previous?.lastSuggestion ?? null;
+  const streak = previous?.streak ?? 0;
+  const lastSessionId = previous?.lastSessionId ?? null;
+  const gapMinutes = params.timeGapMinutes ?? 0;
+
+  if (
+    lastSessionId &&
+    lastSessionId !== params.sessionId &&
+    gapMinutes >= getUserStateResetGapMinutes()
+  ) {
+    const resetState: UserStateState = {
+      currentMood: DEFAULT_MOOD,
+      currentEnergy: DEFAULT_ENERGY,
+      currentTone: DEFAULT_TONE,
+      lastSuggestion: null,
+      streak: 0,
+      lastConfidence: 0,
+      lastSessionId: params.sessionId,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    await writeUserState(params.userId, params.personaId, resetState);
+    return { mood: DEFAULT_MOOD, energy: DEFAULT_ENERGY, tone: DEFAULT_TONE };
+  }
+
+  if (isExplicitUserStateReset(params.transcript)) {
+    const resetState: UserStateState = {
+      currentMood: DEFAULT_MOOD,
+      currentEnergy: DEFAULT_ENERGY,
+      currentTone: DEFAULT_TONE,
+      lastSuggestion: null,
+      streak: 0,
+      lastConfidence: 0,
+      lastSessionId: params.sessionId,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    await writeUserState(params.userId, params.personaId, resetState);
+    return { mood: DEFAULT_MOOD, energy: DEFAULT_ENERGY, tone: DEFAULT_TONE };
+  }
+
+  const suggestionMood = params.suggestionMood;
+  const nextStreak = suggestionMood === lastSuggestion ? streak + 1 : 1;
+  const shouldSwitch =
+    params.confidence >= 0.75 ||
+    params.explicitStateShift ||
+    (nextStreak >= 2 && suggestionMood !== currentMood);
+
+  const nextMood = shouldSwitch ? suggestionMood : currentMood;
+  const nextEnergy = shouldSwitch ? params.suggestionEnergy : currentEnergy;
+  const nextTone = shouldSwitch ? params.suggestionTone : currentTone;
+
+  const nextState: UserStateState = {
+    currentMood: nextMood,
+    currentEnergy: nextEnergy,
+    currentTone: nextTone,
+    lastSuggestion: suggestionMood,
+    streak: nextStreak,
+    lastConfidence: params.confidence,
+    lastSessionId: params.sessionId,
+    lastUpdatedAt: new Date().toISOString(),
+  };
+
+  await writeUserState(params.userId, params.personaId, nextState);
+  return { mood: nextMood, energy: nextEnergy, tone: nextTone };
 }
 
 async function writePostureState(
@@ -571,7 +773,13 @@ Return ONLY valid JSON:
 "pressure":"LOW|MED|HIGH",
 "posture_confidence":0-1,
 "explicit_topic_shift":true|false,
-"posture_reason":"optional"}
+"posture_reason":"optional",
+"mood":"CALM|NEUTRAL|LOW|UPBEAT|FRUSTRATED|OVERWHELMED|ANXIOUS",
+"energy":"LOW|MED|HIGH",
+"tone":"PLAYFUL|SERIOUS|TENDER|DIRECT",
+"state_confidence":0-1,
+"explicit_state_shift":true|false,
+"state_reason":"optional"}
 
 Rules:
 - explicit=true if the user directly asks to recall past info.
@@ -602,6 +810,15 @@ ${transcript}`;
   const explicit_topic_shift = Boolean(result.explicit_topic_shift);
   const posture_reason =
     typeof result.posture_reason === "string" ? result.posture_reason : null;
+  const mood = typeof result.mood === "string" ? result.mood : undefined;
+  const energy = typeof result.energy === "string" ? result.energy : undefined;
+  const tone = typeof result.tone === "string" ? result.tone : undefined;
+  const state_confidence =
+    typeof result.state_confidence === "number" && Number.isFinite(result.state_confidence)
+      ? result.state_confidence
+      : 0;
+  const explicit_state_shift = Boolean(result.explicit_state_shift);
+  const state_reason = typeof result.state_reason === "string" ? result.state_reason : null;
   return {
     action,
     confidence,
@@ -612,6 +829,12 @@ ${transcript}`;
     posture_confidence,
     explicit_topic_shift,
     posture_reason,
+    mood: mood as MemoryGateResult["mood"],
+    energy: energy as MemoryGateResult["energy"],
+    tone: tone as MemoryGateResult["tone"],
+    state_confidence,
+    explicit_state_shift,
+    state_reason,
   } satisfies MemoryGateResult;
 }
 
@@ -687,6 +910,7 @@ async function runLibrarianReflex(params: {
   supplementalContext: string | null;
   posture: ConversationPosture;
   pressure: ConversationPressure;
+  userState: { mood: UserMood; energy: UserEnergy; tone: UserTone } | null;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -700,7 +924,14 @@ async function runLibrarianReflex(params: {
   const lastTurns = extractLastTwoTurns(recentMessages)
     .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
     .join("\n");
-  if (remaining() <= 0) return null;
+  if (remaining() <= 0) {
+    return {
+      supplementalContext: null,
+      posture: DEFAULT_POSTURE,
+      pressure: DEFAULT_PRESSURE,
+      userState: null,
+    };
+  }
   const gateResult = await runMemoryGate({
     transcript,
     lastTurns,
@@ -711,6 +942,7 @@ async function runLibrarianReflex(params: {
       supplementalContext: null,
       posture: DEFAULT_POSTURE,
       pressure: DEFAULT_PRESSURE,
+      userState: null,
     };
   }
 
@@ -719,6 +951,12 @@ async function runLibrarianReflex(params: {
   const postureConfidence =
     typeof gateResult.posture_confidence === "number" ? gateResult.posture_confidence : 0;
   const explicitTopicShift = Boolean(gateResult.explicit_topic_shift);
+  const moodSuggestion = normalizeMood(gateResult.mood);
+  const energySuggestion = normalizeEnergy(gateResult.energy);
+  const toneSuggestion = normalizeTone(gateResult.tone);
+  const stateConfidence =
+    typeof gateResult.state_confidence === "number" ? gateResult.state_confidence : 0;
+  const explicitStateShift = Boolean(gateResult.explicit_state_shift);
 
   const postureResult = await resolvePostureWithHysteresis({
     userId,
@@ -736,6 +974,24 @@ async function runLibrarianReflex(params: {
     explicitTopicShift,
   });
 
+  const userStateResult = await resolveUserStateWithHysteresis({
+    userId,
+    personaId,
+    sessionId,
+    timeGapMinutes: (() => {
+      const lastAt = recentMessages.at(-1)?.createdAt;
+      if (!lastAt) return null;
+      const diffMs = now.getTime() - lastAt.getTime();
+      return Math.max(0, Math.floor(diffMs / 60000));
+    })(),
+    suggestionMood: moodSuggestion,
+    suggestionEnergy: energySuggestion,
+    suggestionTone: toneSuggestion,
+    confidence: stateConfidence,
+    explicitStateShift,
+    transcript,
+  });
+
   const explicitSignal = isExplicitRecall(transcript);
   const explicit = gateResult.explicit || explicitSignal;
   const threshold = explicit ? 0.55 : 0.8;
@@ -744,6 +1000,7 @@ async function runLibrarianReflex(params: {
       supplementalContext: null,
       posture: postureResult.posture,
       pressure: postureResult.pressure,
+      userState: userStateResult,
     };
   }
 
@@ -765,18 +1022,46 @@ async function runLibrarianReflex(params: {
     }
   }
 
-  if (remaining() <= 0) return null;
+  if (remaining() <= 0) {
+    return {
+      supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+      userState: userStateResult,
+    };
+  }
   const spec = await runMemoryQuerySpec({
     transcript,
     lastTurns,
     timeoutMs: remaining(),
   });
-  if (!spec) return null;
+  if (!spec) {
+    return {
+      supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+      userState: userStateResult,
+    };
+  }
 
   const compiledQuery = buildQueryFromSpec(spec);
   const sanitized = compiledQuery ? sanitizeSearchString(compiledQuery) : null;
-  if (!sanitized) return null;
-  if (remaining() <= 0) return null;
+  if (!sanitized) {
+    return {
+      supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+      userState: userStateResult,
+    };
+  }
+  if (remaining() <= 0) {
+    return {
+      supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+      userState: userStateResult,
+    };
+  }
 
   const queryController = new AbortController();
   const queryTimeout = setTimeout(() => queryController.abort(), remaining());
@@ -798,7 +1083,12 @@ async function runLibrarianReflex(params: {
         requestId,
         status: response.status,
       });
-      return null;
+      return {
+        supplementalContext: null,
+        posture: postureResult.posture,
+        pressure: postureResult.pressure,
+        userState: userStateResult,
+      };
     }
     const data = (await response.json()) as MemoryQueryResponse;
     const facts = Array.isArray(data.facts)
@@ -821,6 +1111,7 @@ async function runLibrarianReflex(params: {
         supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
         posture: postureResult.posture,
         pressure: postureResult.pressure,
+        userState: userStateResult,
       };
     }
 
@@ -829,6 +1120,7 @@ async function runLibrarianReflex(params: {
         supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
         posture: postureResult.posture,
         pressure: postureResult.pressure,
+        userState: userStateResult,
       };
     }
     const relevance = await runRecallRelevanceCheck({
@@ -842,6 +1134,7 @@ async function runLibrarianReflex(params: {
         supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
         posture: postureResult.posture,
         pressure: postureResult.pressure,
+        userState: userStateResult,
       };
     }
 
@@ -872,6 +1165,7 @@ async function runLibrarianReflex(params: {
       supplementalContext: supplemental,
       posture: postureResult.posture,
       pressure: postureResult.pressure,
+      userState: userStateResult,
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -880,6 +1174,7 @@ async function runLibrarianReflex(params: {
         supplementalContext: null,
         posture: postureResult.posture,
         pressure: postureResult.pressure,
+        userState: userStateResult,
       };
     }
     console.warn("[librarian.query] error", { requestId, error });
@@ -887,6 +1182,7 @@ async function runLibrarianReflex(params: {
       supplementalContext: null,
       posture: postureResult.posture,
       pressure: postureResult.pressure,
+      userState: userStateResult,
     };
   } finally {
     clearTimeout(queryTimeout);
@@ -902,6 +1198,7 @@ function buildChatMessages(params: {
   transcript: string;
   posture?: ConversationPosture;
   pressure?: ConversationPressure;
+  userState?: { mood: UserMood; energy: UserEnergy; tone: UserTone } | null;
 }) {
   const situationalContext = params.situationalContext ?? "";
   const rollingSummary = params.rollingSummary ?? "";
@@ -909,7 +1206,16 @@ function buildChatMessages(params: {
   const pressure = params.pressure ?? DEFAULT_PRESSURE;
   const guidance = POSTURE_GUIDANCE[posture] ?? POSTURE_GUIDANCE[DEFAULT_POSTURE];
   const postureBlock = `[CONVERSATION_POSTURE]\nMode: ${posture} (pressure: ${pressure})\nLean: ${guidance}`;
+  const userState = params.userState;
+  const userStateBlock =
+    userState &&
+    (userState.mood !== DEFAULT_MOOD ||
+      userState.energy !== DEFAULT_ENERGY ||
+      userState.tone !== DEFAULT_TONE)
+      ? `[USER_STATE]\nMood: ${userState.mood}. Energy: ${userState.energy}. Tone: ${userState.tone}.`
+      : null;
   return [
+    ...(userStateBlock ? [{ role: "system" as const, content: userStateBlock }] : []),
     { role: "system" as const, content: postureBlock },
     { role: "system" as const, content: params.persona },
     ...(situationalContext
@@ -1073,6 +1379,7 @@ export async function POST(request: NextRequest) {
     const supplementalContext = librarianResult?.supplementalContext ?? null;
     const posture = librarianResult?.posture ?? DEFAULT_POSTURE;
     const pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
+    const userState = librarianResult?.userState ?? null;
     const model = getChatModelForPersona(persona.slug);
 
     const timeZone = getRequestTimeZone(request);
@@ -1096,6 +1403,7 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
       posture,
       pressure,
+      userState,
     });
 
     messages.unshift({ role: "system" as const, content: nightGuidance });
@@ -1349,4 +1657,7 @@ export const __test__runLibrarianReflex = runLibrarianReflex;
 export const __test__buildChatMessages = buildChatMessages;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
+};
+export const __test__resetUserStateCache = () => {
+  userStateCache.clear();
 };

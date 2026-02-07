@@ -33,6 +33,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
    - Load last 8 messages (working memory)
    - If `FEATURE_SYNAPSE_BRIEF=true`, call Synapse `/session/brief`
 5. Prompt assembly in `route.ts`
+   - USER_STATE (mood + energy + tone)
    - CONVERSATION_POSTURE (mode + pressure)
    - Persona (Identity Anchor)
    - SITUATIONAL_CONTEXT (Synapse brief)
@@ -87,6 +88,7 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 
 ### 4) What goes into the prompt?
 Blocks are in this order:
+- USER_STATE (mood + energy + tone)
 - CONVERSATION_POSTURE (mode + pressure)
 - Persona (Identity Anchor)
 - SITUATIONAL_CONTEXT (Synapse brief)
@@ -94,7 +96,7 @@ Blocks are in this order:
 - Rolling summary (if any)
 - Last 8 messages
 
-Posture is computed in the Memory Gate call (no extra LLM calls) and uses hysteresis stored in `SessionState.state.postureState`.
+Posture and user state are computed in the Memory Gate call (no extra LLM calls). Hysteresis lives in `SessionState.state.postureState` and `SessionState.state.userStateState`.
 
 ---
 

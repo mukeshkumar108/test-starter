@@ -28,6 +28,8 @@ Supplemental recall (Recall Sheet) is added in `/api/chat` after the brief if th
 
 Conversation posture (mode + pressure) is computed in the Memory Gate and injected before the persona prompt. Hysteresis is stored in `SessionState.state.postureState` and can reset after long gaps.
 
+User state (mood + energy + tone) is also computed in the Memory Gate and injected before the persona prompt. Hysteresis is stored in `SessionState.state.userStateState`.
+
 No Prisma‑based long‑term memory queries are used in this mode.
 
 ---

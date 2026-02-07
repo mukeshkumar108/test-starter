@@ -23,6 +23,7 @@ import {
   __test__runLibrarianReflex,
   __test__buildChatMessages,
   __test__resetPostureStateCache,
+  __test__resetUserStateCache,
 } from "@/app/api/chat/route";
 
 function expect(condition: boolean, message: string) {
@@ -190,6 +191,7 @@ async function testAmbientRequiresHighConfidence() {
   const originalFetch = global.fetch;
 
   __test__resetPostureStateCache();
+  __test__resetUserStateCache();
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
     if (url.includes("openrouter.ai/api/v1/chat/completions")) {
@@ -251,6 +253,8 @@ async function testIrrelevantRejected() {
   const transcript = "Ashley was really helpful today.";
   const originalFetch = global.fetch;
 
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
     if (url.includes("openrouter.ai/api/v1/chat/completions")) {
@@ -348,6 +352,8 @@ async function testNoNoMemoriesForAmbient() {
   const transcript = "Ashley was really helpful today.";
   const originalFetch = global.fetch;
 
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
     if (url.includes("openrouter.ai/api/v1/chat/completions")) {
@@ -447,6 +453,7 @@ async function testPostureBlockPresentWhenActionNone() {
   const transcript = "Hey there.";
   const originalFetch = global.fetch;
   __test__resetPostureStateCache();
+  __test__resetUserStateCache();
 
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
@@ -519,6 +526,7 @@ async function testPostureSwitchesOnHighConfidence() {
   const transcript = "Let's go crush it.";
   const originalFetch = global.fetch;
   __test__resetPostureStateCache();
+  __test__resetUserStateCache();
 
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
@@ -573,6 +581,7 @@ async function testPostureHysteresisHoldLowConfidence() {
   const transcript = "I'm not sure.";
   const originalFetch = global.fetch;
   __test__resetPostureStateCache();
+  __test__resetUserStateCache();
 
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
@@ -627,6 +636,7 @@ async function testPostureSwitchesOnRepeatedSuggestion() {
   const transcript = "Still feeling tired.";
   const originalFetch = global.fetch;
   __test__resetPostureStateCache();
+  __test__resetUserStateCache();
 
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
@@ -689,6 +699,343 @@ async function testPostureSwitchesOnRepeatedSuggestion() {
   }
 }
 
+async function testUserStateBlockInjectedWhenActionNone() {
+  const transcript = "Hey there.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "COMPANION",
+                    pressure: "MED",
+                    posture_confidence: 0.2,
+                    explicit_topic_shift: false,
+                    mood: "FRUSTRATED",
+                    energy: "LOW",
+                    tone: "SERIOUS",
+                    state_confidence: 0.8,
+                    explicit_state_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-test-userstate",
+      userId: "user-userstate",
+      personaId: "persona-userstate",
+      sessionId: "session-userstate",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    const messages = __test__buildChatMessages({
+      persona: "Persona",
+      situationalContext: "",
+      supplementalContext: null,
+      rollingSummary: "",
+      recentMessages: [],
+      transcript,
+      posture: result?.posture,
+      pressure: result?.pressure,
+      userState: result?.userState ?? null,
+    });
+
+    expect(
+      messages[0]?.content.startsWith("[USER_STATE]"),
+      "Expected USER_STATE block to be first"
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testUserStateHysteresisHoldLowConfidence() {
+  const transcript = "Not sure.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "COMPANION",
+                    pressure: "MED",
+                    posture_confidence: 0.2,
+                    explicit_topic_shift: false,
+                    mood: "FRUSTRATED",
+                    energy: "LOW",
+                    tone: "SERIOUS",
+                    state_confidence: 0.6,
+                    explicit_state_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-test-userstate-low",
+      userId: "user-userstate-low",
+      personaId: "persona-userstate-low",
+      sessionId: "session-userstate-low",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(result?.userState?.mood === "NEUTRAL", "Expected user state to hold on low confidence");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testUserStateSwitchesOnHighConfidence() {
+  const transcript = "I am overwhelmed.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "COMPANION",
+                    pressure: "MED",
+                    posture_confidence: 0.2,
+                    explicit_topic_shift: false,
+                    mood: "OVERWHELMED",
+                    energy: "LOW",
+                    tone: "TENDER",
+                    state_confidence: 0.85,
+                    explicit_state_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-test-userstate-high",
+      userId: "user-userstate-high",
+      personaId: "persona-userstate-high",
+      sessionId: "session-userstate-high",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(result?.userState?.mood === "OVERWHELMED", "Expected user state to switch on high confidence");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testUserStateSwitchesOnRepeatedSuggestion() {
+  const transcript = "Still frustrated.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "COMPANION",
+                    pressure: "MED",
+                    posture_confidence: 0.2,
+                    explicit_topic_shift: false,
+                    mood: "FRUSTRATED",
+                    energy: "LOW",
+                    tone: "DIRECT",
+                    state_confidence: 0.6,
+                    explicit_state_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const first = await __test__runLibrarianReflex({
+      requestId: "req-test-userstate-repeat-1",
+      userId: "user-userstate-repeat",
+      personaId: "persona-userstate-repeat",
+      sessionId: "session-userstate-repeat",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    const second = await __test__runLibrarianReflex({
+      requestId: "req-test-userstate-repeat-2",
+      userId: "user-userstate-repeat",
+      personaId: "persona-userstate-repeat",
+      sessionId: "session-userstate-repeat",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:16:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(first?.userState?.mood === "NEUTRAL", "Expected first suggestion to hold");
+    expect(second?.userState?.mood === "FRUSTRATED", "Expected switch on repeated suggestion");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testUserStateResetsOnLongGapNewSession() {
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "COMPANION",
+                    pressure: "MED",
+                    posture_confidence: 0.2,
+                    explicit_topic_shift: false,
+                    mood: "OVERWHELMED",
+                    energy: "LOW",
+                    tone: "TENDER",
+                    state_confidence: 0.9,
+                    explicit_state_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const first = await __test__runLibrarianReflex({
+      requestId: "req-test-userstate-gap-1",
+      userId: "user-userstate-gap",
+      personaId: "persona-userstate-gap",
+      sessionId: "session-userstate-gap-1",
+      transcript: "I am overwhelmed.",
+      recentMessages: [{ role: "user", content: "Earlier", createdAt: new Date("2026-02-06T07:00:00Z") }],
+      now: new Date("2026-02-06T07:01:00Z"),
+      shouldTrace: false,
+    });
+
+    const second = await __test__runLibrarianReflex({
+      requestId: "req-test-userstate-gap-2",
+      userId: "user-userstate-gap",
+      personaId: "persona-userstate-gap",
+      sessionId: "session-userstate-gap-2",
+      transcript: "Hey again.",
+      recentMessages: [{ role: "user", content: "Earlier", createdAt: new Date("2026-02-06T07:00:00Z") }],
+      now: new Date("2026-02-06T12:01:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(first?.userState?.mood === "OVERWHELMED", "Expected first state to be set");
+    expect(second?.userState?.mood === "NEUTRAL", "Expected reset on long gap + new session");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
 async function run() {
   await test("Explicit recall triggers query and injects supplemental context", testExplicitRecall);
   await test("Ambient mention requires high confidence", testAmbientRequiresHighConfidence);
@@ -698,6 +1045,11 @@ async function run() {
   await test("Posture switches on high confidence", testPostureSwitchesOnHighConfidence);
   await test("Posture hysteresis holds on low confidence", testPostureHysteresisHoldLowConfidence);
   await test("Posture switches on repeated suggestion", testPostureSwitchesOnRepeatedSuggestion);
+  await test("User state block injected when action=none", testUserStateBlockInjectedWhenActionNone);
+  await test("User state hysteresis holds on low confidence", testUserStateHysteresisHoldLowConfidence);
+  await test("User state switches on high confidence", testUserStateSwitchesOnHighConfidence);
+  await test("User state switches on repeated suggestion", testUserStateSwitchesOnRepeatedSuggestion);
+  await test("User state resets on long gap + new session", testUserStateResetsOnLongGapNewSession);
   console.log("All tests passed.");
 }
 
