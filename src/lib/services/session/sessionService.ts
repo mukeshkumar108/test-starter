@@ -292,7 +292,7 @@ export async function ensureActiveSession(
   });
   const lastUserMessageAt = lastUserMessage?.createdAt ?? null;
   if (!lastUserMessageAt || lastUserMessageAt < cutoff) {
-    return prisma.session.create({
+    const session = await prisma.session.create({
       data: {
         userId,
         personaId,
@@ -301,6 +301,12 @@ export async function ensureActiveSession(
         turnCount: 1,
       },
     });
+    await prisma.sessionState.upsert({
+      where: { userId_personaId: { userId, personaId } },
+      update: { rollingSummary: null, updatedAt: new Date() },
+      create: { userId, personaId, rollingSummary: null },
+    });
+    return session;
   }
   const activeSession = await prisma.session.findFirst({
     where: {
@@ -321,7 +327,7 @@ export async function ensureActiveSession(
     });
   }
 
-  return prisma.session.create({
+  const session = await prisma.session.create({
     data: {
       userId,
       personaId,
@@ -330,6 +336,12 @@ export async function ensureActiveSession(
       turnCount: 1,
     },
   });
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId, personaId } },
+    update: { rollingSummary: null, updatedAt: new Date() },
+    create: { userId, personaId, rollingSummary: null },
+  });
+  return session;
 }
 
 export async function maybeUpdateRollingSummary(params: {

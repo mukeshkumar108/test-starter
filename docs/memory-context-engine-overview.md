@@ -21,6 +21,7 @@ Async path (never blocks response):
 - `persona` (prompt file)
 - `situationalContext` (from Synapse `/session/brief`)
 - `rollingSummary` (rolling summary of older messages; updates every 4 turns)
+- Rolling summary is cleared on new session creation to avoid cross‑session drift
 - `recentMessages` (last 8 messages)
 
 Supplemental recall (Recall Sheet) is added in `/api/chat` after the brief if the Librarian Reflex (gate → spec → relevance) triggers a `/memory/query`.

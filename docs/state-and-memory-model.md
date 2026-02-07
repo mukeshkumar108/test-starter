@@ -2,7 +2,7 @@
 
 ## Working Memory (Local)
 - Last 6 turns in the active session
-- Optional rolling summary
+- Optional rolling summary (cleared on new session start)
 - Lives only in Prisma, scoped to the session
 
 ## Session Model

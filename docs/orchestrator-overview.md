@@ -62,6 +62,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 In‑session context is kept locally for speed:
 - Last 8 messages (user + assistant)
 - Rolling summary (generated every 4 turns from older messages)
+- Rolling summary is cleared when a new session is created (prevents cross‑session drift)
 
 This keeps LLM context tight while Synapse handles long‑term memory.
 
