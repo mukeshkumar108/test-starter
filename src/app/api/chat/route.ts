@@ -1055,7 +1055,7 @@ function runShadowJudgeIfEnabled(params: Parameters<typeof processShadowPath>[0]
   const override = (globalThis as { __shadowJudgeFlagOverride?: boolean })
     .__shadowJudgeFlagOverride;
   const enabled =
-    typeof override === "boolean" ? override : env.FEATURE_SHADOW_JUDGE !== "false";
+    typeof override === "boolean" ? override : env.FEATURE_SHADOW_JUDGE === "true";
   if (!enabled) return;
   // SHADOW PATH: Process memory updates asynchronously
   // Note: In production, use waitUntil() from @vercel/functions

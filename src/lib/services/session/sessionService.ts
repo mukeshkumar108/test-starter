@@ -20,7 +20,7 @@ function getActiveWindowMs() {
 }
 
 function isSummaryEnabled() {
-  return env.FEATURE_SESSION_SUMMARY !== "false";
+  return env.FEATURE_SESSION_SUMMARY === "true";
 }
 
 async function createSessionSummary(session: {
