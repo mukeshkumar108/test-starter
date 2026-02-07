@@ -22,6 +22,7 @@ process.env.LIBRARIAN_TIMEOUT_MS = "5000";
 import {
   __test__runLibrarianReflex,
   __test__buildChatMessages,
+  __test__resetPostureStateCache,
 } from "@/app/api/chat/route";
 
 function expect(condition: boolean, message: string) {
@@ -70,6 +71,10 @@ async function testExplicitRecall() {
                     action: "memory_query",
                     confidence: 0.8,
                     explicit: true,
+                    posture: "MOMENTUM",
+                    pressure: "MED",
+                    posture_confidence: 0.9,
+                    explicit_topic_shift: false,
                   }),
                 },
               },
@@ -143,22 +148,25 @@ async function testExplicitRecall() {
       shouldTrace: false,
     });
 
+    const supplementalText = supplemental?.supplementalContext ?? null;
     expect(gateCalled, "Expected gate to be called");
     expect(specCalled, "Expected spec to be called");
     expect(relevanceCalled, "Expected relevance check to be called");
     expect(queryCalled, "Expected memory query to be called");
     expect(
-      supplemental?.includes("Recall Sheet"),
+      supplementalText?.includes("Recall Sheet"),
       "Expected recall sheet header in supplemental context"
     );
 
     const messages = __test__buildChatMessages({
       persona: "Persona",
       situationalContext: "Brief",
-      supplementalContext: supplemental,
+      supplementalContext: supplementalText,
       rollingSummary: "",
       recentMessages: [],
       transcript,
+      posture: supplemental?.posture,
+      pressure: supplemental?.pressure,
     });
 
     const supplementalBlock = messages.find((msg) =>
@@ -181,6 +189,7 @@ async function testAmbientRequiresHighConfidence() {
   let queryCalled = false;
   const originalFetch = global.fetch;
 
+  __test__resetPostureStateCache();
   global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
     if (url.includes("openrouter.ai/api/v1/chat/completions")) {
@@ -196,6 +205,10 @@ async function testAmbientRequiresHighConfidence() {
                     action: "memory_query",
                     confidence: 0.7,
                     explicit: false,
+                    posture: "REFLECTION",
+                    pressure: "LOW",
+                    posture_confidence: 0.6,
+                    explicit_topic_shift: false,
                   }),
                 },
               },
@@ -225,7 +238,10 @@ async function testAmbientRequiresHighConfidence() {
     });
 
     expect(!queryCalled, "Did not expect memory query for low-confidence ambient recall");
-    expect(supplemental === null, "Expected no supplemental context for low-confidence ambient recall");
+    expect(
+      supplemental?.supplementalContext === null,
+      "Expected no supplemental context for low-confidence ambient recall"
+    );
   } finally {
     global.fetch = originalFetch;
   }
@@ -250,6 +266,10 @@ async function testIrrelevantRejected() {
                     action: "memory_query",
                     confidence: 0.9,
                     explicit: false,
+                    posture: "RELATIONSHIP",
+                    pressure: "MED",
+                    posture_confidence: 0.8,
+                    explicit_topic_shift: false,
                   }),
                 },
               },
@@ -315,7 +335,10 @@ async function testIrrelevantRejected() {
       shouldTrace: false,
     });
 
-    expect(supplemental === null, "Expected irrelevant retrieval to be rejected");
+    expect(
+      supplemental?.supplementalContext === null,
+      "Expected irrelevant retrieval to be rejected"
+    );
   } finally {
     global.fetch = originalFetch;
   }
@@ -340,6 +363,10 @@ async function testNoNoMemoriesForAmbient() {
                     action: "memory_query",
                     confidence: 0.9,
                     explicit: false,
+                    posture: "IDEATION",
+                    pressure: "MED",
+                    posture_confidence: 0.8,
+                    explicit_topic_shift: false,
                   }),
                 },
               },
@@ -407,7 +434,256 @@ async function testNoNoMemoriesForAmbient() {
       shouldTrace: false,
     });
 
-    expect(supplemental === null, "Expected no supplemental context for ambient no-memory");
+    expect(
+      supplemental?.supplementalContext === null,
+      "Expected no supplemental context for ambient no-memory"
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testPostureBlockPresentWhenActionNone() {
+  const transcript = "Hey there.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "REFLECTION",
+                    pressure: "LOW",
+                    posture_confidence: 0.4,
+                    explicit_topic_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-test-posture",
+      userId: "user-posture",
+      personaId: "persona-posture",
+      sessionId: "session-posture",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    const messages = __test__buildChatMessages({
+      persona: "Persona",
+      situationalContext: "",
+      supplementalContext: null,
+      rollingSummary: "",
+      recentMessages: [],
+      transcript,
+      posture: result?.posture,
+      pressure: result?.pressure,
+    });
+
+    expect(
+      messages[0]?.content.startsWith("[CONVERSATION_POSTURE]"),
+      "Expected posture block to be first"
+    );
+    expect(
+      messages[1]?.content === "Persona",
+      "Expected persona prompt to be second"
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testPostureSwitchesOnHighConfidence() {
+  const transcript = "Let's go crush it.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "MOMENTUM",
+                    pressure: "HIGH",
+                    posture_confidence: 0.8,
+                    explicit_topic_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-test-posture-high",
+      userId: "user-posture-high",
+      personaId: "persona-posture-high",
+      sessionId: "session-posture-high",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(result?.posture === "MOMENTUM", "Expected posture to switch on high confidence");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testPostureHysteresisHoldLowConfidence() {
+  const transcript = "I'm not sure.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "RECOVERY",
+                    pressure: "LOW",
+                    posture_confidence: 0.6,
+                    explicit_topic_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-test-posture-low",
+      userId: "user-posture-low",
+      personaId: "persona-posture-low",
+      sessionId: "session-posture-low",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(result?.posture === "COMPANION", "Expected posture to hold on low confidence");
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+async function testPostureSwitchesOnRepeatedSuggestion() {
+  const transcript = "Still feeling tired.";
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "none",
+                    confidence: 0.2,
+                    explicit: false,
+                    posture: "RECOVERY",
+                    pressure: "LOW",
+                    posture_confidence: 0.6,
+                    explicit_topic_shift: false,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const first = await __test__runLibrarianReflex({
+      requestId: "req-test-posture-repeat-1",
+      userId: "user-posture-repeat",
+      personaId: "persona-posture-repeat",
+      sessionId: "session-posture-repeat",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    const second = await __test__runLibrarianReflex({
+      requestId: "req-test-posture-repeat-2",
+      userId: "user-posture-repeat",
+      personaId: "persona-posture-repeat",
+      sessionId: "session-posture-repeat",
+      transcript,
+      recentMessages: [],
+      now: new Date("2026-02-06T10:16:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(first?.posture === "COMPANION", "Expected first suggestion to hold");
+    expect(second?.posture === "RECOVERY", "Expected switch on repeated suggestion");
   } finally {
     global.fetch = originalFetch;
   }
@@ -418,6 +694,10 @@ async function run() {
   await test("Ambient mention requires high confidence", testAmbientRequiresHighConfidence);
   await test("Irrelevant retrieval rejected by relevance check", testIrrelevantRejected);
   await test("No 'no memories' text for ambient recall", testNoNoMemoriesForAmbient);
+  await test("Posture block present even when action=none", testPostureBlockPresentWhenActionNone);
+  await test("Posture switches on high confidence", testPostureSwitchesOnHighConfidence);
+  await test("Posture hysteresis holds on low confidence", testPostureHysteresisHoldLowConfidence);
+  await test("Posture switches on repeated suggestion", testPostureSwitchesOnRepeatedSuggestion);
   console.log("All tests passed.");
 }
 

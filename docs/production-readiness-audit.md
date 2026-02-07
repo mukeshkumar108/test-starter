@@ -5,6 +5,7 @@ This is a living checklist based on the latest audit. It tracks what we have don
 ## Done (Recent)
 - Safe LLM fallback chain (OpenRouter primary → OpenRouter fallback → OpenAI emergency)
 - Librarian gate/spec/relevance flow with timeouts
+- Conversation posture (mode + pressure) with hysteresis + long‑gap reset
 - Rolling summary every 4 turns from older messages
 - Rolling summary cleared on new session creation (prevents cross‑session drift)
 - Session boundary is based on last user message (default 5 minutes, configurable)

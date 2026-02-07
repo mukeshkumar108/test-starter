@@ -26,6 +26,8 @@ Async path (never blocks response):
 
 Supplemental recall (Recall Sheet) is added in `/api/chat` after the brief if the Librarian Reflex (gate → spec → relevance) triggers a `/memory/query`.
 
+Conversation posture (mode + pressure) is computed in the Memory Gate and injected before the persona prompt. Hysteresis is stored in `SessionState.state.postureState` and can reset after long gaps.
+
 No Prisma‑based long‑term memory queries are used in this mode.
 
 ---

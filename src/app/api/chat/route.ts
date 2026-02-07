@@ -27,6 +27,7 @@ const WEATHER_CACHE = new Map<
 const WEATHER_TTL_MS = 30 * 60 * 1000;
 const WEATHER_TIMEOUT_MS = 1500;
 const DEFAULT_LIBRARIAN_TIMEOUT_MS = 5000;
+const DEFAULT_POSTURE_RESET_GAP_MINUTES = 180;
 
 function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");
@@ -44,6 +45,14 @@ function getActiveWindowMs() {
   if (!raw) return 5 * 60 * 1000;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return 5 * 60 * 1000;
+  return parsed;
+}
+
+function getPostureResetGapMinutes() {
+  const raw = env.POSTURE_RESET_GAP_MINUTES;
+  if (!raw) return DEFAULT_POSTURE_RESET_GAP_MINUTES;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_POSTURE_RESET_GAP_MINUTES;
   return parsed;
 }
 
@@ -245,6 +254,11 @@ type MemoryGateResult = {
   confidence: number;
   explicit: boolean;
   reason?: string | null;
+  posture?: "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
+  pressure?: "LOW" | "MED" | "HIGH";
+  posture_confidence?: number;
+  explicit_topic_shift?: boolean;
+  posture_reason?: string | null;
 };
 
 type MemoryQuerySpec = {
@@ -259,6 +273,158 @@ type RecallRelevanceResult = {
   confidence: number;
   reason?: string | null;
 };
+
+type ConversationPosture = "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
+type ConversationPressure = "LOW" | "MED" | "HIGH";
+
+const DEFAULT_POSTURE: ConversationPosture = "COMPANION";
+const DEFAULT_PRESSURE: ConversationPressure = "MED";
+
+const POSTURE_GUIDANCE: Record<ConversationPosture, string> = {
+  COMPANION: "Stay present, warm, and easy to talk to.",
+  MOMENTUM: "Nudge toward action and forward movement.",
+  REFLECTION: "Slow down and help things make sense.",
+  RELATIONSHIP: "Focus on people, feelings, and connection.",
+  IDEATION: "Explore possibilities and expand thinking.",
+  RECOVERY: "Lower pressure and support restoration.",
+  PRACTICAL: "Keep things concrete and actionable.",
+};
+
+type PostureState = {
+  current: ConversationPosture;
+  pressure: ConversationPressure;
+  lastSuggestion?: ConversationPosture | null;
+  streak?: number;
+  lastConfidence?: number;
+  lastSessionId?: string | null;
+};
+
+const postureStateCache = new Map<string, PostureState>();
+
+function normalizePosture(value?: string | null): ConversationPosture {
+  if (value && value in POSTURE_GUIDANCE) {
+    return value as ConversationPosture;
+  }
+  return DEFAULT_POSTURE;
+}
+
+function normalizePressure(value?: string | null): ConversationPressure {
+  if (value === "LOW" || value === "MED" || value === "HIGH") return value;
+  return DEFAULT_PRESSURE;
+}
+
+async function readPostureState(userId: string, personaId: string): Promise<PostureState | null> {
+  if (process.env.NODE_ENV === "test") {
+    return postureStateCache.get(`${userId}:${personaId}`) ?? null;
+  }
+  const sessionState = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const state = sessionState?.state;
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const postureState = (state as Record<string, unknown>).postureState;
+  if (!postureState || typeof postureState !== "object" || Array.isArray(postureState)) return null;
+  const raw = postureState as Record<string, unknown>;
+  return {
+    current: normalizePosture(typeof raw.current === "string" ? raw.current : null),
+    pressure: normalizePressure(typeof raw.pressure === "string" ? raw.pressure : null),
+    lastSuggestion:
+      typeof raw.lastSuggestion === "string" ? normalizePosture(raw.lastSuggestion) : null,
+    streak: typeof raw.streak === "number" ? raw.streak : 0,
+    lastConfidence: typeof raw.lastConfidence === "number" ? raw.lastConfidence : 0,
+    lastSessionId: typeof raw.lastSessionId === "string" ? raw.lastSessionId : null,
+  };
+}
+
+async function writePostureState(
+  userId: string,
+  personaId: string,
+  next: PostureState
+) {
+  if (process.env.NODE_ENV === "test") {
+    postureStateCache.set(`${userId}:${personaId}`, next);
+    return;
+  }
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const baseState =
+    existing?.state && typeof existing.state === "object" && !Array.isArray(existing.state)
+      ? (existing.state as Record<string, unknown>)
+      : {};
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId, personaId } },
+    update: {
+      state: {
+        ...baseState,
+        postureState: next,
+      },
+    },
+    create: {
+      userId,
+      personaId,
+      state: { postureState: next },
+    },
+  });
+}
+
+async function resolvePostureWithHysteresis(params: {
+  userId: string;
+  personaId: string;
+  sessionId: string;
+  timeGapMinutes: number | null;
+  suggestion: ConversationPosture;
+  pressure: ConversationPressure;
+  confidence: number;
+  explicitTopicShift: boolean;
+}) {
+  const previous = await readPostureState(params.userId, params.personaId);
+  const current = previous?.current ?? DEFAULT_POSTURE;
+  const lastSuggestion = previous?.lastSuggestion ?? null;
+  const streak = previous?.streak ?? 0;
+  const lastSessionId = previous?.lastSessionId ?? null;
+  const gapMinutes = params.timeGapMinutes ?? 0;
+  if (
+    lastSessionId &&
+    lastSessionId !== params.sessionId &&
+    gapMinutes >= getPostureResetGapMinutes()
+  ) {
+    const resetState: PostureState = {
+      current: DEFAULT_POSTURE,
+      pressure: DEFAULT_PRESSURE,
+      lastSuggestion: null,
+      streak: 0,
+      lastConfidence: 0,
+      lastSessionId: params.sessionId,
+    };
+    await writePostureState(params.userId, params.personaId, resetState);
+    return { posture: DEFAULT_POSTURE, pressure: DEFAULT_PRESSURE };
+  }
+  const suggestion = params.suggestion;
+
+  const nextStreak = suggestion === lastSuggestion ? streak + 1 : 1;
+  const shouldSwitch =
+    params.confidence >= 0.75 ||
+    params.explicitTopicShift ||
+    (nextStreak >= 2 && suggestion !== current);
+
+  const nextPosture = shouldSwitch ? suggestion : current;
+  const nextPressure = shouldSwitch ? params.pressure : previous?.pressure ?? params.pressure;
+
+  const nextState: PostureState = {
+    current: nextPosture,
+    pressure: nextPressure,
+    lastSuggestion: suggestion,
+    streak: nextStreak,
+    lastConfidence: params.confidence,
+    lastSessionId: params.sessionId,
+  };
+
+  await writePostureState(params.userId, params.personaId, nextState);
+  return { posture: nextPosture, pressure: nextPressure };
+}
 
 type MemoryQueryResponse = {
   facts?: Array<{ text?: string; relevance?: number | null; source?: string }>;
@@ -400,7 +566,12 @@ async function runMemoryGate(params: {
   const gatePrompt = `You are a Memory Gate. Decide if we should query memory.
 
 Return ONLY valid JSON:
-{"action":"memory_query"|"none","confidence":0-1,"explicit":true|false,"reason":"optional"}
+{"action":"memory_query"|"none","confidence":0-1,"explicit":true|false,"reason":"optional",
+"posture":"COMPANION|MOMENTUM|REFLECTION|RELATIONSHIP|IDEATION|RECOVERY|PRACTICAL",
+"pressure":"LOW|MED|HIGH",
+"posture_confidence":0-1,
+"explicit_topic_shift":true|false,
+"posture_reason":"optional"}
 
 Rules:
 - explicit=true if the user directly asks to recall past info.
@@ -422,7 +593,26 @@ ${transcript}`;
       : 0;
   const explicit = Boolean(result.explicit);
   const reason = typeof result.reason === "string" ? result.reason : null;
-  return { action, confidence, explicit, reason } satisfies MemoryGateResult;
+  const posture = typeof result.posture === "string" ? result.posture : undefined;
+  const pressure = typeof result.pressure === "string" ? result.pressure : undefined;
+  const posture_confidence =
+    typeof result.posture_confidence === "number" && Number.isFinite(result.posture_confidence)
+      ? result.posture_confidence
+      : 0;
+  const explicit_topic_shift = Boolean(result.explicit_topic_shift);
+  const posture_reason =
+    typeof result.posture_reason === "string" ? result.posture_reason : null;
+  return {
+    action,
+    confidence,
+    explicit,
+    reason,
+    posture: posture as MemoryGateResult["posture"],
+    pressure: pressure as MemoryGateResult["pressure"],
+    posture_confidence,
+    explicit_topic_shift,
+    posture_reason,
+  } satisfies MemoryGateResult;
 }
 
 async function runMemoryQuerySpec(params: {
@@ -490,10 +680,14 @@ async function runLibrarianReflex(params: {
   personaId: string;
   sessionId: string;
   transcript: string;
-  recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   now: Date;
   shouldTrace: boolean;
-}) {
+}): Promise<{
+  supplementalContext: string | null;
+  posture: ConversationPosture;
+  pressure: ConversationPressure;
+} | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
   if (!env.OPENROUTER_API_KEY || !env.SYNAPSE_BASE_URL || !env.SYNAPSE_TENANT_ID) {
@@ -512,13 +706,45 @@ async function runLibrarianReflex(params: {
     lastTurns,
     timeoutMs: remaining(),
   });
-  if (!gateResult) return null;
+  if (!gateResult) {
+    return {
+      supplementalContext: null,
+      posture: DEFAULT_POSTURE,
+      pressure: DEFAULT_PRESSURE,
+    };
+  }
+
+  const postureSuggestion = normalizePosture(gateResult.posture);
+  const pressureSuggestion = normalizePressure(gateResult.pressure);
+  const postureConfidence =
+    typeof gateResult.posture_confidence === "number" ? gateResult.posture_confidence : 0;
+  const explicitTopicShift = Boolean(gateResult.explicit_topic_shift);
+
+  const postureResult = await resolvePostureWithHysteresis({
+    userId,
+    personaId,
+    sessionId,
+    timeGapMinutes: (() => {
+      const lastAt = recentMessages.at(-1)?.createdAt;
+      if (!lastAt) return null;
+      const diffMs = now.getTime() - lastAt.getTime();
+      return Math.max(0, Math.floor(diffMs / 60000));
+    })(),
+    suggestion: postureSuggestion,
+    pressure: pressureSuggestion,
+    confidence: postureConfidence,
+    explicitTopicShift,
+  });
 
   const explicitSignal = isExplicitRecall(transcript);
   const explicit = gateResult.explicit || explicitSignal;
   const threshold = explicit ? 0.55 : 0.8;
   if (gateResult.action !== "memory_query" || gateResult.confidence < threshold) {
-    return null;
+    return {
+      supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+    };
   }
 
   if (shouldTrace) {
@@ -591,10 +817,20 @@ async function runLibrarianReflex(params: {
       : [];
 
     if (facts.length === 0 && entities.length === 0) {
-      return explicit ? `No matching memories found for "${sanitized}".` : null;
+      return {
+        supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
+        posture: postureResult.posture,
+        pressure: postureResult.pressure,
+      };
     }
 
-    if (remaining() <= 0) return explicit ? `No matching memories found for "${sanitized}".` : null;
+    if (remaining() <= 0) {
+      return {
+        supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
+        posture: postureResult.posture,
+        pressure: postureResult.pressure,
+      };
+    }
     const relevance = await runRecallRelevanceCheck({
       query: sanitized,
       facts,
@@ -602,7 +838,11 @@ async function runLibrarianReflex(params: {
       timeoutMs: remaining(),
     });
     if (!relevance || !relevance.use || relevance.confidence < 0.6) {
-      return explicit ? `No matching memories found for "${sanitized}".` : null;
+      return {
+        supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
+        posture: postureResult.posture,
+        pressure: postureResult.pressure,
+      };
     }
 
     const supplemental = buildRecallSheet({ query: sanitized, facts, entities });
@@ -628,14 +868,26 @@ async function runLibrarianReflex(params: {
       }
     }
 
-    return supplemental;
+    return {
+      supplementalContext: supplemental,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+    };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       console.warn("[librarian.query] timeout", { requestId });
-      return null;
+      return {
+        supplementalContext: null,
+        posture: postureResult.posture,
+        pressure: postureResult.pressure,
+      };
     }
     console.warn("[librarian.query] error", { requestId, error });
-    return null;
+    return {
+      supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+    };
   } finally {
     clearTimeout(queryTimeout);
   }
@@ -648,10 +900,17 @@ function buildChatMessages(params: {
   rollingSummary?: string;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
   transcript: string;
+  posture?: ConversationPosture;
+  pressure?: ConversationPressure;
 }) {
   const situationalContext = params.situationalContext ?? "";
   const rollingSummary = params.rollingSummary ?? "";
+  const posture = params.posture ?? DEFAULT_POSTURE;
+  const pressure = params.pressure ?? DEFAULT_PRESSURE;
+  const guidance = POSTURE_GUIDANCE[posture] ?? POSTURE_GUIDANCE[DEFAULT_POSTURE];
+  const postureBlock = `[CONVERSATION_POSTURE]\nMode: ${posture} (pressure: ${pressure})\nLean: ${guidance}`;
   return [
+    { role: "system" as const, content: postureBlock },
     { role: "system" as const, content: params.persona },
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
@@ -801,7 +1060,7 @@ export async function POST(request: NextRequest) {
     const shouldTraceLibrarian =
       env.FEATURE_LIBRARIAN_TRACE === "true" ||
       request.headers.get("x-debug-librarian") === "1";
-    const supplementalContext = await runLibrarianReflex({
+    const librarianResult = await runLibrarianReflex({
       requestId,
       userId: user.id,
       personaId,
@@ -811,6 +1070,9 @@ export async function POST(request: NextRequest) {
       now,
       shouldTrace: shouldTraceLibrarian,
     });
+    const supplementalContext = librarianResult?.supplementalContext ?? null;
+    const posture = librarianResult?.posture ?? DEFAULT_POSTURE;
+    const pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
     const model = getChatModelForPersona(persona.slug);
 
     const timeZone = getRequestTimeZone(request);
@@ -832,6 +1094,8 @@ export async function POST(request: NextRequest) {
       rollingSummary,
       recentMessages: context.recentMessages,
       transcript: sttResult.transcript,
+      posture,
+      pressure,
     });
 
     messages.unshift({ role: "system" as const, content: nightGuidance });
@@ -1083,3 +1347,6 @@ function runShadowJudgeIfEnabled(params: Parameters<typeof processShadowPath>[0]
 export const __test__runShadowJudgeIfEnabled = runShadowJudgeIfEnabled;
 export const __test__runLibrarianReflex = runLibrarianReflex;
 export const __test__buildChatMessages = buildChatMessages;
+export const __test__resetPostureStateCache = () => {
+  postureStateCache.clear();
+};
