@@ -18,12 +18,19 @@ export async function generateResponse(
   
   const isSophie = personaSlug === "creative";
   const maxTokens = isSophie ? 350 : 1000;
-  const temperature = 0.7;
+  const temperature = isSophie ? 1.0 : 0.7;
 
   const content = await safeChatCompletion(messages, {
     maxTokens,
     temperature,
-    ...(isSophie ? { topP: 0.9, presencePenalty: 0.1 } : {}),
+    ...(isSophie
+      ? {
+          topP: 0.93,
+          topK: 40,
+          repetitionPenalty: 1.05,
+          presencePenalty: 0.1,
+        }
+      : {}),
   });
 
   return {

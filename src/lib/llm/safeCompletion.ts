@@ -9,7 +9,9 @@ export interface SafeChatOptions {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
+  topK?: number;
   presencePenalty?: number;
+  repetitionPenalty?: number;
 }
 
 const PRIMARY_MODEL = "minimax/minimax-m2-her";
@@ -57,7 +59,9 @@ async function openRouterChat(
       max_tokens: options.maxTokens,
       temperature: options.temperature,
       top_p: options.topP,
+      top_k: options.topK,
       presence_penalty: options.presencePenalty,
+      repetition_penalty: options.repetitionPenalty,
       stream: false,
     }),
   });
