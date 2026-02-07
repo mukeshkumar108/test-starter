@@ -224,23 +224,8 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
       parts.push(`Brief: ${summaries[0]}`);
     }
   }
-  if (brief.temporalVibe && brief.temporalVibe.trim()) {
-    parts.push(`Temporal: ${brief.temporalVibe.trim()}`);
-  }
   if (brief.timeGapDescription && brief.timeGapDescription.trim()) {
     parts.push(`Time Gap: ${brief.timeGapDescription.trim()}`);
-  }
-  if (brief.currentVibe && typeof brief.currentVibe === "object") {
-    const mood = brief.currentVibe.mood ? String(brief.currentVibe.mood).trim() : "";
-    const energy = brief.currentVibe.energyLevel
-      ? String(brief.currentVibe.energyLevel).trim()
-      : "";
-    const vibeParts: string[] = [];
-    if (mood) vibeParts.push(`Mood: ${mood}`);
-    if (energy) vibeParts.push(`Energy: ${energy}`);
-    if (vibeParts.length > 0) {
-      parts.push(`Vibe: ${vibeParts.join(" | ")}`);
-    }
   }
   const loops = Array.isArray(brief.activeLoops) ? brief.activeLoops : [];
   const loopTexts = loops

@@ -32,6 +32,28 @@ function expect(condition: boolean, message: string) {
   }
 }
 
+function assertNoBannedPhrases(messages: Array<{ role: string; content: string }>) {
+  const banned = [
+    "you're feeling",
+    "it can be isolating",
+    "meaning-making",
+    "emotional clarity",
+    "restorative",
+    "vibe:",
+    "temporal vibe",
+    "grounding",
+    "struggling",
+  ];
+  for (const message of messages) {
+    const content = message.content.toLowerCase();
+    for (const phrase of banned) {
+      if (content.includes(phrase)) {
+        throw new Error(`Found banned phrase "${phrase}" in message: ${message.content}`);
+      }
+    }
+  }
+}
+
 async function test(name: string, fn: () => Promise<void>) {
   try {
     await fn();
@@ -169,6 +191,13 @@ async function testExplicitRecall() {
       posture: supplemental?.posture,
       pressure: supplemental?.pressure,
     });
+
+    expect(messages[0]?.content === "Persona", "Expected persona prompt to be first");
+    expect(
+      messages[2]?.content.startsWith("[CONVERSATION_POSTURE]"),
+      "Expected posture block after persona + style guard"
+    );
+    assertNoBannedPhrases(messages);
 
     const supplementalBlock = messages.find((msg) =>
       msg.content.startsWith("[SUPPLEMENTAL_CONTEXT]")
@@ -509,14 +538,12 @@ async function testPostureBlockPresentWhenActionNone() {
       pressure: result?.pressure,
     });
 
+    expect(messages[0]?.content === "Persona", "Expected persona prompt to be first");
     expect(
-      messages[0]?.content.startsWith("[CONVERSATION_POSTURE]"),
-      "Expected posture block to be first"
+      messages[2]?.content.startsWith("[CONVERSATION_POSTURE]"),
+      "Expected posture block after persona + style guard"
     );
-    expect(
-      messages[1]?.content === "Persona",
-      "Expected persona prompt to be second"
-    );
+    assertNoBannedPhrases(messages);
   } finally {
     global.fetch = originalFetch;
   }
@@ -699,7 +726,7 @@ async function testPostureSwitchesOnRepeatedSuggestion() {
   }
 }
 
-async function testUserStateBlockInjectedWhenActionNone() {
+async function testUserStateBlockNotInjectedWhenActionNone() {
   const transcript = "Hey there.";
   const originalFetch = global.fetch;
   __test__resetPostureStateCache();
@@ -766,9 +793,11 @@ async function testUserStateBlockInjectedWhenActionNone() {
     });
 
     expect(
-      messages[0]?.content.startsWith("[USER_STATE]"),
-      "Expected USER_STATE block to be first"
+      messages.some((message) => message.content.startsWith("[USER_STATE]")) === false,
+      "Expected USER_STATE block to be absent"
     );
+    expect(messages[0]?.content === "Persona", "Expected persona prompt to be first");
+    assertNoBannedPhrases(messages);
   } finally {
     global.fetch = originalFetch;
   }
@@ -1045,7 +1074,7 @@ async function run() {
   await test("Posture switches on high confidence", testPostureSwitchesOnHighConfidence);
   await test("Posture hysteresis holds on low confidence", testPostureHysteresisHoldLowConfidence);
   await test("Posture switches on repeated suggestion", testPostureSwitchesOnRepeatedSuggestion);
-  await test("User state block injected when action=none", testUserStateBlockInjectedWhenActionNone);
+  await test("User state block not injected when action=none", testUserStateBlockNotInjectedWhenActionNone);
   await test("User state hysteresis holds on low confidence", testUserStateHysteresisHoldLowConfidence);
   await test("User state switches on high confidence", testUserStateSwitchesOnHighConfidence);
   await test("User state switches on repeated suggestion", testUserStateSwitchesOnRepeatedSuggestion);

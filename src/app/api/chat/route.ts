@@ -20,12 +20,6 @@ interface ChatRequestBody {
   audioBlob: File;
 }
 
-const WEATHER_CACHE = new Map<
-  string,
-  { fetchedAt: number; weather: string; coordsKey: string }
->();
-const WEATHER_TTL_MS = 30 * 60 * 1000;
-const WEATHER_TIMEOUT_MS = 1500;
 const DEFAULT_LIBRARIAN_TIMEOUT_MS = 5000;
 const DEFAULT_POSTURE_RESET_GAP_MINUTES = 180;
 const DEFAULT_USER_STATE_RESET_GAP_MINUTES = 180;
@@ -65,155 +59,15 @@ function getUserStateResetGapMinutes() {
   return parsed;
 }
 
-function getRequestTimeZone(request: NextRequest) {
-  return (
-    request.headers.get("x-timezone") ||
-    request.headers.get("x-user-timezone") ||
-    request.headers.get("x-client-timezone") ||
-    undefined
-  );
-}
-
-function getRequestCoords(request: NextRequest) {
-  const latRaw =
-    request.headers.get("x-geo-latitude") ||
-    request.headers.get("x-client-lat") ||
-    request.headers.get("x-latitude");
-  const lonRaw =
-    request.headers.get("x-geo-longitude") ||
-    request.headers.get("x-client-lon") ||
-    request.headers.get("x-longitude");
-  const lat = latRaw ? Number.parseFloat(latRaw) : NaN;
-  const lon = lonRaw ? Number.parseFloat(lonRaw) : NaN;
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  return { lat, lon };
-}
-
-function formatLocalDateTime(now: Date, timeZone: string) {
-  const dateParts = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    weekday: "short",
-    month: "short",
-    day: "2-digit",
-  }).formatToParts(now);
-  const weekday = dateParts.find((part) => part.type === "weekday")?.value ?? "";
-  const month = dateParts.find((part) => part.type === "month")?.value ?? "";
-  const day = dateParts.find((part) => part.type === "day")?.value ?? "";
-  const dateString = normalizeWhitespace(`${weekday} ${month} ${day}`);
-
-  const timeString = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(now);
-
-  return `${dateString}, ${timeString}`;
-}
-
-function getLocalHour(now: Date, timeZone: string) {
-  const hourString = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    hour: "2-digit",
-    hour12: false,
-  }).format(now);
-  const hour = Number.parseInt(hourString, 10);
-  return Number.isNaN(hour) ? null : hour;
-}
-
-async function fetchWeather(lat: number, lon: number) {
-  const apiKey = process.env.WEATHERAPI_API_KEY;
-  if (!apiKey) return null;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), WEATHER_TIMEOUT_MS);
-  try {
-    const response = await fetch(
-      `https://api.weatherapi.com/v1/current.json?key=${apiKey}&q=${lat},${lon}`,
-      { signal: controller.signal }
-    );
-    if (!response.ok) return null;
-    const data = await response.json();
-    const temp = typeof data?.current?.temp_c === "number" ? Math.round(data.current.temp_c) : null;
-    const description =
-      typeof data?.current?.condition?.text === "string"
-        ? data.current.condition.text
-        : null;
-    if (temp === null || !description) return null;
-    const formattedDesc = description
-      .split(" ")
-      .map((word: string) =>
-        word.length > 0 ? `${word[0].toUpperCase()}${word.slice(1)}` : word
-      )
-      .join(" ");
-    return `${temp}°C, ${formattedDesc}`;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-function getCurrentContext(params: {
-  lastMessageAt?: Date | null;
-  userId: string;
-  timeZone?: string;
-  coords?: { lat: number; lon: number } | null;
-  userTimeZone?: string | null;
-}) {
-  const now = new Date();
-  const serverTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const timeZone =
-    params.userTimeZone ||
-    params.timeZone ||
-    serverTimeZone ||
-    "Europe/London";
-
-  const formatted = formatLocalDateTime(now, timeZone);
-  const localHour = getLocalHour(now, timeZone);
-  const lateNightFlag =
-    localHour !== null && localHour >= 22
-      ? " [CONTEXT]: It is very late at night for the user."
-      : "";
-
-  let sessionGap = "";
-  if (params.lastMessageAt) {
-    const diffMs = now.getTime() - params.lastMessageAt.getTime();
-    const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    const gapThresholdMinutes = Math.max(1, Math.floor(getActiveWindowMs() / 60000));
-    if (diffMinutes > gapThresholdMinutes) {
-      const hours = Math.floor(diffMinutes / 60);
-      const minutes = diffMinutes % 60;
-      const parts = [];
-      if (hours > 0) parts.push(`${hours}h`);
-      parts.push(`${minutes}m`);
-      sessionGap = ` Session gap: ${parts.join(" ")}`;
-    }
-  }
-
-  const coords = params.coords;
-  const coordsKey = coords ? `${coords.lat.toFixed(4)},${coords.lon.toFixed(4)}` : "";
-  const cached = WEATHER_CACHE.get(params.userId);
-  const isFresh =
-    cached &&
-    cached.coordsKey === coordsKey &&
-    now.getTime() - cached.fetchedAt < WEATHER_TTL_MS;
-
-  let weather = "Weather: unavailable";
-  if (isFresh) {
-    weather = `Weather: ${cached.weather}`;
-  } else if (coords) {
-    void (async () => {
-      const result = await fetchWeather(coords.lat, coords.lon);
-      if (!result) return;
-      WEATHER_CACHE.set(params.userId, {
-        fetchedAt: Date.now(),
-        weather: result,
-        coordsKey,
-      });
-    })();
-  }
-
-  return `[TIME_CONTEXT]: ${formatted}. ${weather}.${sessionGap}${lateNightFlag}`;
+function clampSessionFacts(value: string) {
+  const lines = value
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  if (lines.length === 0) return "";
+  const joined = lines.join(" | ");
+  return joined.slice(0, 240).trim();
 }
 
 function getSessionContext(sessionState?: any) {
@@ -302,13 +156,13 @@ const DEFAULT_ENERGY: UserEnergy = "MED";
 const DEFAULT_TONE: UserTone = "SERIOUS";
 
 const POSTURE_GUIDANCE: Record<ConversationPosture, string> = {
-  COMPANION: "Warm, steady companionship and calm presence.",
-  MOMENTUM: "Action‑tilted, forward motion, gentle urgency.",
-  REFLECTION: "Slower pace, meaning‑making, emotional clarity.",
-  RELATIONSHIP: "People‑centered lens and relational nuance.",
-  IDEATION: "Exploratory, creative, option‑expanding.",
-  RECOVERY: "Gentle, low‑pressure, restorative tone.",
-  PRACTICAL: "Concrete, grounded, solution‑oriented.",
+  COMPANION: "Friendly, present.",
+  MOMENTUM: "Direct, action-first.",
+  REFLECTION: "Slower, thoughtful.",
+  RELATIONSHIP: "People + nuance.",
+  IDEATION: "Playful, explore options.",
+  RECOVERY: "Gentle, minimal pressure.",
+  PRACTICAL: "Concrete, specific steps.",
 };
 
 type PostureState = {
@@ -1206,18 +1060,13 @@ function buildChatMessages(params: {
   const pressure = params.pressure ?? DEFAULT_PRESSURE;
   const guidance = POSTURE_GUIDANCE[posture] ?? POSTURE_GUIDANCE[DEFAULT_POSTURE];
   const postureBlock = `[CONVERSATION_POSTURE]\nMode: ${posture} (pressure: ${pressure})\nLean: ${guidance}`;
-  const userState = params.userState;
-  const userStateBlock =
-    userState &&
-    (userState.mood !== DEFAULT_MOOD ||
-      userState.energy !== DEFAULT_ENERGY ||
-      userState.tone !== DEFAULT_TONE)
-      ? `[USER_STATE]\nMood: ${userState.mood}. Energy: ${userState.energy}. Tone: ${userState.tone}.`
-      : null;
+  const styleGuard =
+    "Avoid therapeutic mirroring; don’t restate the user’s feelings unless they explicitly asked for reflection.";
+  const sessionFacts = rollingSummary ? clampSessionFacts(rollingSummary) : "";
   return [
-    ...(userStateBlock ? [{ role: "system" as const, content: userStateBlock }] : []),
-    { role: "system" as const, content: postureBlock },
     { role: "system" as const, content: params.persona },
+    { role: "system" as const, content: styleGuard },
+    { role: "system" as const, content: postureBlock },
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
       : []),
@@ -1229,8 +1078,8 @@ function buildChatMessages(params: {
           },
         ]
       : []),
-    ...(rollingSummary
-      ? [{ role: "system" as const, content: `CURRENT SESSION SUMMARY: ${rollingSummary}` }]
+    ...(sessionFacts
+      ? [{ role: "system" as const, content: `SESSION FACTS: ${sessionFacts}` }]
       : []),
     ...params.recentMessages,
     { role: "user" as const, content: params.transcript },
@@ -1382,18 +1231,6 @@ export async function POST(request: NextRequest) {
     const userState = librarianResult?.userState ?? null;
     const model = getChatModelForPersona(persona.slug);
 
-    const timeZone = getRequestTimeZone(request);
-    const coords = getRequestCoords(request);
-    const timeContext = getCurrentContext({
-      lastMessageAt: context.recentMessages.at(-1)?.createdAt ?? null,
-      userId: user.id,
-      timeZone: timeZone || undefined,
-      coords,
-      userTimeZone: timeZone || undefined,
-    });
-
-    const nightGuidance = `[GUIDANCE]: If late night (11pm–5am), avoid suggesting outdoor activity; encourage rest or quiet indoor options. If evening (8pm–11pm), prefer wind-down and low-energy suggestions. If early morning (5am–7am), use gentle motivation and soft start.`;
-
     const messages = buildChatMessages({
       persona: context.persona,
       situationalContext,
@@ -1405,9 +1242,6 @@ export async function POST(request: NextRequest) {
       pressure,
       userState,
     });
-
-    messages.unshift({ role: "system" as const, content: nightGuidance });
-    messages.unshift({ role: "system" as const, content: timeContext });
 
     const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
     if (totalChars > 20000) {
