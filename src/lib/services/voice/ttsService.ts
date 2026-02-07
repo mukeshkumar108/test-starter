@@ -37,6 +37,14 @@ export async function synthesizeSpeech(
       throw new Error(`ElevenLabs TTS failed: ${response.status} ${response.statusText}`);
     }
 
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      console.warn("[tts.response.html]", {
+        provider: "elevenlabs",
+        status: response.status,
+      });
+    }
+
     // Get audio blob
     const audioBlob = await response.blob();
     

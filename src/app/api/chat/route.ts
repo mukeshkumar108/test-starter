@@ -676,6 +676,21 @@ export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   const traceId = request.headers.get("x-trace-id") || crypto.randomUUID();
   const totalStartTime = Date.now();
+
+  console.log(
+    "[chat.entry]",
+    JSON.stringify({
+      trace_id: traceId,
+      requestId,
+      host: request.headers.get("host"),
+      x_forwarded_host: request.headers.get("x-forwarded-host"),
+      x_forwarded_proto: request.headers.get("x-forwarded-proto"),
+      url: request.url,
+      origin: request.headers.get("origin"),
+      referer: request.headers.get("referer"),
+      user_agent: request.headers.get("user-agent"),
+    })
+  );
   
   try {
     // Auth check

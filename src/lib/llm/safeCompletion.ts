@@ -65,6 +65,10 @@ async function openRouterChat(
   if (!response.ok) {
     throw new Error(`openrouter_failed_${response.status}`);
   }
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/html")) {
+    console.warn("[llm.response.html]", { provider: "openrouter", model });
+  }
   const data = await response.json();
   return String(data?.choices?.[0]?.message?.content ?? "").trim();
 }
@@ -97,6 +101,10 @@ async function openAIChat(
 
   if (!response.ok) {
     throw new Error(`openai_failed_${response.status}`);
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/html")) {
+    console.warn("[llm.response.html]", { provider: "openai", model: EMERGENCY_MODEL });
   }
   const data = await response.json();
   return String(data?.choices?.[0]?.message?.content ?? "").trim();

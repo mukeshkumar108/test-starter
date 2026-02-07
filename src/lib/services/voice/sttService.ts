@@ -57,6 +57,14 @@ export async function transcribeAudio(
       throw new Error(`LemonFox STT failed: ${response.status} ${response.statusText}`);
     }
 
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      console.warn("[stt.response.html]", {
+        provider: "lemonfox",
+        status: response.status,
+      });
+    }
+
     const data = await response.json();
     const sanitized = sanitizeTranscript(data.text || "");
     
