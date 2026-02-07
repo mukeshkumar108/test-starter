@@ -13,6 +13,6 @@ We bias toward **LLM judgment** over brittle deterministic filters. Human langua
 - Hard‑coded entity parsing in the app layer
 
 ## Where Determinism Still Matters
-- Session timeout: 15 minutes from last user message
+- Session timeout: 5 minutes from last user message (configurable)
 - Prompt block order and caps
 - Feature flags for safety

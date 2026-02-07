@@ -16,7 +16,7 @@ The system optimizes for continuity without bloating every request.
 - Lives in the local DB only for the active session
 
 ### 2) Session Boundary (Bookends)
-- A session ends when **last user message > 15 minutes**
+- A session ends when **last user message > 5 minutes** (configurable)
 - On close, we send the full transcript to Synapse `/session/ingest`
 - On start, we pull Synapse `/session/brief`
 
@@ -52,6 +52,7 @@ Personas are different identities with:
 1. **Fast response**: Synapse calls are lightweight and async ingest never blocks.
 2. **Session continuity**: Working memory keeps the current conversation tight.
 3. **Durable memory**: Sessions are stored in Synapse for long‑term recall.
+4. **LLM resilience**: Automatic fallback if the primary model fails or times out.
 
 ---
 
@@ -67,7 +68,7 @@ Core:
 
 Downstream:
 - Synapse Memory API (`/session/brief`, `/session/ingest`)
-- LLM (OpenRouter)
+- LLM (OpenRouter primary + fallback, OpenAI emergency)
 - TTS (ElevenLabs)
 
 ---

@@ -26,7 +26,7 @@ const WEATHER_CACHE = new Map<
 >();
 const WEATHER_TTL_MS = 30 * 60 * 1000;
 const WEATHER_TIMEOUT_MS = 1500;
-const DEFAULT_LIBRARIAN_TIMEOUT_MS = 800;
+const DEFAULT_LIBRARIAN_TIMEOUT_MS = 5000;
 
 function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");

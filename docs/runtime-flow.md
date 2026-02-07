@@ -15,7 +15,7 @@ Two paths run in parallel:
 3. **Parse request** (audio + personaId)
 4. **STT** (`transcribeAudio`)
 5. **Session lifecycle** (`sessionService.ts`)
-   - If `now - last_user_message > 15 min`, close session
+   - If `now - last_user_message > 5 min`, close session (configurable)
    - Start or continue active session
 6. **Context build** (`contextBuilder.ts`)
    - Persona prompt
@@ -28,7 +28,7 @@ Two paths run in parallel:
    - If yes, call `/memory/query` and format Recall Sheet
 8. **Prompt assembly** (`route.ts`)
    - Persona → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → Rolling Summary → Last 8 messages → User msg
-9. **LLM call** (OpenRouter)
+9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
 12. **Return response**
@@ -50,9 +50,10 @@ Optional legacy path (feature‑flagged):
 Order is fixed:
 1. Persona (Identity Anchor)
 2. SITUATIONAL_CONTEXT (Synapse brief)
-3. Rolling Summary (if present)
-4. Last 6 turns
-5. Current user message
+3. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present)
+4. Rolling Summary (if present)
+5. Last 8 messages
+6. Current user message
 
 ---
 

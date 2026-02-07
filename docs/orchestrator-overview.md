@@ -25,7 +25,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 1. `/api/chat` receives audio + personaId
 2. STT (`transcribeAudio`)
 3. Session lifecycle in `sessionService.ts`
-   - If `now - last_user_message > 15 min`, close session
+   - If `now - last_user_message > 5 min`, close session (configurable)
    - Open or continue the active session
    - Session close triggers Synapse `/session/ingest` (async)
 4. `buildContext(...)` in `contextBuilder.ts`
@@ -38,7 +38,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
    - SUPPLEMENTAL_CONTEXT (Recall Sheet, if triggered)
    - Rolling summary (if present)
    - Last 8 messages + current user message
-6. LLM call (OpenRouter)
+6. LLM call (OpenRouter primary → fallback, then OpenAI emergency)
 7. TTS (ElevenLabs)
 8. Store messages
 9. Async updates (session ingest, legacy shadow judge if enabled)
@@ -70,7 +70,7 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 ## Key Decisions The Orchestrator Makes
 ### 1) When is a new session started?
 - If **no active session** exists
-- Or if **last user message > 15 minutes ago**
+- Or if **last user message > 5 minutes ago** (configurable)
 
 ### 2) When do we fetch Synapse context?
 - When `FEATURE_SYNAPSE_BRIEF=true`
@@ -81,6 +81,7 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 - **Spec** extracts entities/topics/time intent
 - **Relevance** checks if retrieved memory should be injected
 - If used, we format a Recall Sheet as `SUPPLEMENTAL_CONTEXT`
+ - Entire reflex is capped by `LIBRARIAN_TIMEOUT_MS` (default 5s)
 
 ### 4) What goes into the prompt?
 Blocks are in this order:

@@ -30,7 +30,7 @@ No Prisma‑based long‑term memory queries are used in this mode.
 ---
 
 ## Session Lifecycle
-- Active window is **15 minutes** based on last user message
+- Active window is **5 minutes** based on last user message (configurable)
 - Session close is the moment we send a full transcript to Synapse
 
 ---
@@ -47,3 +47,4 @@ These still exist but are off by default:
 - `[context.synapse]` when Synapse brief is unavailable
 - `[synapse.ingest]` when session ingest fires
 - `[session.summary]` (legacy)
+ - `[llm.primary.timeout]` / `[llm.primary.error]` / `[llm.fallback.used]` / `[llm.emergency.used]`

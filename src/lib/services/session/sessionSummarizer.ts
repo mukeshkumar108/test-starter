@@ -297,7 +297,7 @@ export async function summarizeRollingSession(params: {
 }) {
   if (!env.OPENROUTER_API_KEY) {
     console.warn("Rolling session summarizer skipped: missing OPENROUTER_API_KEY");
-    return null;
+    return params.previousSummary ?? null;
   }
 
   const userMessages = await prisma.message.findMany({
@@ -362,10 +362,10 @@ export async function summarizeRollingSession(params: {
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       console.warn("Rolling session summary request timed out");
-      return null;
+      return params.previousSummary ?? null;
     }
     console.warn("Rolling session summary request failed:", error);
-    return null;
+    return params.previousSummary ?? null;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -377,13 +377,14 @@ export async function summarizeRollingSession(params: {
       statusText: response.statusText,
       body: errText.slice(0, 500),
     });
-    return null;
+    return params.previousSummary ?? null;
   }
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content ?? "";
   const cleaned = stripJsonFence(content);
-  return cleaned.trim().slice(0, 600);
+  const trimmed = cleaned.trim().slice(0, 600);
+  return trimmed || params.previousSummary || null;
 }
 
 export async function summarizeRollingSessionFromMessages(params: {
@@ -392,7 +393,7 @@ export async function summarizeRollingSessionFromMessages(params: {
 }) {
   if (!env.OPENROUTER_API_KEY) {
     console.warn("Rolling session summarizer skipped: missing OPENROUTER_API_KEY");
-    return null;
+    return params.previousSummary ?? null;
   }
 
   if (params.messages.length === 0) return null;
@@ -425,16 +426,17 @@ export async function summarizeRollingSessionFromMessages(params: {
 
     if (!response.ok) {
       console.warn("Rolling session summarizer failed:", response.status);
-      return null;
+      return params.previousSummary ?? null;
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content ?? "";
     const cleaned = stripJsonFence(content);
-    return cleaned.trim() || null;
+    const trimmed = cleaned.trim();
+    return trimmed || params.previousSummary || null;
   } catch (error) {
     console.warn("Rolling session summarizer failed:", error);
-    return null;
+    return params.previousSummary ?? null;
   } finally {
     clearTimeout(timeoutId);
   }

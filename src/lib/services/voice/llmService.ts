@@ -1,5 +1,4 @@
-import { env } from "@/env";
-import { getChatModelForPersona } from "@/lib/providers/models";
+import { safeChatCompletion } from "@/lib/llm/safeCompletion";
 
 export interface LLMMessage {
   role: "user" | "assistant" | "system";
@@ -17,44 +16,18 @@ export async function generateResponse(
 ): Promise<LLMResponse> {
   const startTime = Date.now();
   
-  try {
-    const isSophie = personaSlug === "creative";
-    const model = getChatModelForPersona(personaSlug);
-    const maxTokens = isSophie ? 350 : 1000;
-    const temperature = isSophie ? 0.7 : 0.7;
-    
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://github.com/your-repo", // Required by OpenRouter
-        "X-Title": "Walkie-Talkie Voice Companion",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: maxTokens,
-        temperature,
-        ...(isSophie ? { top_p: 0.9, presence_penalty: 0.1 } : {}),
-        stream: false, // For v0.1, use non-streaming
-      }),
-    });
+  const isSophie = personaSlug === "creative";
+  const maxTokens = isSophie ? 350 : 1000;
+  const temperature = 0.7;
 
-    if (!response.ok) {
-      throw new Error(`OpenRouter LLM failed: ${response.status} ${response.statusText}`);
-    }
+  const content = await safeChatCompletion(messages, {
+    maxTokens,
+    temperature,
+    ...(isSophie ? { topP: 0.9, presencePenalty: 0.1 } : {}),
+  });
 
-    const data = await response.json();
-    
-    const content = data.choices?.[0]?.message?.content || "I'm having trouble responding right now.";
-
-    return {
-      content,
-      duration_ms: Date.now() - startTime,
-    };
-  } catch (error) {
-    console.error("LLM Service Error:", error);
-    throw new Error("Language model response failed");
-  }
+  return {
+    content,
+    duration_ms: Date.now() - startTime,
+  };
 }

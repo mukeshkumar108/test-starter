@@ -6,7 +6,7 @@
 - Lives only in Prisma, scoped to the session
 
 ## Session Model
-- A session is open until **15 minutes after the last user message**
+- A session is open until **5 minutes after the last user message** (configurable)
 - On close, the full transcript is sent to Synapse `/session/ingest`
 
 ## Long‑Term Memory (Synapse / Graphiti)
