@@ -12,7 +12,7 @@ export interface SafeChatOptions {
   presencePenalty?: number;
 }
 
-const PRIMARY_MODEL = "meta-llama/llama-4-maverick";
+const PRIMARY_MODEL = "deepseek/deepseek-chat-v3.1";
 const FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const EMERGENCY_MODEL = "gpt-4o-mini";
 
