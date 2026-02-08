@@ -6,14 +6,19 @@ export interface TTSResult {
   duration_ms: number;
 }
 
+function sanitizeForVoice(text: string): string {
+  return text.replace(/[*_`#\[\]]/g, "").replace(/\s{2,}/g, " ").trim();
+}
+
 export async function synthesizeSpeech(
   text: string, 
   voiceId: string
 ): Promise<TTSResult> {
   const startTime = Date.now();
+  const ttsText = sanitizeForVoice(text);
   
   try {
-    const hasLaugh = /\bhaha\b/i.test(text);
+    const hasLaugh = /\bhaha\b/i.test(ttsText);
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: "POST",
       headers: {
@@ -22,7 +27,7 @@ export async function synthesizeSpeech(
         "xi-api-key": env.ELEVENLABS_API_KEY,
       },
       body: JSON.stringify({
-        text,
+        text: ttsText,
         model_id: "eleven_monolingual_v1",
         voice_settings: {
           stability: 0.42,
