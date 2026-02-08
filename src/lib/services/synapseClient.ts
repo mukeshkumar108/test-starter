@@ -1,5 +1,15 @@
 import { env } from "@/env";
 
+export type SynapseBriefResponse = {
+  briefContext?: string | null;
+  temporalVibe?: string | null;
+  timeGapDescription?: string | null;
+  narrativeSummary?: Array<{ summary?: string; reference_time?: string }> | string[];
+  currentVibe?: { mood?: string | null; energyLevel?: string | null } | null;
+  activeLoops?: Array<{ text?: string; label?: string }> | string[];
+  currentFocus?: string | null;
+};
+
 const DEFAULT_TIMEOUT_MS = 3000;
 
 function resolveTimeoutMs() {

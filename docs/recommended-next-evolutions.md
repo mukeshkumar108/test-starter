@@ -1,7 +1,7 @@
 # Recommended Next Evolutions (Post‑Simplification)
 
 1. **Rolling summary in‑session**
-Keep last 6 turns + rolling summary to stabilize long conversations without bloating tokens.
+Keep last 8 messages + rolling summary to stabilize long conversations without bloating tokens.
 
 2. **Query‑aware session brief**
 Let `/session/brief` accept query hints so Synapse can surface targeted memory.

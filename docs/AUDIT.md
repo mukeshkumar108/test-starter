@@ -10,7 +10,7 @@
 - `ensureUserByClerkId(clerkUserId)` (user upsert).
 - `personaId` from multipart form field `personaId`.
 - `prisma.personaProfile.findUnique({ where: { id: personaId } })` → 404 JSON if missing.
-- `closeStaleSessionIfAny(user.id, personaId, now)` → closes if last user msg > 15m.
+- `closeStaleSessionIfAny(user.id, personaId, now)` → closes if last user msg > 5m (configurable).
 - `ensureActiveSession(user.id, personaId, now)` → creates or updates session.
 
 **Context builder**
@@ -20,10 +20,13 @@
 **LLM prompt assembly (exact order)**
 Source: `src/app/api/chat/route.ts` (messages array)
 1. **Persona Prompt**
-2. **SITUATIONAL_CONTEXT** (Synapse brief)
-3. **Rolling Summary** (optional)
-4. **Recent messages** (last 6)
-5. **Current user message**
+2. **Style guard** (single line)
+3. **CONVERSATION_POSTURE** (neutral labels)
+4. **SITUATIONAL_CONTEXT** (Synapse brief; includes CURRENT_FOCUS when present)
+5. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional)
+6. **SESSION FACTS** (rolling summary, optional)
+7. **Recent messages** (last 8)
+8. **Current user message**
 
 **Write path**
 - Store user + assistant messages in Prisma
@@ -32,7 +35,7 @@ Source: `src/app/api/chat/route.ts` (messages array)
 ---
 
 ## Memory Sources (Current)
-- **Working memory**: local last 6 messages
+- **Working memory**: local last 8 messages
 - **Long‑term memory**: Synapse `/session/brief`
 
 Legacy pipelines remain feature‑flagged but are not default.

@@ -33,12 +33,12 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
    - Load last 8 messages (working memory)
    - If `FEATURE_SYNAPSE_BRIEF=true`, call Synapse `/session/brief`
 5. Prompt assembly in `route.ts`
-   - USER_STATE (mood + energy + tone)
-   - CONVERSATION_POSTURE (mode + pressure)
    - Persona (Identity Anchor)
+   - Style guard (single line)
+   - CONVERSATION_POSTURE (neutral labels only)
    - SITUATIONAL_CONTEXT (Synapse brief)
    - SUPPLEMENTAL_CONTEXT (Recall Sheet, if triggered)
-   - Rolling summary (if present)
+   - SESSION FACTS (rolling summary, if present)
    - Last 8 messages + current user message
 6. LLM call (OpenRouter primary → fallback, then OpenAI emergency)
 7. TTS (ElevenLabs)
@@ -51,7 +51,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 ### Opening Book: Synapse Brief
 - Called via `/session/brief`
 - Provides a compact **situational narrative** for this user+persona+session
-- Injected as a single block: `SITUATIONAL_CONTEXT`
+- Injected as a single block: `SITUATIONAL_CONTEXT` (includes CURRENT_FOCUS when present)
 
 ### Closing Book: Synapse Ingest
 - Called via `/session/ingest` when a session ends
@@ -88,15 +88,15 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 
 ### 4) What goes into the prompt?
 Blocks are in this order:
-- USER_STATE (mood + energy + tone)
-- CONVERSATION_POSTURE (mode + pressure)
 - Persona (Identity Anchor)
+- Style guard (single line)
+- CONVERSATION_POSTURE (mode + pressure; neutral)
 - SITUATIONAL_CONTEXT (Synapse brief)
 - SUPPLEMENTAL_CONTEXT (Recall Sheet)
-- Rolling summary (if any)
+- SESSION FACTS (rolling summary, if any)
 - Last 8 messages
-
-Posture and user state are computed in the Memory Gate call (no extra LLM calls). Hysteresis lives in `SessionState.state.postureState` and `SessionState.state.userStateState`.
+ 
+Posture is computed in the Memory Gate call (no extra LLM calls). Hysteresis lives in `SessionState.state.postureState`.
 
 ---
 

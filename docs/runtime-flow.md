@@ -27,7 +27,7 @@ Two paths run in parallel:
    - Relevance check validates retrieval
    - If yes, call `/memory/query` and format Recall Sheet
 8. **Prompt assembly** (`route.ts`)
-   - USER_STATE → CONVERSATION_POSTURE → Persona → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → Rolling Summary → Last 8 messages → User msg
+   - Persona → Style guard → CONVERSATION_POSTURE → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
@@ -48,14 +48,14 @@ Optional legacy path (feature‑flagged):
 
 ## Prompt Assembly (Current)
 Order is fixed:
-1. USER_STATE (mood + energy + tone)
-1. CONVERSATION_POSTURE (mode + pressure)
 1. Persona (Identity Anchor)
-2. SITUATIONAL_CONTEXT (Synapse brief)
-3. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present)
-4. Rolling Summary (if present)
-5. Last 8 messages
-6. Current user message
+2. Style guard (single line)
+3. CONVERSATION_POSTURE (neutral labels)
+4. SITUATIONAL_CONTEXT (Synapse brief; includes CURRENT_FOCUS when present)
+5. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present)
+6. SESSION FACTS (rolling summary, if present)
+7. Last 8 messages
+8. Current user message
 
 ---
 

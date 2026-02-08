@@ -3,6 +3,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { env } from "@/env";
 import * as synapseClient from "@/lib/services/synapseClient";
+import type { SynapseBriefResponse } from "@/lib/services/synapseClient";
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 
 export interface ConversationContext {
@@ -188,15 +189,6 @@ function isValidQuery(value: string) {
   return true;
 }
 
-type SynapseBriefResponse = {
-  briefContext?: string | null;
-  temporalVibe?: string | null;
-  timeGapDescription?: string | null;
-  narrativeSummary?: Array<{ summary?: string; reference_time?: string }> | string[];
-  currentVibe?: { mood?: string | null; energyLevel?: string | null } | null;
-  activeLoops?: Array<{ text?: string; label?: string }> | string[];
-};
-
 type ActiveLoopEntry = { text?: string; label?: string } | string;
 
 function normalizeLoopText(loop: ActiveLoopEntry) {
@@ -233,6 +225,9 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
     .filter((value): value is string => Boolean(value));
   if (loopTexts.length > 0) {
     parts.push(`Tensions:\n- ${loopTexts.join("\n- ")}`);
+  }
+  if (brief.currentFocus && brief.currentFocus.trim()) {
+    parts.push(`CURRENT_FOCUS:\n- ${brief.currentFocus.trim()}`);
   }
   return parts.length > 0 ? parts.join("\n") : null;
 }
