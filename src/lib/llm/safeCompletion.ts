@@ -14,7 +14,7 @@ export interface SafeChatOptions {
   repetitionPenalty?: number;
 }
 
-const PRIMARY_MODEL = "openai/gpt-4o-mini";
+const PRIMARY_MODEL = "minimax/minimax-m2-her";
 const FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const EMERGENCY_MODEL = "gpt-4o-mini";
 
