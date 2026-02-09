@@ -9,7 +9,9 @@
       "posture": "RECOVERY",
       "pressure": "LOW",
       "conversation": [
-        { "role": "user", "content": "We just finished the UI overhaul. I could keep going." }
+        { "role": "user", "content": "I've worked 12 hours straight." },
+        { "role": "user", "content": "I know, but I just want to finish this one last thing." },
+        { "role": "user", "content": "Fine, you're right. I'm closing it." }
       ]
     },
     {

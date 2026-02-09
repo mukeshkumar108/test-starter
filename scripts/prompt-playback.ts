@@ -22,7 +22,7 @@ type Fixture = {
 
 type PlaybackResult = {
   model: string;
-  response: string;
+  turns: Array<{ user: string; assistant: string }>;
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
 };
 
@@ -80,16 +80,6 @@ async function callOpenRouter(
   return String(data?.choices?.[0]?.message?.content ?? "").trim();
 }
 
-function splitConversation(conversation: FixtureScenario["conversation"]) {
-  if (conversation.length === 0) {
-    return { recentMessages: [], transcript: "" };
-  }
-  const last = conversation[conversation.length - 1];
-  const transcript = last.role === "user" ? last.content : "";
-  const recentMessages = conversation.slice(0, -1);
-  return { recentMessages, transcript };
-}
-
 async function run() {
   const fixtureRaw = await readFile(join(process.cwd(), "fixtures", "prompt-playback.json"), "utf8");
   const fixture = JSON.parse(fixtureRaw) as Fixture;
@@ -99,24 +89,52 @@ async function run() {
   const scenarioResults: ScenarioResult[] = [];
 
   for (const scenario of fixture.scenarios) {
-    const { recentMessages, transcript } = splitConversation(scenario.conversation);
-
-    const messages = __test__buildChatMessages({
-      persona,
-      situationalContext: scenario.situationalContext,
-      supplementalContext: scenario.supplementalContext,
-      rollingSummary: scenario.sessionFacts ?? "",
-      recentMessages,
-      transcript,
-      posture: scenario.posture,
-      pressure: scenario.pressure,
-    });
-
     const results: PlaybackResult[] = [];
     for (const model of models) {
-      const response = await callOpenRouter(model, messages);
-      results.push({ model, response, messages });
-      console.log(`\n[${scenario.name}] (${model})\n${response}\n`);
+      const history: Array<{ role: "user" | "assistant"; content: string }> = [];
+      const turns: Array<{ user: string; assistant: string }> = [];
+
+      for (const turn of scenario.conversation) {
+        if (turn.role === "assistant") {
+          history.push(turn);
+          continue;
+        }
+
+        const messages = __test__buildChatMessages({
+          persona,
+          situationalContext: scenario.situationalContext,
+          supplementalContext: scenario.supplementalContext,
+          rollingSummary: scenario.sessionFacts ?? "",
+          recentMessages: history,
+          transcript: turn.content,
+          posture: scenario.posture,
+          pressure: scenario.pressure,
+        });
+
+        const response = await callOpenRouter(model, messages);
+        history.push({ role: "user", content: turn.content });
+        history.push({ role: "assistant", content: response });
+        turns.push({ user: turn.content, assistant: response });
+      }
+
+      const finalMessages = __test__buildChatMessages({
+        persona,
+        situationalContext: scenario.situationalContext,
+        supplementalContext: scenario.supplementalContext,
+        rollingSummary: scenario.sessionFacts ?? "",
+        recentMessages: history,
+        transcript: "",
+        posture: scenario.posture,
+        pressure: scenario.pressure,
+      });
+
+      results.push({ model, turns, messages: finalMessages });
+
+      console.log(`\n[${scenario.name}] (${model})`);
+      for (const turn of turns) {
+        console.log(`User: ${turn.user}`);
+        console.log(`Sophie: ${turn.assistant}\n`);
+      }
     }
 
     scenarioResults.push({ id: scenario.id, name: scenario.name, results });
