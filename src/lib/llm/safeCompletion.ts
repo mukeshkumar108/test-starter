@@ -14,7 +14,7 @@ export interface SafeChatOptions {
   repetitionPenalty?: number;
 }
 
-const PRIMARY_MODEL = "google/gemini-2.5-flash-lite";
+const PRIMARY_MODEL = "bytedance-seed/seed-1.6-flash";
 const FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const EMERGENCY_MODEL = "gpt-4o-mini";
 
