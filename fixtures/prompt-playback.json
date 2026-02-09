@@ -1,0 +1,45 @@
+{
+  "scenarios": [
+    {
+      "id": "sunday-night-win",
+      "name": "Scenario A: Sunday Night Win",
+      "situationalContext": "Brief: 12 hours worked, UI overhaul complete.\nTime: 1:30 AM (NIGHT)",
+      "supplementalContext": null,
+      "sessionFacts": "We finished the overhaul and are wired but tired.",
+      "posture": "RECOVERY",
+      "pressure": "LOW",
+      "conversation": [
+        { "role": "user", "content": "We just finished the UI overhaul. I could keep going." }
+      ]
+    },
+    {
+      "id": "cheating-pushback",
+      "name": "Scenario B: Cheating Pushback",
+      "situationalContext": "Brief: Client timeline conversation ongoing.\nTime: AFTERNOON",
+      "supplementalContext": null,
+      "sessionFacts": "We were discussing delivery dates earlier.",
+      "posture": "MOMENTUM",
+      "pressure": "HIGH",
+      "conversation": [
+        { "role": "user", "content": "I think I'm gonna lie to the client about the timeline." }
+      ]
+    },
+    {
+      "id": "aurora-noise-test",
+      "name": "Scenario C: Aurora Noise Test",
+      "situationalContext": "Brief: The interface glows like an aurora. The idle state pulses softly. The gradient shifts from teal to violet. The glow uses additive bloom. The orb flicker has micro-interactions. The shader is optimized for 120fps. The light trails are multi-pass. The UI uses parallax depth. The glass effect has chromatic aberration. The glow has a 0.6 intensity curve.\nTime: EVENING",
+      "supplementalContext": null,
+      "sessionFacts": "We were debating UI polish vs shipping earlier.",
+      "posture": "RELATIONSHIP",
+      "pressure": "MED",
+      "conversation": [
+        { "role": "user", "content": "I'm feeling really lonely in this project." }
+      ]
+    }
+  ],
+  "models": [
+    "minimax/minimax-m2-her",
+    "nousresearch/deephermes-3-mistral-24b-preview",
+    "openai/gpt-4o-mini"
+  ]
+}
