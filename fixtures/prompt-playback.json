@@ -54,8 +54,12 @@
     }
   ],
   "models": [
-    "minimax/minimax-m2-her",
     "google/gemini-2.5-flash-lite",
-    "allenai/olmo-3.1-32b-instruct"
+    "bytedance-seed/seed-1.6-flash",
+    "meta-llama/llama-4-maverick",
+    "mistralai/mistral-nemo",
+    "qwen/qwen3-32b",
+    "stepfun/step-3.5-flash:free",
+    "anthropic/claude-3-haiku"
   ]
 }
