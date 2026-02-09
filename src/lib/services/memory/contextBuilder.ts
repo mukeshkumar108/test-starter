@@ -219,6 +219,9 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
   if (brief.timeGapDescription && brief.timeGapDescription.trim()) {
     parts.push(`Time Gap: ${brief.timeGapDescription.trim()}`);
   }
+  if (brief.timeOfDayLabel && brief.timeOfDayLabel.trim()) {
+    parts.push(`Time: ${brief.timeOfDayLabel.trim()}`);
+  }
   const loops = Array.isArray(brief.activeLoops) ? brief.activeLoops : [];
   const loopTexts = loops
     .map((loop) => normalizeLoopText(loop))

@@ -4,6 +4,7 @@ export type SynapseBriefResponse = {
   briefContext?: string | null;
   temporalVibe?: string | null;
   timeGapDescription?: string | null;
+  timeOfDayLabel?: string | null;
   narrativeSummary?: Array<{ summary?: string; reference_time?: string }> | string[];
   currentVibe?: { mood?: string | null; energyLevel?: string | null } | null;
   activeLoops?: Array<{ text?: string; label?: string }> | string[];

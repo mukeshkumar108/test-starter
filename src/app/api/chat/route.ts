@@ -178,8 +178,11 @@ const postureStateCache = new Map<string, PostureState>();
 const userStateCache = new Map<string, UserStateState>();
 
 function normalizePosture(value?: string | null): ConversationPosture {
-  if (value && value in POSTURE_GUIDANCE) {
-    return value as ConversationPosture;
+  if (value) {
+    const candidate = value.split("|")[0]?.trim();
+    if (candidate && candidate in POSTURE_GUIDANCE) {
+      return candidate as ConversationPosture;
+    }
   }
   return DEFAULT_POSTURE;
 }
@@ -544,6 +547,18 @@ function isExplicitRecall(text: string) {
 
 function buildQueryFromSpec(spec: MemoryQuerySpec) {
   const tokens: string[] = [];
+  const genericTokens = new Set([
+    "trust",
+    "support",
+    "help",
+    "partner",
+    "someone",
+    "anyone",
+    "something",
+    "anything",
+    "everything",
+  ]);
+  const stopwords = new Set(["you", "me", "we", "us", "our", "your", "i", "my"]);
   const pushTokens = (values: string[] | undefined) => {
     if (!values) return;
     for (const value of values) {
@@ -560,7 +575,11 @@ function buildQueryFromSpec(spec: MemoryQuerySpec) {
   }
   const unique = Array.from(new Set(tokens.map((token) => token.trim()).filter(Boolean)));
   if (unique.length === 0) return null;
-  return unique.slice(0, 4).join(" ").slice(0, 48).trim();
+  const filtered = unique.filter((token) => !stopwords.has(token.toLowerCase()));
+  if (filtered.length === 0) return null;
+  const hasConcrete = filtered.some((token) => !genericTokens.has(token.toLowerCase()));
+  if (!hasConcrete) return null;
+  return filtered.slice(0, 4).join(" ").slice(0, 48).trim();
 }
 
 async function callOpenRouterJson(
@@ -639,6 +658,7 @@ Rules:
 - explicit=true if the user directly asks to recall past info.
 - action=memory_query if recall is needed.
 - action=none if the user is only chatting about present/future.
+- posture must be exactly one of the allowed enums (never multiple values or pipes).
 
 Recent conversation:
 ${lastTurns}
@@ -707,6 +727,7 @@ Rules:
 - Entities are specific people/places/items.
 - Topics are specialized concepts or projects.
 - Keep entries short and concrete.
+- No pronouns. Avoid generic abstract words unless paired with a concrete entity.
 
 Recent conversation:
 ${lastTurns}
