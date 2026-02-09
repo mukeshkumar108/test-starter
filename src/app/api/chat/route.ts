@@ -548,17 +548,28 @@ function isExplicitRecall(text: string) {
 function buildQueryFromSpec(spec: MemoryQuerySpec) {
   const tokens: string[] = [];
   const genericTokens = new Set([
-    "trust",
     "support",
     "help",
-    "partner",
     "someone",
     "anyone",
     "something",
     "anything",
     "everything",
   ]);
-  const stopwords = new Set(["you", "me", "we", "us", "our", "your", "i", "my"]);
+  const stopwords = new Set([
+    "i",
+    "me",
+    "you",
+    "we",
+    "us",
+    "our",
+    "your",
+    "my",
+    "assistant",
+    "ai",
+    "prompt",
+    "bot",
+  ]);
   const pushTokens = (values: string[] | undefined) => {
     if (!values) return;
     for (const value of values) {
@@ -577,9 +588,10 @@ function buildQueryFromSpec(spec: MemoryQuerySpec) {
   if (unique.length === 0) return null;
   const filtered = unique.filter((token) => !stopwords.has(token.toLowerCase()));
   if (filtered.length === 0) return null;
-  const hasConcrete = filtered.some((token) => !genericTokens.has(token.toLowerCase()));
-  if (!hasConcrete) return null;
-  return filtered.slice(0, 4).join(" ").slice(0, 48).trim();
+  const nounHeavy = filtered.filter((token) => !genericTokens.has(token.toLowerCase()));
+  if (nounHeavy.length === 0) return null;
+  const preferred = nounHeavy.length > 0 ? nounHeavy : filtered;
+  return preferred.slice(0, 4).join(" ").slice(0, 48).trim();
 }
 
 async function callOpenRouterJson(

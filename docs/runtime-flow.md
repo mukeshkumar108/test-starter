@@ -24,6 +24,7 @@ Two paths run in parallel:
 7. **Librarian Reflex** (optional)
    - Gate decides if memory query is needed (explicit vs ambient)
    - Spec extracts entities/topics/time intent
+   - Query compilation drops pronouns/ghost tokens and prefers noun-heavy tokens
    - Relevance check validates retrieval
    - If yes, call `/memory/query` and format Recall Sheet
 8. **Prompt assembly** (`route.ts`)
