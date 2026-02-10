@@ -23,10 +23,11 @@ Source: `src/app/api/chat/route.ts` (messages array)
 2. **Style guard** (single line)
 3. **CONVERSATION_POSTURE** (neutral labels)
 4. **SITUATIONAL_CONTEXT** (Synapse brief; includes CURRENT_FOCUS when present)
-5. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional)
-6. **SESSION FACTS** (rolling summary, optional)
-7. **Recent messages** (last 8)
-8. **Current user message**
+5. **CONTINUITY** (optional; gap-based)
+6. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional)
+7. **SESSION FACTS** (rolling summary, optional)
+8. **Recent messages** (last 8)
+9. **Current user message**
 
 **Write path**
 - Store user + assistant messages in Prisma

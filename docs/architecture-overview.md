@@ -4,8 +4,7 @@
 A voice‑first conversational companion with **bookend memory**:
 - **Working memory** is local and fast (recent turns + rolling summary)
 - **Long‑term memory** is externalized to Synapse/Graphiti
-- **Conversation posture** is computed per turn (mode + pressure) and injected before the persona prompt
-- **User state** is computed per turn (mood + energy + tone) and injected before the persona prompt
+- **Conversation posture** is computed per turn (mode + pressure) and injected after the persona prompt
 
 The system optimizes for continuity without bloating every request.
 

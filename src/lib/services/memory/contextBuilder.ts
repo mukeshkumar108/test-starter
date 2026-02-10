@@ -205,40 +205,6 @@ function normalizeFact(value: string) {
   return trimmed;
 }
 
-function extractFactsFromBriefContext(briefContext: string) {
-  const lines = briefContext
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const facts: string[] = [];
-  let inFacts = false;
-
-  for (const line of lines) {
-    if (line.startsWith("FACTS")) {
-      inFacts = true;
-      continue;
-    }
-    if (
-      line.startsWith("OPEN_LOOPS") ||
-      line.startsWith("COMMITMENTS") ||
-      line.startsWith("CONTEXT_ANCHORS")
-    ) {
-      inFacts = false;
-      continue;
-    }
-    if (inFacts && line.startsWith("-")) {
-      const normalized = normalizeFact(line.replace(/^-+\s*/, ""));
-      if (normalized) facts.push(normalized);
-    }
-  }
-
-  return facts;
-}
-
-function briefIncludesAnchors(briefContext: string) {
-  return /CONTEXT_ANCHORS|timeOfDayLabel|timeGapDescription/i.test(briefContext);
-}
-
 function formatTimeNowUTC() {
   const now = new Date();
   const hours = now.getUTCHours();
@@ -263,40 +229,43 @@ function formatTimeNowUTC() {
   return `Time Now: ${padded} UTC — ${label}`;
 }
 
+function uniqueLimited(values: Array<string | null | undefined>, limit: number) {
+  const cleaned = values
+    .map((value) => (typeof value === "string" ? normalizeFact(value) : null))
+    .filter((value): value is string => Boolean(value));
+  return Array.from(new Set(cleaned)).slice(0, limit);
+}
+
 function buildSituationalContext(brief: SynapseBriefResponse) {
   const parts: string[] = [];
-  const hasBriefContext = Boolean(brief.briefContext && brief.briefContext.trim());
-  if (hasBriefContext) {
-    const facts = extractFactsFromBriefContext(brief.briefContext!.trim());
-    const uniqueFacts = Array.from(new Set(facts));
-    if (uniqueFacts.length > 0) {
-      parts.push(`FACTS:\n- ${uniqueFacts.join("\n- ")}`);
-    }
-  } else if (brief.narrativeSummary && Array.isArray(brief.narrativeSummary)) {
-    const summaries = brief.narrativeSummary
-      .map((item) => {
-        if (typeof item === "string") return item.trim();
-        if (!item || typeof item !== "object") return "";
-        return typeof item.summary === "string" ? item.summary.trim() : "";
-      })
-      .filter(Boolean);
-    if (summaries.length > 0) {
-      const normalized = normalizeFact(summaries[0]);
-      if (normalized) {
-        parts.push(`FACTS:\n- ${normalized}`);
-      }
-    }
+  const facts = uniqueLimited(brief.facts ?? [], 2);
+  if (facts.length > 0) {
+    parts.push(`FACTS:\n- ${facts.join("\n- ")}`);
   }
-  const hasAnchorsInBrief = hasBriefContext && briefIncludesAnchors(brief.briefContext!.trim());
-  if (!hasAnchorsInBrief) {
-    if (brief.timeGapDescription && brief.timeGapDescription.trim()) {
-      parts.push(`Time Gap: ${brief.timeGapDescription.trim()}`);
-    }
-    if (brief.timeOfDayLabel && brief.timeOfDayLabel.trim()) {
-      parts.push(`Time: ${brief.timeOfDayLabel.trim()}`);
-    }
+  const openLoops = uniqueLimited(brief.openLoops ?? [], 1);
+  if (openLoops.length > 0) {
+    parts.push(`OPEN_LOOPS:\n- ${openLoops.join("\n- ")}`);
   }
-  parts.push(`Time Now: ${new Date().toISOString()} (UTC)`);
+  const commitments = uniqueLimited(brief.commitments ?? [], 1);
+  if (commitments.length > 0) {
+    parts.push(`COMMITMENTS:\n- ${commitments.join("\n- ")}`);
+  }
+  const timeGap =
+    brief.contextAnchors?.timeGapDescription ??
+    (brief.timeGapDescription && brief.timeGapDescription.trim()
+      ? brief.timeGapDescription.trim()
+      : null);
+  if (timeGap) {
+    parts.push(`Time Gap: ${timeGap}`);
+  }
+  const timeLabel =
+    brief.contextAnchors?.timeOfDayLabel ??
+    (brief.timeOfDayLabel && brief.timeOfDayLabel.trim()
+      ? brief.timeOfDayLabel.trim()
+      : null);
+  if (timeLabel) {
+    parts.push(`Time: ${timeLabel}`);
+  }
   const loops = Array.isArray(brief.activeLoops) ? brief.activeLoops : [];
   const loopTexts = loops
     .map((loop) => normalizeLoopText(loop))

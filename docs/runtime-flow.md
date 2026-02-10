@@ -28,7 +28,7 @@ Two paths run in parallel:
    - Relevance check validates retrieval
    - If yes, call `/memory/query` and format Recall Sheet
 8. **Prompt assembly** (`route.ts`)
-   - Persona → Style guard → CONVERSATION_POSTURE → SITUATIONAL_CONTEXT → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
+   - Persona → Style guard → CONVERSATION_POSTURE → SITUATIONAL_CONTEXT → CONTINUITY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
@@ -53,13 +53,15 @@ Order is fixed:
 2. Style guard (single line)
 3. CONVERSATION_POSTURE (neutral labels)
 4. SITUATIONAL_CONTEXT (Synapse brief; includes CURRENT_FOCUS when present)
-5. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present)
-6. SESSION FACTS (rolling summary, if present)
-7. Last 8 messages
-8. Current user message
+5. CONTINUITY (optional, gap-based)
+6. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present)
+7. SESSION FACTS (rolling summary, if present)
+8. Last 8 messages
+9. Current user message
 
 ---
 
 ## Notes
 - Synapse `/session/brief` is designed to be light‑weight and narrative.
+- CONTINUITY injects only when timeGapMinutes ≥ 60 and the opener is not urgent.
 - Session boundaries are based on **last user message**, not assistant activity.

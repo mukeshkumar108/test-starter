@@ -1079,6 +1079,7 @@ async function runLibrarianReflex(params: {
 function buildChatMessages(params: {
   persona: string;
   situationalContext?: string;
+  continuityBlock?: string | null;
   supplementalContext?: string | null;
   rollingSummary?: string;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
@@ -1103,6 +1104,9 @@ function buildChatMessages(params: {
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
       : []),
+    ...(params.continuityBlock
+      ? [{ role: "system" as const, content: params.continuityBlock }]
+      : []),
     ...(params.supplementalContext
       ? [
           {
@@ -1117,6 +1121,61 @@ function buildChatMessages(params: {
     ...params.recentMessages,
     { role: "user" as const, content: params.transcript },
   ];
+}
+
+function getLastUserMessageAt(
+  messages: Array<{ role: "user" | "assistant"; createdAt?: Date }>
+) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user" && messages[i].createdAt) {
+      return messages[i].createdAt;
+    }
+  }
+  return null;
+}
+
+function computeTimeGapMinutes(
+  recentMessages: Array<{ role: "user" | "assistant"; createdAt?: Date }>,
+  now: Date
+) {
+  const lastUserAt = getLastUserMessageAt(recentMessages);
+  if (!lastUserAt) return null;
+  const diffMs = now.getTime() - lastUserAt.getTime();
+  return Math.max(0, Math.floor(diffMs / 60000));
+}
+
+function isUrgentOpener(text: string) {
+  const lowered = text.toLowerCase();
+  const urgentPhrases = [
+    "urgent",
+    "asap",
+    "emergency",
+    "panic",
+    "help",
+    "can't",
+    "cant",
+    "problem",
+    "issue",
+    "error",
+    "broken",
+    "stuck",
+    "crash",
+    "failing",
+  ];
+  return urgentPhrases.some((phrase) => lowered.includes(phrase));
+}
+
+function buildContinuityBlock(params: { timeGapMinutes: number | null; transcript: string }) {
+  const gapMinutes = params.timeGapMinutes ?? 0;
+  if (gapMinutes < 60) return null;
+  const urgent = isUrgentOpener(params.transcript);
+  if (gapMinutes >= 60) {
+    if (urgent) return null;
+  } else {
+    return null;
+  }
+  const hours = Math.max(1, Math.round(gapMinutes / 60));
+  return `[CONTINUITY]\nIt’s been ~${hours} hours since you last spoke. Open with a natural bridge that resumes the relationship and thread.\nBe low-assumption; don’t presume what the user is doing now.\nDo not force a question; it’s okay to let the moment land.`;
 }
 
 export async function POST(request: NextRequest) {
@@ -1263,10 +1322,16 @@ export async function POST(request: NextRequest) {
     const pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
     const userState = librarianResult?.userState ?? null;
     const model = getChatModelForPersona(persona.slug);
+    const timeGapMinutes = computeTimeGapMinutes(context.recentMessages, now);
+    const continuityBlock = buildContinuityBlock({
+      timeGapMinutes,
+      transcript: sttResult.transcript,
+    });
 
     const messages = buildChatMessages({
       persona: context.persona,
       situationalContext,
+      continuityBlock,
       supplementalContext,
       rollingSummary,
       recentMessages: context.recentMessages,

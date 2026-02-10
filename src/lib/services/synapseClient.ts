@@ -6,6 +6,14 @@ export type SynapseBriefResponse = {
   timeGapDescription?: string | null;
   timeOfDayLabel?: string | null;
   narrativeSummary?: Array<{ summary?: string; reference_time?: string }> | string[];
+  facts?: string[] | null;
+  openLoops?: string[] | null;
+  commitments?: string[] | null;
+  contextAnchors?: {
+    timeOfDayLabel?: string | null;
+    timeGapDescription?: string | null;
+    lastInteraction?: string | null;
+  } | null;
   currentVibe?: { mood?: string | null; energyLevel?: string | null } | null;
   activeLoops?: Array<{ text?: string; label?: string }> | string[];
   currentFocus?: string | null;
