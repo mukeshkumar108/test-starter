@@ -53,6 +53,13 @@ see `baseline.md`
 ## notes
 - Next.js 16 uses proxy.ts (replaces middleware.ts).
 
+## overlays (Sophie)
+Overlay prompts live in `prompts/overlays/`. They are injected as temporary system lenses when deterministic heuristics trigger:
+- `curiosity_spiral.md`: story‑pulling curiosity (max once per session, up to 4 turns)
+- `accountability_tug.md`: gentle open‑loop check‑in (max once per day, 48h backoff on dismissal)
+
+Tune triggers and cooldowns in `src/lib/services/memory/overlaySelector.ts`.
+
 ## environment validation
 Env is validated at boot in `src/env.ts`. Add new variables there and to `.env.example`.
 

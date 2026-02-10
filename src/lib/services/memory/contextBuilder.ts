@@ -10,6 +10,10 @@ export interface ConversationContext {
   persona: string;
   situationalContext?: string;
   rollingSummary?: string;
+  overlayContext?: {
+    openLoops?: string[];
+    commitments?: string[];
+  };
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   /** True if this is the first turn of a new session (for conditional SessionSummary injection) */
   isSessionStart: boolean;
@@ -370,10 +374,15 @@ export async function buildContextFromSynapse(
   const cached = briefCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < BRIEF_CACHE_TTL_MS) {
     const situationalContext = buildSituationalContext(cached.brief);
+    const overlayContext = {
+      openLoops: uniqueLimited(cached.brief.openLoops ?? [], 1),
+      commitments: uniqueLimited(cached.brief.commitments ?? [], 1),
+    };
     return {
       persona: personaPrompt,
       situationalContext: situationalContext ?? undefined,
       rollingSummary: sessionState?.rollingSummary ?? undefined,
+      overlayContext,
       recentMessages: messages
         .map((message) => ({
           ...message,
@@ -403,6 +412,10 @@ export async function buildContextFromSynapse(
   if (!brief) return null;
   briefCache.set(cacheKey, { fetchedAt: Date.now(), brief });
   const situationalContext = buildSituationalContext(brief);
+  const overlayContext = {
+    openLoops: uniqueLimited(brief.openLoops ?? [], 1),
+    commitments: uniqueLimited(brief.commitments ?? [], 1),
+  };
 
   if (env.FEATURE_LIBRARIAN_TRACE === "true") {
     try {
@@ -426,6 +439,7 @@ export async function buildContextFromSynapse(
     persona: personaPrompt,
     situationalContext: situationalContext ?? undefined,
     rollingSummary: sessionState?.rollingSummary ?? undefined,
+    overlayContext,
     recentMessages: messages
       .map((message) => ({
         ...message,
@@ -474,6 +488,7 @@ async function buildContextLocal(
       persona: personaPrompt,
       situationalContext: undefined,
       rollingSummary: sessionState?.rollingSummary ?? undefined,
+      overlayContext: undefined,
       recentMessages: messages
         .map((message) => ({
           ...message,

@@ -38,6 +38,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
    - CONVERSATION_POSTURE (neutral labels only)
    - SITUATIONAL_CONTEXT (Synapse brief)
    - CONTINUITY (optional; gap-based)
+   - OVERLAY (optional; curiosity/accountability lenses)
    - SUPPLEMENTAL_CONTEXT (Recall Sheet, if triggered)
    - SESSION FACTS (rolling summary, if present)
    - Last 8 messages + current user message
@@ -94,6 +95,7 @@ Blocks are in this order:
 - CONVERSATION_POSTURE (mode + pressure; neutral)
 - SITUATIONAL_CONTEXT (Synapse brief)
 - CONTINUITY (optional; gap-based)
+- OVERLAY (optional; curiosity/accountability lenses)
 - SUPPLEMENTAL_CONTEXT (Recall Sheet)
 - SESSION FACTS (rolling summary, if any)
 - Last 8 messages

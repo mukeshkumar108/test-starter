@@ -10,7 +10,9 @@ const tests: TestDef[] = [
   { name: "entityNormalizer", command: [...nodeWithTsx, "src/lib/services/memory/__tests__/entityNormalizer.test.ts"] },
   { name: "queryRouterSynapse", command: [...nodeWithTsx, "src/lib/services/memory/__tests__/queryRouter.synapse.test.ts"] },
   { name: "contextBuilderSynapse", command: [...nodeWithTsx, "src/lib/services/memory/__tests__/contextBuilder.synapse.test.ts"] },
+  { name: "overlaySelector", command: [...nodeWithTsx, "src/lib/services/memory/__tests__/overlaySelector.test.ts"] },
   { name: "librarian", command: [...nodeWithTsx, "src/synapse/librarian.test.ts"] },
+  { name: "overlayInjection", command: [...nodeWithTsx, "src/app/api/__tests__/overlayInjection.test.ts"] },
   {
     name: "continuityIntegration",
     command: [...nodeWithTsx, "tests/integration/continuity.test.ts"],

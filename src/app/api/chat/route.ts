@@ -5,6 +5,16 @@ import { transcribeAudio } from "@/lib/services/voice/sttService";
 import { generateResponse } from "@/lib/services/voice/llmService";
 import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
 import { buildContext } from "@/lib/services/memory/contextBuilder";
+import { loadOverlay, type OverlayType } from "@/lib/services/memory/overlayLoader";
+import {
+  isDismissal,
+  isDirectTaskRequest,
+  isShortReply,
+  isTopicShift,
+  isUrgent,
+  normalizeTopicKey,
+  selectOverlay,
+} from "@/lib/services/memory/overlaySelector";
 import { processShadowPath } from "@/lib/services/memory/shadowJudge";
 import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
@@ -174,8 +184,30 @@ type PostureState = {
   lastSessionId?: string | null;
 };
 
+type OverlayUsed = {
+  curiositySpiral?: boolean;
+  accountabilityTug?: boolean;
+};
+
+type OverlayUserState = {
+  lastTugAt?: string | null;
+  tugBackoff?: Record<string, string>;
+};
+
+type OverlayState = {
+  overlayUsed?: OverlayUsed;
+  overlayTypeActive?: OverlayType | null;
+  overlayTurnCount?: number;
+  lastSessionId?: string | null;
+  pendingDismissType?: OverlayType | null;
+  pendingTopicKey?: string | null;
+  shortReplyStreak?: number;
+  user?: OverlayUserState;
+};
+
 const postureStateCache = new Map<string, PostureState>();
 const userStateCache = new Map<string, UserStateState>();
+const overlayStateCache = new Map<string, OverlayState>();
 
 function normalizePosture(value?: string | null): ConversationPosture {
   if (value) {
@@ -278,6 +310,66 @@ async function readUserState(userId: string, personaId: string): Promise<UserSta
     lastSessionId: typeof raw.lastSessionId === "string" ? raw.lastSessionId : null,
     lastUpdatedAt: typeof raw.lastUpdatedAt === "string" ? raw.lastUpdatedAt : null,
   };
+}
+
+async function readOverlayState(userId: string, personaId: string): Promise<OverlayState | null> {
+  if (process.env.NODE_ENV === "test") {
+    return overlayStateCache.get(`${userId}:${personaId}`) ?? null;
+  }
+  const sessionState = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const state = sessionState?.state;
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const overlayState = (state as Record<string, unknown>).overlayState;
+  if (!overlayState || typeof overlayState !== "object" || Array.isArray(overlayState)) {
+    return null;
+  }
+  const raw = overlayState as Record<string, unknown>;
+  return {
+    overlayUsed: typeof raw.overlayUsed === "object" && raw.overlayUsed && !Array.isArray(raw.overlayUsed)
+      ? (raw.overlayUsed as OverlayUsed)
+      : undefined,
+    overlayTypeActive: typeof raw.overlayTypeActive === "string" ? (raw.overlayTypeActive as OverlayType) : null,
+    overlayTurnCount: typeof raw.overlayTurnCount === "number" ? raw.overlayTurnCount : 0,
+    lastSessionId: typeof raw.lastSessionId === "string" ? raw.lastSessionId : null,
+    pendingDismissType: typeof raw.pendingDismissType === "string" ? (raw.pendingDismissType as OverlayType) : null,
+    pendingTopicKey: typeof raw.pendingTopicKey === "string" ? raw.pendingTopicKey : null,
+    shortReplyStreak: typeof raw.shortReplyStreak === "number" ? raw.shortReplyStreak : 0,
+    user: typeof raw.user === "object" && raw.user && !Array.isArray(raw.user)
+      ? (raw.user as OverlayUserState)
+      : undefined,
+  };
+}
+
+async function writeOverlayState(userId: string, personaId: string, next: OverlayState) {
+  if (process.env.NODE_ENV === "test") {
+    overlayStateCache.set(`${userId}:${personaId}`, next);
+    return;
+  }
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const baseState =
+    existing?.state && typeof existing.state === "object" && !Array.isArray(existing.state)
+      ? (existing.state as Record<string, unknown>)
+      : {};
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId, personaId } },
+    update: {
+      state: {
+        ...baseState,
+        overlayState: next,
+      },
+    },
+    create: {
+      userId,
+      personaId,
+      state: { overlayState: next },
+    },
+  });
 }
 
 async function writeUserState(userId: string, personaId: string, next: UserStateState) {
@@ -1080,6 +1172,7 @@ function buildChatMessages(params: {
   persona: string;
   situationalContext?: string;
   continuityBlock?: string | null;
+  overlayBlock?: string | null;
   supplementalContext?: string | null;
   rollingSummary?: string;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
@@ -1107,6 +1200,7 @@ function buildChatMessages(params: {
     ...(params.continuityBlock
       ? [{ role: "system" as const, content: params.continuityBlock }]
       : []),
+    ...(params.overlayBlock ? [{ role: "system" as const, content: params.overlayBlock }] : []),
     ...(params.supplementalContext
       ? [
           {
@@ -1328,10 +1422,172 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
     });
 
+    const overlayState = (await readOverlayState(user.id, personaId)) ?? {};
+    let overlayUsed: OverlayUsed = overlayState.overlayUsed ?? {};
+    let overlayTypeActive = overlayState.overlayTypeActive ?? null;
+    let overlayTurnCount = overlayState.overlayTurnCount ?? 0;
+    let pendingDismissType = overlayState.pendingDismissType ?? null;
+    let pendingTopicKey = overlayState.pendingTopicKey ?? null;
+    let shortReplyStreak = overlayState.shortReplyStreak ?? 0;
+    const overlayUser = overlayState.user ?? {};
+
+    if (overlayState.lastSessionId && overlayState.lastSessionId !== session.id) {
+      overlayUsed = {};
+      overlayTypeActive = null;
+      overlayTurnCount = 0;
+      pendingDismissType = null;
+      pendingTopicKey = null;
+      shortReplyStreak = 0;
+    }
+
+    let overlayType: OverlayType | "none" = "none";
+    let overlayTriggerReason = "none";
+    let overlayExitReason: "cap" | "dismiss" | "topicShift" | "helpRequest" | "lowEnergy" | "none" =
+      "none";
+    let overlayTopicKey: string | undefined;
+
+    const urgent = isUrgent(sttResult.transcript);
+    const isDirectRequest = isDirectTaskRequest(sttResult.transcript);
+
+    if (pendingDismissType) {
+      if (isDismissal(sttResult.transcript)) {
+        overlayExitReason = "dismiss";
+        if (pendingDismissType === "accountability_tug" && pendingTopicKey) {
+          const backoffUntil = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+          overlayUser.tugBackoff = {
+            ...(overlayUser.tugBackoff ?? {}),
+            [pendingTopicKey]: backoffUntil.toISOString(),
+          };
+          overlayUser.lastTugAt = now.toISOString();
+          overlayUsed = { ...overlayUsed, accountabilityTug: true };
+        }
+      }
+      pendingDismissType = null;
+      pendingTopicKey = null;
+      overlayTypeActive = null;
+      overlayTurnCount = 0;
+      shortReplyStreak = 0;
+    }
+
+    if (overlayTypeActive === "curiosity_spiral") {
+      if (isDismissal(sttResult.transcript)) {
+        overlayExitReason = "dismiss";
+        overlayTypeActive = null;
+        overlayTurnCount = 0;
+        shortReplyStreak = 0;
+      } else if (isDirectRequest) {
+        overlayExitReason = "helpRequest";
+        overlayTypeActive = null;
+        overlayTurnCount = 0;
+        shortReplyStreak = 0;
+      } else if (isTopicShift(sttResult.transcript)) {
+        overlayExitReason = "topicShift";
+        overlayTypeActive = null;
+        overlayTurnCount = 0;
+        shortReplyStreak = 0;
+      } else {
+        if (isShortReply(sttResult.transcript)) {
+          shortReplyStreak += 1;
+        } else {
+          shortReplyStreak = 0;
+        }
+        if (shortReplyStreak >= 2) {
+          overlayExitReason = "lowEnergy";
+          overlayTypeActive = null;
+          overlayTurnCount = 0;
+          shortReplyStreak = 0;
+        }
+      }
+    }
+
+    if (overlayTypeActive === "curiosity_spiral") {
+      if (overlayTurnCount < 4) {
+        overlayType = "curiosity_spiral";
+        overlayTriggerReason = "curiosity_active";
+        overlayTurnCount += 1;
+        if (overlayTurnCount >= 4) {
+          overlayExitReason = "cap";
+          overlayTypeActive = null;
+        }
+      } else {
+        overlayExitReason = "cap";
+        overlayTypeActive = null;
+      }
+    } else if (!urgent && !isDirectRequest) {
+      const decision = selectOverlay({
+        transcript: sttResult.transcript,
+        openLoops: context.overlayContext?.openLoops,
+        commitments: context.overlayContext?.commitments,
+        overlayUsed,
+        userLastTugAt: overlayUser.lastTugAt ?? null,
+        tugBackoff: overlayUser.tugBackoff,
+        now,
+      });
+      overlayType = decision.overlayType;
+      overlayTriggerReason = decision.triggerReason;
+      overlayTopicKey = decision.topicKey;
+
+      if (overlayType === "curiosity_spiral") {
+        overlayTypeActive = "curiosity_spiral";
+        overlayTurnCount = 1;
+        shortReplyStreak = 0;
+        overlayUsed = { ...overlayUsed, curiositySpiral: true };
+      }
+      if (overlayType === "accountability_tug" && overlayTopicKey) {
+        const normalized = normalizeTopicKey(overlayTopicKey);
+        overlayTopicKey = normalized;
+        overlayUsed = { ...overlayUsed, accountabilityTug: true };
+        overlayUser.lastTugAt = now.toISOString();
+        pendingDismissType = "accountability_tug";
+        pendingTopicKey = normalized;
+      }
+    }
+
+    let overlayBlock: string | null = null;
+    if (overlayType !== "none") {
+      const overlayText = await loadOverlay(overlayType);
+      overlayBlock = `[OVERLAY]\n${overlayText}`;
+    }
+
+    await writeOverlayState(user.id, personaId, {
+      overlayUsed,
+      overlayTypeActive,
+      overlayTurnCount,
+      pendingDismissType,
+      pendingTopicKey,
+      shortReplyStreak,
+      lastSessionId: session.id,
+      user: overlayUser,
+    });
+
+    if (shouldTraceLibrarian) {
+      try {
+        await prisma.librarianTrace.create({
+          data: {
+            userId: user.id,
+            personaId,
+            sessionId: session.id,
+            kind: "overlay",
+            transcript: sttResult.transcript,
+            memoryQuery: {
+              overlayTriggered: overlayType,
+              triggerReason: overlayTriggerReason,
+              overlayTurnCount,
+              overlayExitReason,
+              topicKey: overlayTopicKey ?? null,
+            },
+          },
+        });
+      } catch (error) {
+        console.warn("[librarian.trace] failed to log overlay", { error });
+      }
+    }
+
     const messages = buildChatMessages({
       persona: context.persona,
       situationalContext,
       continuityBlock,
+      overlayBlock,
       supplementalContext,
       rollingSummary,
       recentMessages: context.recentMessages,
