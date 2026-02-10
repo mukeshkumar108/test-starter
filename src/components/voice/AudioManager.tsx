@@ -12,7 +12,12 @@ interface AudioManagerOptions {
 // Silent 0.1s MP3 (Base64) to prime iOS audio
 const SILENT_MP3 = "data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA//tQxAAOAAAGkAAAAIAAANIAAAARMQU1FMy4xMDSqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqg==";
 
-export function useAudioManager({ onRecordingComplete, onError, onAutoplaySuccess, onAutoplayFailed }: AudioManagerOptions) {
+export function useAudioManager({
+  onRecordingComplete,
+  onError,
+  onAutoplaySuccess,
+  onAutoplayFailed,
+}: AudioManagerOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPriming, setIsPriming] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -21,6 +26,7 @@ export function useAudioManager({ onRecordingComplete, onError, onAutoplaySucces
   const chunksRef = useRef<Blob[]>([]);
   const isAudioPrimedRef = useRef(false);
   const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const MAX_RECORDING_MS = 120000;
 
   const initializeAudioContext = useCallback(async () => {
     if (audioContextRef.current) return true;
@@ -135,13 +141,13 @@ export function useAudioManager({ onRecordingComplete, onError, onAutoplaySucces
       mediaRecorder.start(100);
       setIsRecording(true);
       
-      // Safety timeout: auto-stop after 90 seconds
+      // Safety timeout: auto-stop after 120 seconds
       recordingTimeoutRef.current = setTimeout(() => {
         if (mediaRecorderRef.current && isRecording) {
-          console.log("[AudioManager] Auto-stopping recording after 90s");
+          console.log("[AudioManager] Auto-stopping recording after 120s");
           mediaRecorderRef.current.stop();
         }
-      }, 90000);
+      }, MAX_RECORDING_MS);
       
     } catch (error) {
       console.error("Recording start failed:", error);
