@@ -55,7 +55,7 @@ function seedEnv() {
 seedEnv();
 
 async function main() {
-  await runTest("brief() hits correct URL", async () => {
+  await runTest("sessionBrief() hits correct URL", async () => {
   const calls: Array<{ url: string; body: string }> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (url: RequestInfo, init?: RequestInit) => {
@@ -63,13 +63,21 @@ async function main() {
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   }) as typeof fetch;
 
-  const { brief } = await import("../synapseClient");
-  await brief({ hello: "world" });
+  const { sessionBrief } = await import("../synapseClient");
+  await sessionBrief({
+    tenantId: "tenant-test",
+    userId: "user-1",
+    personaId: "persona-1",
+    sessionId: "session-1",
+    now: "2026-02-06T10:15:00Z",
+  });
 
   globalThis.fetch = originalFetch;
 
   expect(calls.length).toBe(1);
-  expect(calls[0].url).toBe("https://synapse.test/brief");
+  expect(calls[0].url).toBe(
+    "https://synapse.test/session/brief?tenantId=tenant-test&userId=user-1&personaId=persona-1&sessionId=session-1&now=2026-02-06T10%3A15%3A00Z"
+  );
   });
 
   await runTest("ingest() hits correct URL", async () => {
@@ -89,8 +97,27 @@ async function main() {
   expect(calls[0].url).toBe("https://synapse.test/ingest");
   });
 
+  await runTest("sessionIngest() hits correct URL", async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo, init?: RequestInit) => {
+    calls.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+
+  const { sessionIngest } = await import("../synapseClient");
+  await sessionIngest({ hello: "world" });
+
+  globalThis.fetch = originalFetch;
+
+  expect(calls.length).toBe(1);
+  expect(calls[0].url).toBe("https://synapse.test/session/ingest");
+  });
+
   await runTest("timeout handled gracefully", async () => {
   const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  console.warn = () => {};
   globalThis.fetch = ((url: RequestInfo, init?: RequestInit) =>
     new Promise((_, reject) => {
       if (init?.signal) {
@@ -100,10 +127,11 @@ async function main() {
       }
     })) as typeof fetch;
 
-  const { brief } = await import("../synapseClient");
-  const result = await brief({ slow: true });
+  const { sessionBrief } = await import("../synapseClient");
+  const result = await sessionBrief({ slow: true });
 
   globalThis.fetch = originalFetch;
+  console.warn = originalWarn;
 
   expect(result).toBe(null);
   });

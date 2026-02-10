@@ -74,11 +74,16 @@ async function main() {
   (prisma.message.findMany as any) = async () => [
     { role: "user", content: "Hi there", createdAt: new Date() },
   ];
+  (prisma.sessionState.findUnique as any) = async () => null;
 
   (globalThis as any).__synapseBriefOverride = async () => ({
-    briefContext: "User is preparing a proposal.",
-    temporalVibe: "Late afternoon, focused",
+    facts: ["User is preparing a proposal.", "User is blocked on revisions."],
+    openLoops: ["Finish proposal"],
+    commitments: ["Send proposal draft"],
     activeLoops: ["Finish proposal", "Gets stuck on revisions"],
+    timeGapDescription: "12 minutes since last spoke",
+    timeOfDayLabel: "AFTERNOON",
+    currentFocus: "Finish proposal draft",
   });
 
   const context = await buildContextFromSynapse(
@@ -97,14 +102,17 @@ async function main() {
   if (!context.situationalContext) {
     throw new Error("Expected situationalContext to be set");
   }
-  if (!context.situationalContext.includes("Brief: User is preparing a proposal.")) {
-    throw new Error("Expected briefContext in situationalContext");
+  if (!context.situationalContext.includes("FACTS:")) {
+    throw new Error("Expected FACTS in situationalContext");
   }
-  if (!context.situationalContext.includes("Temporal: Late afternoon, focused")) {
-    throw new Error("Expected temporalVibe in situationalContext");
+  if (!context.situationalContext.includes("Time Gap: 12 minutes since last spoke")) {
+    throw new Error("Expected time gap in situationalContext");
   }
-  if (!context.situationalContext.includes("Tensions:")) {
-    throw new Error("Expected tensions in situationalContext");
+  if (!context.situationalContext.includes("Time: AFTERNOON")) {
+    throw new Error("Expected time label in situationalContext");
+  }
+  if (!context.situationalContext.includes("CURRENT_FOCUS:")) {
+    throw new Error("Expected CURRENT_FOCUS in situationalContext");
   }
   expect(context.recentMessages.length).toBe(1);
   });
@@ -113,8 +121,9 @@ async function main() {
   const { prisma } = await import("../../../prisma");
   const { buildContext } = await import("../contextBuilder");
 
-  (prisma.session.findFirst as any) = async () => ({ id: "session-1" });
+  (prisma.session.findFirst as any) = async () => ({ id: "session-2" });
   (prisma.message.findFirst as any) = async () => null;
+  (prisma.sessionState.findUnique as any) = async () => null;
 
   (globalThis as any).__synapseBriefOverride = async () => null;
   const sentinel = {

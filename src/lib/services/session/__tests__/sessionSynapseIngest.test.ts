@@ -51,6 +51,8 @@ function expect<T>(actual: T) {
 async function main() {
   await runTest("session ingest runs when flag enabled", async () => {
     seedEnv(true);
+    const { env } = await import("../../../../env");
+    (env as any).FEATURE_SYNAPSE_SESSION_INGEST = "true";
     const { prisma } = await import("../../../prisma");
     const { closeStaleSessionIfAny } = await import("../sessionService");
 
@@ -68,6 +70,9 @@ async function main() {
       ...session,
       endedAt: new Date("2026-02-04T18:10:00Z"),
     });
+    (prisma.message.findFirst as any) = async () => ({
+      createdAt: new Date("2026-02-04T18:10:00Z"),
+    });
     (prisma.message.findMany as any) = async () => [
       {
         role: "user",
@@ -80,18 +85,21 @@ async function main() {
         createdAt: new Date("2026-02-04T18:00:02Z"),
       },
     ];
+    (prisma.synapseIngestTrace.create as any) = async () => null;
+    (prisma.synapseIngestTrace.count as any) = async () => 0;
 
     let called = 0;
     let payloadSessionId: string | null = null;
-    (globalThis as any).__synapseSessionIngestOverride = async (payload: any) => {
+    (globalThis as any).__synapseSessionIngestWithMetaOverride = async (payload: any) => {
       called += 1;
       payloadSessionId = payload.sessionId;
-      return { status: "ingested" };
+      return { ok: true, status: 200, ms: 1, url: "https://synapse.test/session/ingest", data: null };
     };
 
     await closeStaleSessionIfAny("user-1", "persona-1", new Date("2026-02-04T19:00:00Z"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    delete (globalThis as any).__synapseSessionIngestOverride;
+    delete (globalThis as any).__synapseSessionIngestWithMetaOverride;
 
     expect(called).toBe(1);
     expect(payloadSessionId).toBe("sess-1");
@@ -99,6 +107,8 @@ async function main() {
 
   await runTest("session ingest skips when flag disabled", async () => {
     seedEnv(false);
+    const { env } = await import("../../../../env");
+    (env as any).FEATURE_SYNAPSE_SESSION_INGEST = "false";
     const { prisma } = await import("../../../prisma");
     const { closeStaleSessionIfAny } = await import("../sessionService");
 
@@ -116,17 +126,23 @@ async function main() {
       ...session,
       endedAt: new Date("2026-02-04T18:10:00Z"),
     });
+    (prisma.message.findFirst as any) = async () => ({
+      createdAt: new Date("2026-02-04T18:10:00Z"),
+    });
     (prisma.message.findMany as any) = async () => [];
+    (prisma.synapseIngestTrace.create as any) = async () => null;
+    (prisma.synapseIngestTrace.count as any) = async () => 0;
 
     let called = 0;
-    (globalThis as any).__synapseSessionIngestOverride = async () => {
+    (globalThis as any).__synapseSessionIngestWithMetaOverride = async () => {
       called += 1;
-      return { status: "ingested" };
+      return { ok: true, status: 200, ms: 1, url: "https://synapse.test/session/ingest", data: null };
     };
 
     await closeStaleSessionIfAny("user-2", "persona-2", new Date("2026-02-04T19:00:00Z"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    delete (globalThis as any).__synapseSessionIngestOverride;
+    delete (globalThis as any).__synapseSessionIngestWithMetaOverride;
 
     expect(called).toBe(0);
   });

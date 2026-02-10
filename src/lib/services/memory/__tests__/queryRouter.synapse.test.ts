@@ -62,6 +62,7 @@ async function setupPersona() {
   (prisma.message.findMany as any) = async () => [
     { role: "assistant", content: "Last reply", createdAt: new Date() },
   ];
+  (prisma.sessionState.findUnique as any) = async () => null;
 }
 
 async function main() {

@@ -12,6 +12,7 @@ This is a living checklist based on the latest audit. It tracks what we have don
 - Session boundary is based on last user message (default 5 minutes, configurable)
 - Admin read endpoints for traces and messages (guarded by `ADMIN_API_KEY`)
 - Synapse session ingest trace logging with 24h failure count
+- Unified test runner (`pnpm test`) with curated suite + optional integration
 
 ## Still To Do (High Priority)
 - Add abortable timeouts to STT and TTS calls
