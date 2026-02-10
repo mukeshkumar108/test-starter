@@ -254,7 +254,7 @@ function formatTimeNowUTC() {
   } else {
     label = "NIGHT";
   }
-  return `Time Now: ${label} (${padded} UTC)`;
+  return `Time Now: ${padded} UTC — ${label}`;
 }
 
 function buildSituationalContext(brief: SynapseBriefResponse) {
