@@ -245,12 +245,18 @@ function formatTimeNowUTC() {
   const minutes = now.getUTCMinutes();
   const padded = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   let label: string;
-  if (hours >= 5 && hours < 12) {
+  if (hours >= 5 && hours < 10) {
     label = "MORNING";
-  } else if (hours >= 12 && hours < 17) {
+  } else if (hours >= 10 && hours < 12) {
+    label = "LATE MORNING";
+  } else if (hours >= 12 && hours < 14) {
+    label = "LUNCHTIME";
+  } else if (hours >= 14 && hours < 18) {
     label = "AFTERNOON";
-  } else if (hours >= 17 && hours < 21) {
+  } else if (hours >= 18 && hours < 22) {
     label = "EVENING";
+  } else if (hours >= 22 || hours < 2) {
+    label = "LATE NIGHT";
   } else {
     label = "NIGHT";
   }
