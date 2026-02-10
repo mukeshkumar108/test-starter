@@ -244,8 +244,9 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
   const hasBriefContext = Boolean(brief.briefContext && brief.briefContext.trim());
   if (hasBriefContext) {
     const facts = extractFactsFromBriefContext(brief.briefContext!.trim());
-    if (facts.length > 0) {
-      parts.push(`FACTS:\n- ${facts.join("\n- ")}`);
+    const uniqueFacts = Array.from(new Set(facts));
+    if (uniqueFacts.length > 0) {
+      parts.push(`FACTS:\n- ${uniqueFacts.join("\n- ")}`);
     }
   } else if (brief.narrativeSummary && Array.isArray(brief.narrativeSummary)) {
     const summaries = brief.narrativeSummary
@@ -277,12 +278,14 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
     .map((loop) => normalizeLoopText(loop))
     .filter((value): value is string => Boolean(value));
   if (loopTexts.length > 0) {
-    parts.push(`Tensions:\n- ${loopTexts.join("\n- ")}`);
+    const uniqueLoops = Array.from(new Set(loopTexts));
+    parts.push(`Tensions:\n- ${uniqueLoops.join("\n- ")}`);
   }
   if (brief.currentFocus && brief.currentFocus.trim()) {
     parts.push(`CURRENT_FOCUS:\n- ${brief.currentFocus.trim()}`);
   }
-  return parts.length > 0 ? parts.join("\n") : null;
+  const uniqueParts = Array.from(new Set(parts));
+  return uniqueParts.length > 0 ? uniqueParts.join("\n") : null;
 }
 
 function getSynapseBrief() {
