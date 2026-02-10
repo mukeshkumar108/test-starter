@@ -239,6 +239,24 @@ function briefIncludesAnchors(briefContext: string) {
   return /CONTEXT_ANCHORS|timeOfDayLabel|timeGapDescription/i.test(briefContext);
 }
 
+function formatTimeNowUTC() {
+  const now = new Date();
+  const hours = now.getUTCHours();
+  const minutes = now.getUTCMinutes();
+  const padded = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  let label: string;
+  if (hours >= 5 && hours < 12) {
+    label = "MORNING";
+  } else if (hours >= 12 && hours < 17) {
+    label = "AFTERNOON";
+  } else if (hours >= 17 && hours < 21) {
+    label = "EVENING";
+  } else {
+    label = "NIGHT";
+  }
+  return `Time Now: ${label} (${padded} UTC)`;
+}
+
 function buildSituationalContext(brief: SynapseBriefResponse) {
   const parts: string[] = [];
   const hasBriefContext = Boolean(brief.briefContext && brief.briefContext.trim());
@@ -284,6 +302,7 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
   if (brief.currentFocus && brief.currentFocus.trim()) {
     parts.push(`CURRENT_FOCUS:\n- ${brief.currentFocus.trim()}`);
   }
+  parts.push(formatTimeNowUTC());
   const uniqueParts = Array.from(new Set(parts));
   return uniqueParts.length > 0 ? uniqueParts.join("\n") : null;
 }
