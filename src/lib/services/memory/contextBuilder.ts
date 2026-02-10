@@ -199,14 +199,9 @@ function normalizeLoopText(loop: ActiveLoopEntry) {
   return text || label || null;
 }
 
-const JUNK_FACTS = new Set(["user", "presentation", "project"]);
-
 function normalizeFact(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const lowered = trimmed.toLowerCase();
-  if (JUNK_FACTS.has(lowered)) return null;
-  if (trimmed.split(/\s+/).length < 2) return null;
   return trimmed;
 }
 
