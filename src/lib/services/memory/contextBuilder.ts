@@ -271,6 +271,7 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
       parts.push(`Time: ${brief.timeOfDayLabel.trim()}`);
     }
   }
+  parts.push(`Time Now: ${new Date().toISOString()} (UTC)`);
   const loops = Array.isArray(brief.activeLoops) ? brief.activeLoops : [];
   const loopTexts = loops
     .map((loop) => normalizeLoopText(loop))
