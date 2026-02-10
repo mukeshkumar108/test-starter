@@ -199,12 +199,60 @@ function normalizeLoopText(loop: ActiveLoopEntry) {
   return text || label || null;
 }
 
+const JUNK_FACTS = new Set(["user", "presentation", "project"]);
+
+function normalizeFact(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const lowered = trimmed.toLowerCase();
+  if (JUNK_FACTS.has(lowered)) return null;
+  if (trimmed.split(/\s+/).length < 2) return null;
+  return trimmed;
+}
+
+function extractFactsFromBriefContext(briefContext: string) {
+  const lines = briefContext
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const facts: string[] = [];
+  let inFacts = false;
+
+  for (const line of lines) {
+    if (line.startsWith("FACTS")) {
+      inFacts = true;
+      continue;
+    }
+    if (
+      line.startsWith("OPEN_LOOPS") ||
+      line.startsWith("COMMITMENTS") ||
+      line.startsWith("CONTEXT_ANCHORS")
+    ) {
+      inFacts = false;
+      continue;
+    }
+    if (inFacts && line.startsWith("-")) {
+      const normalized = normalizeFact(line.replace(/^-+\s*/, ""));
+      if (normalized) facts.push(normalized);
+    }
+  }
+
+  return facts;
+}
+
+function briefIncludesAnchors(briefContext: string) {
+  return /CONTEXT_ANCHORS|timeOfDayLabel|timeGapDescription/i.test(briefContext);
+}
+
 function buildSituationalContext(brief: SynapseBriefResponse) {
   const parts: string[] = [];
-  if (brief.briefContext && brief.briefContext.trim()) {
-    parts.push(`Brief: ${brief.briefContext.trim()}`);
-  }
-  if (brief.narrativeSummary && Array.isArray(brief.narrativeSummary)) {
+  const hasBriefContext = Boolean(brief.briefContext && brief.briefContext.trim());
+  if (hasBriefContext) {
+    const facts = extractFactsFromBriefContext(brief.briefContext!.trim());
+    if (facts.length > 0) {
+      parts.push(`FACTS:\n- ${facts.join("\n- ")}`);
+    }
+  } else if (brief.narrativeSummary && Array.isArray(brief.narrativeSummary)) {
     const summaries = brief.narrativeSummary
       .map((item) => {
         if (typeof item === "string") return item.trim();
@@ -213,14 +261,20 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
       })
       .filter(Boolean);
     if (summaries.length > 0) {
-      parts.push(`Brief: ${summaries[0]}`);
+      const normalized = normalizeFact(summaries[0]);
+      if (normalized) {
+        parts.push(`FACTS:\n- ${normalized}`);
+      }
     }
   }
-  if (brief.timeGapDescription && brief.timeGapDescription.trim()) {
-    parts.push(`Time Gap: ${brief.timeGapDescription.trim()}`);
-  }
-  if (brief.timeOfDayLabel && brief.timeOfDayLabel.trim()) {
-    parts.push(`Time: ${brief.timeOfDayLabel.trim()}`);
+  const hasAnchorsInBrief = hasBriefContext && briefIncludesAnchors(brief.briefContext!.trim());
+  if (!hasAnchorsInBrief) {
+    if (brief.timeGapDescription && brief.timeGapDescription.trim()) {
+      parts.push(`Time Gap: ${brief.timeGapDescription.trim()}`);
+    }
+    if (brief.timeOfDayLabel && brief.timeOfDayLabel.trim()) {
+      parts.push(`Time: ${brief.timeOfDayLabel.trim()}`);
+    }
   }
   const loops = Array.isArray(brief.activeLoops) ? brief.activeLoops : [];
   const loopTexts = loops
