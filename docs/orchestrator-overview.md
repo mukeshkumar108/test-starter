@@ -87,6 +87,7 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 - **Relevance** checks if retrieved memory should be injected
 - If used, we format a Recall Sheet as `SUPPLEMENTAL_CONTEXT`
  - Entire reflex is capped by `LIBRARIAN_TIMEOUT_MS` (default 5s)
+ - Gate also emits `risk_level` (LOW/MED/HIGH/CRISIS); HIGH/CRISIS routes to a more capable model.
 
 ### 4) What goes into the prompt?
 Blocks are in this order:

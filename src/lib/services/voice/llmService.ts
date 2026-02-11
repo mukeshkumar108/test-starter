@@ -13,6 +13,7 @@ export interface LLMResponse {
 export async function generateResponse(
   messages: LLMMessage[],
   personaSlug: string,
+  modelOverride?: string,
 ): Promise<LLMResponse> {
   const startTime = Date.now();
   
@@ -23,6 +24,7 @@ export async function generateResponse(
   const content = await safeChatCompletion(messages, {
     maxTokens,
     temperature,
+    model: modelOverride,
     ...(isSophie
       ? {
           topP: 0.93,

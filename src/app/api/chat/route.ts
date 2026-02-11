@@ -138,6 +138,7 @@ type MemoryGateResult = {
   state_confidence?: number;
   explicit_state_shift?: boolean;
   state_reason?: string | null;
+  risk_level?: "LOW" | "MED" | "HIGH" | "CRISIS";
 };
 
 type MemoryQuerySpec = {
@@ -158,12 +159,14 @@ type ConversationPressure = "LOW" | "MED" | "HIGH";
 type UserMood = "CALM" | "NEUTRAL" | "LOW" | "UPBEAT" | "FRUSTRATED" | "OVERWHELMED" | "ANXIOUS";
 type UserEnergy = "LOW" | "MED" | "HIGH";
 type UserTone = "PLAYFUL" | "SERIOUS" | "TENDER" | "DIRECT";
+type RiskLevel = "LOW" | "MED" | "HIGH" | "CRISIS";
 
 const DEFAULT_POSTURE: ConversationPosture = "COMPANION";
 const DEFAULT_PRESSURE: ConversationPressure = "MED";
 const DEFAULT_MOOD: UserMood = "NEUTRAL";
 const DEFAULT_ENERGY: UserEnergy = "MED";
 const DEFAULT_TONE: UserTone = "SERIOUS";
+const DEFAULT_RISK: RiskLevel = "LOW";
 
 const POSTURE_GUIDANCE: Record<ConversationPosture, string> = {
   COMPANION: "Friendly, present.",
@@ -249,6 +252,13 @@ function normalizeTone(value?: string | null): UserTone {
     return value;
   }
   return DEFAULT_TONE;
+}
+
+function normalizeRiskLevel(value?: string | null): RiskLevel {
+  if (value === "LOW" || value === "MED" || value === "HIGH" || value === "CRISIS") {
+    return value;
+  }
+  return DEFAULT_RISK;
 }
 
 async function readPostureState(userId: string, personaId: string): Promise<PostureState | null> {
@@ -756,13 +766,15 @@ Return ONLY valid JSON:
 "tone":"PLAYFUL|SERIOUS|TENDER|DIRECT",
 "state_confidence":0-1,
 "explicit_state_shift":true|false,
-"state_reason":"optional"}
+"state_reason":"optional",
+"risk_level":"LOW|MED|HIGH|CRISIS"}
 
 Rules:
 - explicit=true if the user directly asks to recall past info.
 - action=memory_query if recall is needed.
 - action=none if the user is only chatting about present/future.
 - posture must be exactly one of the allowed enums (never multiple values or pipes).
+- risk_level=LOW for routine chat, MED for meaningful personal topics, HIGH for intense conflict/grief/major decisions, CRISIS for self-harm/abuse/violence/emergency.
 
 Recent conversation:
 ${lastTurns}
@@ -797,6 +809,7 @@ ${transcript}`;
       : 0;
   const explicit_state_shift = Boolean(result.explicit_state_shift);
   const state_reason = typeof result.state_reason === "string" ? result.state_reason : null;
+  const risk_level = typeof result.risk_level === "string" ? result.risk_level : undefined;
   return {
     action,
     confidence,
@@ -813,6 +826,7 @@ ${transcript}`;
     state_confidence,
     explicit_state_shift,
     state_reason,
+    risk_level: normalizeRiskLevel(risk_level),
   } satisfies MemoryGateResult;
 }
 
@@ -890,6 +904,7 @@ async function runLibrarianReflex(params: {
   posture: ConversationPosture;
   pressure: ConversationPressure;
   userState: { mood: UserMood; energy: UserEnergy; tone: UserTone } | null;
+  riskLevel: RiskLevel;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -909,6 +924,7 @@ async function runLibrarianReflex(params: {
       posture: DEFAULT_POSTURE,
       pressure: DEFAULT_PRESSURE,
       userState: null,
+      riskLevel: DEFAULT_RISK,
     };
   }
   const gateResult = await runMemoryGate({
@@ -922,6 +938,7 @@ async function runLibrarianReflex(params: {
       posture: DEFAULT_POSTURE,
       pressure: DEFAULT_PRESSURE,
       userState: null,
+      riskLevel: DEFAULT_RISK,
     };
   }
 
@@ -980,6 +997,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
     };
   }
 
@@ -1007,6 +1025,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
     };
   }
   const spec = await runMemoryQuerySpec({
@@ -1020,6 +1039,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
     };
   }
 
@@ -1031,6 +1051,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
     };
   }
   if (remaining() <= 0) {
@@ -1039,6 +1060,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
     };
   }
 
@@ -1067,6 +1089,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
+        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
       };
     }
     const data = (await response.json()) as MemoryQueryResponse;
@@ -1091,6 +1114,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
+        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
       };
     }
 
@@ -1100,6 +1124,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
+        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
       };
     }
     const relevance = await runRecallRelevanceCheck({
@@ -1114,6 +1139,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
+        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
       };
     }
 
@@ -1145,6 +1171,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -1154,6 +1181,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
+        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
       };
     }
     console.warn("[librarian.query] error", { requestId, error });
@@ -1162,6 +1190,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
     };
   } finally {
     clearTimeout(queryTimeout);
@@ -1415,7 +1444,10 @@ export async function POST(request: NextRequest) {
     const posture = librarianResult?.posture ?? DEFAULT_POSTURE;
     const pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
     const userState = librarianResult?.userState ?? null;
+    const riskLevel = librarianResult?.riskLevel ?? DEFAULT_RISK;
     const model = getChatModelForPersona(persona.slug);
+    const riskModel =
+      riskLevel === "HIGH" || riskLevel === "CRISIS" ? "openai/gpt-4o-mini" : null;
     const timeGapMinutes = computeTimeGapMinutes(context.recentMessages, now);
     const continuityBlock = buildContinuityBlock({
       timeGapMinutes,
@@ -1651,7 +1683,7 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    const llmResponse = await generateResponse(messages, persona.slug);
+    const llmResponse = await generateResponse(messages, persona.slug, riskModel ?? undefined);
     llm_ms = llmResponse.duration_ms;
 
     // Step 4: Text-to-Speech

@@ -12,6 +12,7 @@ export interface SafeChatOptions {
   topK?: number;
   presencePenalty?: number;
   repetitionPenalty?: number;
+  model?: string;
 }
 
 const PRIMARY_MODEL = "bytedance-seed/seed-1.6-flash";
@@ -122,9 +123,10 @@ export async function safeChatCompletion(
   messages: LLMMessage[],
   options: SafeChatOptions = {}
 ) {
+  const primaryModel = options.model ?? PRIMARY_MODEL;
   try {
     return await runWithTimeout(
-      openRouterChat(messages, PRIMARY_MODEL, options),
+      openRouterChat(messages, primaryModel, options),
       PRIMARY_TIMEOUT_MS
     );
   } catch (error) {
