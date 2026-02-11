@@ -25,6 +25,7 @@
 *.pem
 outputs/
 old/
+tmp/
 
 # debug
 npm-debug.log*
