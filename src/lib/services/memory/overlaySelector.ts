@@ -46,8 +46,6 @@ const urgentMarkers = ["urgent", "emergency", "can't cope", "cant cope", "now", 
 
 const dismissMarkers = ["not now", "later", "stop", "leave it", "anyway"];
 
-const casualOpeners = ["hey", "hi", "yo", "sup", "what's up", "whats up"];
-
 export function normalizeTopicKey(value: string) {
   return value.trim().toLowerCase();
 }
@@ -74,13 +72,6 @@ export function isTopicShift(text: string) {
 export function isShortReply(text: string) {
   const words = text.trim().split(/\s+/).filter(Boolean);
   return words.length > 0 && words.length < 8;
-}
-
-export function isCasualOpener(text: string) {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0 || words.length >= 12) return false;
-  const lowered = text.toLowerCase();
-  return casualOpeners.some((marker) => lowered.includes(marker));
 }
 
 function hasCuriosityTrigger(text: string) {
@@ -144,7 +135,6 @@ export function selectOverlay(params: {
     const topicKey = resolveAccountabilityTopic(openLoops, commitments);
     const eligible =
       Boolean(topicKey) &&
-      isCasualOpener(transcript) &&
       !isDirectTaskRequest(transcript) &&
       !isUrgent(transcript) &&
       !isWithinOneDay(userLastTugAt, now) &&
