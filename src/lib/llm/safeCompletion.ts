@@ -63,6 +63,7 @@ async function openRouterChat(
       top_k: options.topK,
       presence_penalty: options.presencePenalty,
       repetition_penalty: options.repetitionPenalty,
+      reasoning: { exclude: true },
       stream: false,
     }),
   });
@@ -75,7 +76,15 @@ async function openRouterChat(
     console.warn("[llm.response.html]", { provider: "openrouter", model });
   }
   const data = await response.json();
-  return String(data?.choices?.[0]?.message?.content ?? "").trim();
+  const raw = String(data?.choices?.[0]?.message?.content ?? "").trim();
+  const { cleaned, stripped } = stripReasoningLeak(raw);
+  if (stripped) {
+    console.warn("[llm.reasoning.strip]", { provider: "openrouter", model });
+    if (env.FEATURE_CONTEXT_DEBUG === "true") {
+      console.debug("[llm.reasoning.raw]", { provider: "openrouter", model, raw });
+    }
+  }
+  return cleaned;
 }
 
 async function openAIChat(
@@ -117,6 +126,13 @@ async function openAIChat(
 
 function isTimeout(error: unknown) {
   return error instanceof Error && error.message === "timeout";
+}
+
+const BREAKDOWN_REGEX = /\*\*Breakdown:\*\*[\s\S]*/i;
+
+function stripReasoningLeak(text: string) {
+  const cleaned = text.replace(BREAKDOWN_REGEX, "").trim();
+  return { cleaned, stripped: cleaned !== text };
 }
 
 export async function safeChatCompletion(

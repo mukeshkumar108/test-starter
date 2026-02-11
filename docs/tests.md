@@ -16,6 +16,7 @@ Runs `scripts/run-tests.ts`, which executes the core unit/integration checks.
 - `src/lib/services/memory/__tests__/queryRouter.synapse.test.ts`
 - `src/lib/services/memory/__tests__/contextBuilder.synapse.test.ts`
 - `src/lib/services/memory/__tests__/overlaySelector.test.ts`
+- `src/lib/llm/__tests__/safeCompletion.strip.test.ts`
 - `src/synapse/librarian.test.ts`
 - `src/app/api/__tests__/overlayInjection.test.ts`
 
