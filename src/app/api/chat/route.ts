@@ -19,7 +19,7 @@ import { processShadowPath } from "@/lib/services/memory/shadowJudge";
 import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
-import { getChatModelForPersona } from "@/lib/providers/models";
+import { getChatModelForGate } from "@/lib/providers/models";
 import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
 
@@ -1553,9 +1553,10 @@ export async function POST(request: NextRequest) {
     const overlayIntent = librarianResult?.intent ?? DEFAULT_GATE_INTENT;
     const overlayIsUrgent = librarianResult?.isUrgent ?? false;
     const overlayIsDirectRequest = librarianResult?.isDirectRequest ?? false;
-    const model = getChatModelForPersona(persona.slug);
-    const riskModel =
-      riskLevel === "HIGH" || riskLevel === "CRISIS" ? "openai/gpt-4o-mini" : null;
+    const model = getChatModelForGate({
+      personaId: persona.slug,
+      gate: { risk_level: riskLevel },
+    });
     const timeGapMinutes = computeTimeGapMinutes(context.recentMessages, now);
     const continuityBlock = buildContinuityBlock({
       timeGapMinutes,
@@ -1593,6 +1594,7 @@ export async function POST(request: NextRequest) {
       isUrgent: overlayIsUrgent,
       isDirectRequest: overlayIsDirectRequest,
     });
+    const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
     const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
     const dailyFocusEligible = shouldTriggerDailyFocus({
       isSessionStart: context.isSessionStart,
@@ -1804,7 +1806,11 @@ export async function POST(request: NextRequest) {
             supplementalContext: supplementalContext ? 1 : 0,
             rollingSummary: rollingSummary ? 1 : 0,
           },
-          model,
+          chosenModel: model,
+          risk_level: riskLevel,
+          intent: overlayIntent,
+          overlaySelected: overlayType,
+          overlaySkipReason,
         })
       );
     }
@@ -1815,7 +1821,11 @@ export async function POST(request: NextRequest) {
         trace_id: traceId,
         userId: user.id,
         personaId,
-        model,
+        chosenModel: model,
+        risk_level: riskLevel,
+        intent: overlayIntent,
+        overlaySelected: overlayType,
+        overlaySkipReason,
         token_usage: null,
         counts: {
           recentMessages: context.recentMessages.length,
@@ -1842,7 +1852,7 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    const llmResponse = await generateResponse(messages, persona.slug, riskModel ?? undefined);
+    const llmResponse = await generateResponse(messages, persona.slug, model);
     llm_ms = llmResponse.duration_ms;
 
     // Step 4: Text-to-Speech

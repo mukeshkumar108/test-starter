@@ -9,6 +9,7 @@ export const MODELS = {
     COACH: "meta-llama/llama-4-maverick",
     CREATIVE: "meta-llama/llama-4-maverick",
     ANALYTICAL: "meta-llama/llama-4-maverick",
+    SAFETY: "bytedance-seed/seed-1.6",
   },
   
   // Cheap model for shadow processing/judging
@@ -31,4 +32,15 @@ export type EmbeddingsModel = typeof MODELS.EMBEDDINGS;
 export function getChatModelForPersona(personaSlug: string): ChatModel {
   const slug = personaSlug.toUpperCase() as keyof typeof MODELS.CHAT;
   return MODELS.CHAT[slug] || MODELS.CHAT.MENTOR;
+}
+
+export function getChatModelForGate(params: {
+  personaId: string;
+  gate?: { risk_level?: "LOW" | "MED" | "HIGH" | "CRISIS" | null };
+}): ChatModel {
+  const riskLevel = params.gate?.risk_level;
+  if (riskLevel === "HIGH" || riskLevel === "CRISIS") {
+    return MODELS.CHAT.SAFETY;
+  }
+  return getChatModelForPersona(params.personaId);
 }
