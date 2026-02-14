@@ -6,6 +6,13 @@ export type OverlayDecision = {
   topicKey?: string;
 };
 
+export type OverlayIntent = "companion" | "momentum" | "output_task" | "learning";
+
+export type OverlayPolicyDecision = {
+  skip: boolean;
+  reason: "allowed" | "urgent" | "output_task" | "direct_request_guard";
+};
+
 const narrativeMarkers = [
   "and then",
   "so basically",
@@ -30,34 +37,10 @@ const emotionalMarkers = [
   "heartbroken",
 ];
 
-const directRequestMarkers = [
-  "help me",
-  "can you",
-  "write",
-  "draft",
-  "plan",
-  "fix",
-  "code",
-  "summarize",
-  "summarise",
-];
-
-const urgentMarkers = ["urgent", "emergency", "can't cope", "cant cope", "now", "help"];
-
 const dismissMarkers = ["not now", "later", "stop", "leave it", "anyway"];
 
 export function normalizeTopicKey(value: string) {
   return value.trim().toLowerCase();
-}
-
-export function isDirectTaskRequest(text: string) {
-  const lowered = text.toLowerCase();
-  return directRequestMarkers.some((marker) => lowered.includes(marker));
-}
-
-export function isUrgent(text: string) {
-  const lowered = text.toLowerCase();
-  return urgentMarkers.some((marker) => lowered.includes(marker));
 }
 
 export function isDismissal(text: string) {
@@ -72,6 +55,25 @@ export function isTopicShift(text: string) {
 export function isShortReply(text: string) {
   const words = text.trim().split(/\s+/).filter(Boolean);
   return words.length > 0 && words.length < 8;
+}
+
+// Overlay gate policy is driven by bouncer intent/urgency signals, not transcript substrings.
+export function shouldSkipOverlaySelection(params: {
+  intent?: OverlayIntent | null;
+  isUrgent?: boolean;
+  isDirectRequest?: boolean;
+}): OverlayPolicyDecision {
+  const intent = params.intent ?? "companion";
+  if (params.isUrgent) {
+    return { skip: true, reason: "urgent" };
+  }
+  if (intent === "output_task") {
+    return { skip: true, reason: "output_task" };
+  }
+  if (params.isDirectRequest && intent !== "momentum" && intent !== "learning") {
+    return { skip: true, reason: "direct_request_guard" };
+  }
+  return { skip: false, reason: "allowed" };
 }
 
 function hasCuriosityTrigger(text: string) {
@@ -124,8 +126,7 @@ export function selectOverlay(params: {
   if (!transcript.trim()) return { overlayType: "none", triggerReason: "empty" };
 
   if (!overlayUsed?.curiositySpiral) {
-    const curiosityEligible =
-      hasCuriosityTrigger(transcript) && !isDirectTaskRequest(transcript);
+    const curiosityEligible = hasCuriosityTrigger(transcript);
     if (curiosityEligible) {
       return { overlayType: "curiosity_spiral", triggerReason: "curiosity_trigger" };
     }
@@ -135,8 +136,6 @@ export function selectOverlay(params: {
     const topicKey = resolveAccountabilityTopic(openLoops, commitments);
     const eligible =
       Boolean(topicKey) &&
-      !isDirectTaskRequest(transcript) &&
-      !isUrgent(transcript) &&
       !isWithinOneDay(userLastTugAt, now) &&
       !isBackoffActive(topicKey ?? "", tugBackoff, now);
 

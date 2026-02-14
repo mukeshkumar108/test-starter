@@ -7,7 +7,7 @@ import type { OverlayDecision } from "../overlaySelector";
 import {
   selectOverlay,
   normalizeTopicKey,
-  isDirectTaskRequest,
+  shouldSkipOverlaySelection,
 } from "../overlaySelector";
 
 type TestResult = { name: string; passed: boolean; error?: string };
@@ -40,6 +40,83 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
+  await runTest("help me write an email -> output_task blocks overlays", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "output_task",
+      isDirectRequest: true,
+      isUrgent: false,
+    });
+    expect(policy).toMatchObject({ skip: true, reason: "output_task" });
+  });
+
+  await runTest("help me plan my day -> momentum allows overlays", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "momentum",
+      isDirectRequest: true,
+      isUrgent: false,
+    });
+    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
+  });
+
+  await runTest("urgent I can't cope -> urgent blocks overlays", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "companion",
+      isDirectRequest: true,
+      isUrgent: true,
+    });
+    expect(policy).toMatchObject({ skip: true, reason: "urgent" });
+  });
+
+  await runTest("can you summarise this -> output_task blocks overlays", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "output_task",
+      isDirectRequest: true,
+      isUrgent: false,
+    });
+    expect(policy).toMatchObject({ skip: true, reason: "output_task" });
+  });
+
+  await runTest("casual help that was funny -> not urgent, not output_task", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "companion",
+      isDirectRequest: false,
+      isUrgent: false,
+    });
+    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
+  });
+
+  await runTest("what should I focus on today? -> momentum allows overlays", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "momentum",
+      isDirectRequest: true,
+      isUrgent: false,
+    });
+    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
+  });
+
+  await runTest("teach me stoicism -> learning allows overlays", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "learning",
+      isDirectRequest: true,
+      isUrgent: false,
+    });
+    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
+  });
+
+  await runTest("relationship vent -> companion, curiosity possibly allowed", () => {
+    const policy = shouldSkipOverlaySelection({
+      intent: "companion",
+      isDirectRequest: false,
+      isUrgent: false,
+    });
+    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
+    const decision = selectOverlay({
+      transcript: "I argued with my girlfriend and it got messy",
+      overlayUsed: {},
+    });
+    expect(decision.overlayType).toBe("curiosity_spiral");
+  });
+
   await runTest("curiosity triggers on narrative marker", () => {
     const decision = selectOverlay({
       transcript: "you won't believe what happened next",
@@ -48,13 +125,12 @@ async function main() {
     expect(decision.overlayType).toBe("curiosity_spiral");
   });
 
-  await runTest("curiosity does not trigger on direct task request", () => {
+  await runTest("curiosity does not retrigger once already used", () => {
     const decision = selectOverlay({
       transcript: "can you draft an email",
-      overlayUsed: {},
+      overlayUsed: { curiositySpiral: true },
     });
     expect(decision.overlayType).toBe("none");
-    expect(isDirectTaskRequest("can you draft an email")).toBe(true);
   });
 
   await runTest("accountability tug triggers on casual opener + open loop", () => {

@@ -8,12 +8,12 @@ import { buildContext } from "@/lib/services/memory/contextBuilder";
 import { loadOverlay, type OverlayType } from "@/lib/services/memory/overlayLoader";
 import {
   isDismissal,
-  isDirectTaskRequest,
   isShortReply,
   isTopicShift,
-  isUrgent,
+  type OverlayIntent,
   normalizeTopicKey,
   selectOverlay,
+  shouldSkipOverlaySelection,
 } from "@/lib/services/memory/overlaySelector";
 import { processShadowPath } from "@/lib/services/memory/shadowJudge";
 import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
@@ -127,6 +127,9 @@ type MemoryGateResult = {
   confidence: number;
   explicit: boolean;
   reason?: string | null;
+  intent?: OverlayIntent;
+  is_urgent?: boolean;
+  is_direct_request?: boolean;
   posture?: "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
   pressure?: "LOW" | "MED" | "HIGH";
   posture_confidence?: number;
@@ -167,6 +170,7 @@ const DEFAULT_MOOD: UserMood = "NEUTRAL";
 const DEFAULT_ENERGY: UserEnergy = "MED";
 const DEFAULT_TONE: UserTone = "SERIOUS";
 const DEFAULT_RISK: RiskLevel = "LOW";
+const DEFAULT_GATE_INTENT: OverlayIntent = "companion";
 
 const POSTURE_GUIDANCE: Record<ConversationPosture, string> = {
   COMPANION: "Friendly, present.",
@@ -259,6 +263,18 @@ function normalizeRiskLevel(value?: string | null): RiskLevel {
     return value;
   }
   return DEFAULT_RISK;
+}
+
+function normalizeGateIntent(value?: string | null): OverlayIntent {
+  if (
+    value === "companion" ||
+    value === "momentum" ||
+    value === "output_task" ||
+    value === "learning"
+  ) {
+    return value;
+  }
+  return DEFAULT_GATE_INTENT;
 }
 
 async function readPostureState(userId: string, personaId: string): Promise<PostureState | null> {
@@ -756,6 +772,9 @@ async function runMemoryGate(params: {
 
 Return ONLY valid JSON:
 {"action":"memory_query"|"none","confidence":0-1,"explicit":true|false,"reason":"optional",
+"intent":"companion|momentum|output_task|learning",
+"is_urgent":true|false,
+"is_direct_request":true|false,
 "posture":"COMPANION|MOMENTUM|REFLECTION|RELATIONSHIP|IDEATION|RECOVERY|PRACTICAL",
 "pressure":"LOW|MED|HIGH",
 "posture_confidence":0-1,
@@ -773,6 +792,12 @@ Rules:
 - explicit=true if the user directly asks to recall past info.
 - action=memory_query if recall is needed.
 - action=none if the user is only chatting about present/future.
+- intent=output_task for explicit asks to produce/edit/fix/summarize output.
+- intent=momentum for planning/prioritizing/focus/next-step coaching.
+- intent=learning for explain/teach/understand requests.
+- intent=companion for personal processing, reflection, or relational conversation.
+- is_direct_request=true only when user explicitly asks for concrete output/work.
+- is_urgent=true only for immediate urgency/crisis/time-critical support needs.
 - posture must be exactly one of the allowed enums (never multiple values or pipes).
 - risk_level=LOW for routine chat, MED for meaningful personal topics, HIGH for intense conflict/grief/major decisions, CRISIS for self-harm/abuse/violence/emergency.
 
@@ -791,6 +816,9 @@ ${transcript}`;
       : 0;
   const explicit = Boolean(result.explicit);
   const reason = typeof result.reason === "string" ? result.reason : null;
+  const intent = typeof result.intent === "string" ? result.intent : undefined;
+  const is_urgent = Boolean(result.is_urgent);
+  const is_direct_request = Boolean(result.is_direct_request);
   const posture = typeof result.posture === "string" ? result.posture : undefined;
   const pressure = typeof result.pressure === "string" ? result.pressure : undefined;
   const posture_confidence =
@@ -815,6 +843,9 @@ ${transcript}`;
     confidence,
     explicit,
     reason,
+    intent: normalizeGateIntent(intent),
+    is_urgent,
+    is_direct_request,
     posture: posture as MemoryGateResult["posture"],
     pressure: pressure as MemoryGateResult["pressure"],
     posture_confidence,
@@ -905,6 +936,9 @@ async function runLibrarianReflex(params: {
   pressure: ConversationPressure;
   userState: { mood: UserMood; energy: UserEnergy; tone: UserTone } | null;
   riskLevel: RiskLevel;
+  intent: OverlayIntent;
+  isUrgent: boolean;
+  isDirectRequest: boolean;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -918,6 +952,11 @@ async function runLibrarianReflex(params: {
   const lastTurns = extractLastTwoTurns(recentMessages)
     .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
     .join("\n");
+  const defaultGateSignals = {
+    intent: DEFAULT_GATE_INTENT,
+    isUrgent: false,
+    isDirectRequest: false,
+  };
   if (remaining() <= 0) {
     return {
       supplementalContext: null,
@@ -925,6 +964,7 @@ async function runLibrarianReflex(params: {
       pressure: DEFAULT_PRESSURE,
       userState: null,
       riskLevel: DEFAULT_RISK,
+      ...defaultGateSignals,
     };
   }
   const gateResult = await runMemoryGate({
@@ -939,8 +979,14 @@ async function runLibrarianReflex(params: {
       pressure: DEFAULT_PRESSURE,
       userState: null,
       riskLevel: DEFAULT_RISK,
+      ...defaultGateSignals,
     };
   }
+  const gateSignals = {
+    intent: gateResult.intent ?? DEFAULT_GATE_INTENT,
+    isUrgent: Boolean(gateResult.is_urgent),
+    isDirectRequest: Boolean(gateResult.is_direct_request),
+  };
 
   const postureSuggestion = normalizePosture(gateResult.posture);
   const pressureSuggestion = normalizePressure(gateResult.pressure);
@@ -998,6 +1044,7 @@ async function runLibrarianReflex(params: {
       pressure: postureResult.pressure,
       userState: userStateResult,
       riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
     };
   }
 
@@ -1026,6 +1073,7 @@ async function runLibrarianReflex(params: {
       pressure: postureResult.pressure,
       userState: userStateResult,
       riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
     };
   }
   const spec = await runMemoryQuerySpec({
@@ -1040,6 +1088,7 @@ async function runLibrarianReflex(params: {
       pressure: postureResult.pressure,
       userState: userStateResult,
       riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
     };
   }
 
@@ -1052,6 +1101,7 @@ async function runLibrarianReflex(params: {
       pressure: postureResult.pressure,
       userState: userStateResult,
       riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
     };
   }
   if (remaining() <= 0) {
@@ -1061,6 +1111,7 @@ async function runLibrarianReflex(params: {
       pressure: postureResult.pressure,
       userState: userStateResult,
       riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
     };
   }
 
@@ -1090,6 +1141,7 @@ async function runLibrarianReflex(params: {
         pressure: postureResult.pressure,
         userState: userStateResult,
         riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        ...gateSignals,
       };
     }
     const data = (await response.json()) as MemoryQueryResponse;
@@ -1115,6 +1167,7 @@ async function runLibrarianReflex(params: {
         pressure: postureResult.pressure,
         userState: userStateResult,
         riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        ...gateSignals,
       };
     }
 
@@ -1125,6 +1178,7 @@ async function runLibrarianReflex(params: {
         pressure: postureResult.pressure,
         userState: userStateResult,
         riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        ...gateSignals,
       };
     }
     const relevance = await runRecallRelevanceCheck({
@@ -1140,6 +1194,7 @@ async function runLibrarianReflex(params: {
         pressure: postureResult.pressure,
         userState: userStateResult,
         riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        ...gateSignals,
       };
     }
 
@@ -1172,6 +1227,7 @@ async function runLibrarianReflex(params: {
       pressure: postureResult.pressure,
       userState: userStateResult,
       riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -1182,6 +1238,7 @@ async function runLibrarianReflex(params: {
         pressure: postureResult.pressure,
         userState: userStateResult,
         riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        ...gateSignals,
       };
     }
     console.warn("[librarian.query] error", { requestId, error });
@@ -1191,6 +1248,7 @@ async function runLibrarianReflex(params: {
       pressure: postureResult.pressure,
       userState: userStateResult,
       riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
     };
   } finally {
     clearTimeout(queryTimeout);
@@ -1445,6 +1503,9 @@ export async function POST(request: NextRequest) {
     const pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
     const userState = librarianResult?.userState ?? null;
     const riskLevel = librarianResult?.riskLevel ?? DEFAULT_RISK;
+    const overlayIntent = librarianResult?.intent ?? DEFAULT_GATE_INTENT;
+    const overlayIsUrgent = librarianResult?.isUrgent ?? false;
+    const overlayIsDirectRequest = librarianResult?.isDirectRequest ?? false;
     const model = getChatModelForPersona(persona.slug);
     const riskModel =
       riskLevel === "HIGH" || riskLevel === "CRISIS" ? "openai/gpt-4o-mini" : null;
@@ -1474,12 +1535,14 @@ export async function POST(request: NextRequest) {
 
     let overlayType: OverlayType | "none" = "none";
     let overlayTriggerReason = "none";
-    let overlayExitReason: "cap" | "dismiss" | "topicShift" | "helpRequest" | "lowEnergy" | "none" =
+    let overlayExitReason: "cap" | "dismiss" | "topicShift" | "helpRequest" | "lowEnergy" | "policy" | "none" =
       "none";
     let overlayTopicKey: string | undefined;
-
-    const urgent = isUrgent(sttResult.transcript);
-    const isDirectRequest = isDirectTaskRequest(sttResult.transcript);
+    const overlayPolicy = shouldSkipOverlaySelection({
+      intent: overlayIntent,
+      isUrgent: overlayIsUrgent,
+      isDirectRequest: overlayIsDirectRequest,
+    });
 
     if (pendingDismissType) {
       if (isDismissal(sttResult.transcript)) {
@@ -1501,13 +1564,21 @@ export async function POST(request: NextRequest) {
       shortReplyStreak = 0;
     }
 
-    if (overlayTypeActive === "curiosity_spiral") {
+    if (overlayPolicy.skip) {
+      overlayTriggerReason = `policy_skip_${overlayPolicy.reason}`;
+      if (overlayTypeActive) {
+        overlayExitReason = "policy";
+      }
+      overlayTypeActive = null;
+      overlayTurnCount = 0;
+      shortReplyStreak = 0;
+    } else if (overlayTypeActive === "curiosity_spiral") {
       if (isDismissal(sttResult.transcript)) {
         overlayExitReason = "dismiss";
         overlayTypeActive = null;
         overlayTurnCount = 0;
         shortReplyStreak = 0;
-      } else if (isDirectRequest) {
+      } else if (overlayIntent === "output_task") {
         overlayExitReason = "helpRequest";
         overlayTypeActive = null;
         overlayTurnCount = 0;
@@ -1532,7 +1603,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (overlayTypeActive === "curiosity_spiral") {
+    if (!overlayPolicy.skip && overlayTypeActive === "curiosity_spiral") {
       if (overlayTurnCount < 4) {
         overlayType = "curiosity_spiral";
         overlayTriggerReason = "curiosity_active";
@@ -1545,7 +1616,7 @@ export async function POST(request: NextRequest) {
         overlayExitReason = "cap";
         overlayTypeActive = null;
       }
-    } else if (!urgent && !isDirectRequest) {
+    } else if (!overlayPolicy.skip) {
       const decision = selectOverlay({
         transcript: sttResult.transcript,
         openLoops: context.overlayContext?.openLoops,
