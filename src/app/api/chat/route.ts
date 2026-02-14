@@ -1698,6 +1698,12 @@ export async function POST(request: NextRequest) {
         overlayUsed,
         dailyFocusEligible,
         hasTodayFocus: overlayUser.todayFocusDate === dayKey,
+        conflictSignals: {
+          pressure,
+          riskLevel,
+          mood: userState?.mood,
+          tone: userState?.tone,
+        },
         userLastTugAt: overlayUser.lastTugAt ?? null,
         tugBackoff: overlayUser.tugBackoff,
         now,
