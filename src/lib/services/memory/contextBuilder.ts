@@ -13,6 +13,7 @@ export interface ConversationContext {
   overlayContext?: {
     openLoops?: string[];
     commitments?: string[];
+    currentFocus?: string;
   };
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   /** True if this is the first turn of a new session (for conditional SessionSummary injection) */
@@ -21,6 +22,8 @@ export interface ConversationContext {
 
 const MAX_RECENT_MESSAGE_CHARS = 800;
 const BRIEF_CACHE_TTL_MS = 3 * 60 * 1000;
+const OVERLAY_CONTEXT_CAP = 3;
+const OVERLAY_ITEM_MAX_WORDS = 12;
 const briefCache = new Map<
   string,
   { fetchedAt: number; brief: SynapseBriefResponse }
@@ -240,6 +243,64 @@ function uniqueLimited(values: Array<string | null | undefined>, limit: number) 
   return Array.from(new Set(cleaned)).slice(0, limit);
 }
 
+function toOverlayItem(value: string) {
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (!trimmed) return null;
+  const words = trimmed.split(" ").slice(0, OVERLAY_ITEM_MAX_WORDS);
+  return words.join(" ");
+}
+
+function buildOverlayItems(
+  values: Array<string | null | undefined>,
+  recentMessages: Array<{ content: string }>
+) {
+  const items = values
+    .map((value, index) => {
+      if (typeof value !== "string") return null;
+      const normalized = toOverlayItem(value);
+      if (!normalized) return null;
+      return {
+        value: normalized,
+        lowered: normalized.toLowerCase(),
+        index,
+      };
+    })
+    .filter((item): item is { value: string; lowered: string; index: number } => Boolean(item));
+
+  const deduped: Array<{ value: string; lowered: string; index: number }> = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.lowered)) continue;
+    seen.add(item.lowered);
+    deduped.push(item);
+  }
+
+  const loweredMessages = recentMessages.map((message) => message.content.toLowerCase());
+
+  const ranked = deduped
+    .map((item) => {
+      let mentionIndex: number | null = null;
+      for (let i = 0; i < loweredMessages.length; i += 1) {
+        if (loweredMessages[i].includes(item.lowered)) {
+          mentionIndex = i;
+          break;
+        }
+      }
+      return { ...item, mentionIndex };
+    })
+    .sort((a, b) => {
+      const aMentioned = a.mentionIndex !== null;
+      const bMentioned = b.mentionIndex !== null;
+      if (aMentioned !== bMentioned) return aMentioned ? -1 : 1;
+      if (aMentioned && bMentioned && a.mentionIndex !== b.mentionIndex) {
+        return (a.mentionIndex ?? 0) - (b.mentionIndex ?? 0);
+      }
+      return a.index - b.index;
+    });
+
+  return ranked.slice(0, OVERLAY_CONTEXT_CAP).map((item) => item.value);
+}
+
 function buildSituationalContext(brief: SynapseBriefResponse) {
   const parts: string[] = [];
   const facts = uniqueLimited(brief.facts ?? [], 2);
@@ -286,6 +347,27 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
   return uniqueParts.length > 0 ? uniqueParts.join("\n") : null;
 }
 
+function toLocalDateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getTodayFocusFromState(state: unknown, now: Date) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const overlayState = (state as Record<string, unknown>).overlayState;
+  if (!overlayState || typeof overlayState !== "object" || Array.isArray(overlayState)) return null;
+  const user = (overlayState as Record<string, unknown>).user;
+  if (!user || typeof user !== "object" || Array.isArray(user)) return null;
+  const todayFocus = (user as Record<string, unknown>).todayFocus;
+  const todayFocusDate = (user as Record<string, unknown>).todayFocusDate;
+  if (typeof todayFocus !== "string" || !todayFocus.trim()) return null;
+  if (typeof todayFocusDate !== "string") return null;
+  if (todayFocusDate !== toLocalDateKey(now)) return null;
+  return todayFocus.trim();
+}
+
 function getSynapseBrief() {
   const override = (globalThis as { __synapseBriefOverride?: typeof synapseClient.sessionBrief })
     .__synapseBriefOverride;
@@ -323,8 +405,9 @@ export async function buildContextFromSynapse(
 
   const sessionState = await prisma.sessionState.findUnique({
     where: { userId_personaId: { userId, personaId } },
-    select: { rollingSummary: true },
+    select: { rollingSummary: true, state: true },
   });
+  const localTodayFocus = getTodayFocusFromState(sessionState?.state, new Date());
 
   const heuristic = heuristicQuery(transcript);
   let selectedQuery = heuristic;
@@ -374,13 +457,19 @@ export async function buildContextFromSynapse(
   const cached = briefCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < BRIEF_CACHE_TTL_MS) {
     const situationalContext = buildSituationalContext(cached.brief);
+    const effectiveFocus = cached.brief.currentFocus?.trim() || localTodayFocus || undefined;
+    const situationalWithFocus =
+      effectiveFocus && !(situationalContext ?? "").includes("CURRENT_FOCUS:")
+        ? [situationalContext, `CURRENT_FOCUS:\n- ${effectiveFocus}`].filter(Boolean).join("\n")
+        : situationalContext;
     const overlayContext = {
-      openLoops: uniqueLimited(cached.brief.openLoops ?? [], 1),
-      commitments: uniqueLimited(cached.brief.commitments ?? [], 1),
+      openLoops: buildOverlayItems(cached.brief.openLoops ?? [], messages),
+      commitments: buildOverlayItems(cached.brief.commitments ?? [], messages),
+      currentFocus: effectiveFocus,
     };
     return {
       persona: personaPrompt,
-      situationalContext: situationalContext ?? undefined,
+      situationalContext: situationalWithFocus ?? undefined,
       rollingSummary: sessionState?.rollingSummary ?? undefined,
       overlayContext,
       recentMessages: messages
@@ -412,9 +501,15 @@ export async function buildContextFromSynapse(
   if (!brief) return null;
   briefCache.set(cacheKey, { fetchedAt: Date.now(), brief });
   const situationalContext = buildSituationalContext(brief);
+  const effectiveFocus = brief.currentFocus?.trim() || localTodayFocus || undefined;
+  const situationalWithFocus =
+    effectiveFocus && !(situationalContext ?? "").includes("CURRENT_FOCUS:")
+      ? [situationalContext, `CURRENT_FOCUS:\n- ${effectiveFocus}`].filter(Boolean).join("\n")
+      : situationalContext;
   const overlayContext = {
-    openLoops: uniqueLimited(brief.openLoops ?? [], 1),
-    commitments: uniqueLimited(brief.commitments ?? [], 1),
+    openLoops: buildOverlayItems(brief.openLoops ?? [], messages),
+    commitments: buildOverlayItems(brief.commitments ?? [], messages),
+    currentFocus: effectiveFocus,
   };
 
   if (env.FEATURE_LIBRARIAN_TRACE === "true") {
@@ -427,7 +522,7 @@ export async function buildContextFromSynapse(
           kind: "brief",
           memoryQuery: selectedQuery ? { query: selectedQuery } : undefined,
           brief,
-          supplementalContext: situationalContext ?? null,
+          supplementalContext: situationalWithFocus ?? null,
         },
       });
     } catch (error) {
@@ -437,7 +532,7 @@ export async function buildContextFromSynapse(
 
   return {
     persona: personaPrompt,
-    situationalContext: situationalContext ?? undefined,
+    situationalContext: situationalWithFocus ?? undefined,
     rollingSummary: sessionState?.rollingSummary ?? undefined,
     overlayContext,
     recentMessages: messages

@@ -72,14 +72,29 @@ async function main() {
     promptPath,
   });
   (prisma.message.findMany as any) = async () => [
-    { role: "user", content: "Hi there", createdAt: new Date() },
+    {
+      role: "user",
+      content: "I need to reply to Jordan about security questionnaire before lunch.",
+      createdAt: new Date(),
+    },
+    { role: "assistant", content: "Noted.", createdAt: new Date() },
   ];
   (prisma.sessionState.findUnique as any) = async () => null;
 
   (globalThis as any).__synapseBriefOverride = async () => ({
     facts: ["User is preparing a proposal.", "User is blocked on revisions."],
-    openLoops: ["Finish proposal"],
-    commitments: ["Send proposal draft"],
+    openLoops: [
+      "Finish proposal",
+      "Reply to Jordan about security questionnaire before lunch",
+      "Plan the Q3 roadmap alignment with design, product, and growth stakeholders",
+      "This should be dropped after cap",
+    ],
+    commitments: [
+      "Send proposal draft to legal team for review before noon tomorrow",
+      "Prepare meeting notes for cross functional standup and sync",
+      "Ask Maya for budget approval and attach latest spreadsheet revisions",
+      "Drop me due to cap",
+    ],
     activeLoops: ["Finish proposal", "Gets stuck on revisions"],
     timeGapDescription: "12 minutes since last spoke",
     timeOfDayLabel: "AFTERNOON",
@@ -114,7 +129,18 @@ async function main() {
   if (!context.situationalContext.includes("CURRENT_FOCUS:")) {
     throw new Error("Expected CURRENT_FOCUS in situationalContext");
   }
-  expect(context.recentMessages.length).toBe(1);
+  const openLoops = context.overlayContext?.openLoops ?? [];
+  const commitments = context.overlayContext?.commitments ?? [];
+  expect(openLoops.length).toBe(3);
+  expect(commitments.length).toBe(3);
+  expect(openLoops[0]).toBe("Reply to Jordan about security questionnaire before lunch");
+  for (const item of [...openLoops, ...commitments]) {
+    const words = item.split(/\s+/).filter(Boolean).length;
+    if (words > 12) {
+      throw new Error(`Expected overlay item to be <= 12 words, got ${words}: ${item}`);
+    }
+  }
+  expect(context.recentMessages.length).toBe(2);
   });
 
   await runTest("buildContext falls back when brief returns null", async () => {
@@ -141,6 +167,57 @@ async function main() {
   delete (globalThis as any).__buildContextLocalOverride;
 
   expect(context).toEqual(sentinel);
+  });
+
+  await runTest("buildContextFromSynapse surfaces local today focus in situational context", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-focus.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  const today = new Date();
+  const dayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Morning", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => ({
+    rollingSummary: null,
+    state: {
+      overlayState: {
+        user: {
+          todayFocus: "Finish proposal draft",
+          todayFocusDate: dayKey,
+        },
+      },
+    },
+  });
+
+  (globalThis as any).__synapseBriefOverride = async () => ({
+    facts: ["User is preparing a proposal."],
+    openLoops: [],
+    commitments: [],
+    activeLoops: [],
+    timeGapDescription: "5 minutes since last spoke",
+    timeOfDayLabel: "MORNING",
+    currentFocus: null,
+  });
+
+  const context = await buildContextFromSynapse(
+    "user-2",
+    "persona-2",
+    "hello",
+    "session-2",
+    true
+  );
+  delete (globalThis as any).__synapseBriefOverride;
+
+  if (!context?.situationalContext?.includes("CURRENT_FOCUS:\n- Finish proposal draft")) {
+    throw new Error("Expected local today focus to be included in situational context");
+  }
+  expect(context?.overlayContext?.currentFocus ?? null).toBe("Finish proposal draft");
   });
 
   const failed = results.filter((r) => !r.passed);

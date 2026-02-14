@@ -194,11 +194,15 @@ type PostureState = {
 type OverlayUsed = {
   curiositySpiral?: boolean;
   accountabilityTug?: boolean;
+  dailyFocus?: boolean;
 };
 
 type OverlayUserState = {
   lastTugAt?: string | null;
   tugBackoff?: Record<string, string>;
+  todayFocus?: string | null;
+  todayFocusDate?: string | null;
+  lastDailyFocusAt?: string | null;
 };
 
 type OverlayState = {
@@ -209,6 +213,7 @@ type OverlayState = {
   pendingDismissType?: OverlayType | null;
   pendingTopicKey?: string | null;
   shortReplyStreak?: number;
+  pendingFocusCapture?: boolean;
   user?: OverlayUserState;
 };
 
@@ -363,6 +368,7 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
     pendingDismissType: typeof raw.pendingDismissType === "string" ? (raw.pendingDismissType as OverlayType) : null,
     pendingTopicKey: typeof raw.pendingTopicKey === "string" ? raw.pendingTopicKey : null,
     shortReplyStreak: typeof raw.shortReplyStreak === "number" ? raw.shortReplyStreak : 0,
+    pendingFocusCapture: typeof raw.pendingFocusCapture === "boolean" ? raw.pendingFocusCapture : false,
     user: typeof raw.user === "object" && raw.user && !Array.isArray(raw.user)
       ? (raw.user as OverlayUserState)
       : undefined,
@@ -1325,6 +1331,47 @@ function computeTimeGapMinutes(
   return Math.max(0, Math.floor(diffMs / 60000));
 }
 
+function toLocalDayKey(now: Date) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isMorningLocalWindow(now: Date) {
+  const hour = now.getHours();
+  return hour >= 5 && hour < 12;
+}
+
+function shouldTriggerDailyFocus(params: {
+  isSessionStart: boolean;
+  now: Date;
+  intent: OverlayIntent;
+  posture: ConversationPosture;
+  riskLevel: RiskLevel;
+  energy: UserEnergy | null;
+  hasTodayFocus: boolean;
+}) {
+  if (!params.isSessionStart) return false;
+  if (!isMorningLocalWindow(params.now)) return false;
+  if (params.hasTodayFocus) return false;
+  if (params.riskLevel !== "LOW") return false;
+  if (params.energy === "LOW") return false;
+  const intentSupports = params.intent === "momentum";
+  const postureSupports = params.posture === "MOMENTUM" || params.posture === "REFLECTION";
+  return intentSupports || postureSupports;
+}
+
+function extractTodayFocus(transcript: string) {
+  const normalized = normalizeWhitespace(transcript);
+  if (!normalized) return null;
+  if (/^hold[.!?]?$/i.test(normalized)) {
+    return { status: "hold" as const, focus: null };
+  }
+  const focus = normalized.split(/\s+/).slice(0, 12).join(" ");
+  return { status: "set" as const, focus };
+}
+
 function isUrgentOpener(text: string) {
   const lowered = text.toLowerCase();
   const urgentPhrases = [
@@ -1522,7 +1569,9 @@ export async function POST(request: NextRequest) {
     let pendingDismissType = overlayState.pendingDismissType ?? null;
     let pendingTopicKey = overlayState.pendingTopicKey ?? null;
     let shortReplyStreak = overlayState.shortReplyStreak ?? 0;
+    let pendingFocusCapture = overlayState.pendingFocusCapture ?? false;
     const overlayUser = overlayState.user ?? {};
+    const dayKey = toLocalDayKey(now);
 
     if (overlayState.lastSessionId && overlayState.lastSessionId !== session.id) {
       overlayUsed = {};
@@ -1531,6 +1580,7 @@ export async function POST(request: NextRequest) {
       pendingDismissType = null;
       pendingTopicKey = null;
       shortReplyStreak = 0;
+      pendingFocusCapture = false;
     }
 
     let overlayType: OverlayType | "none" = "none";
@@ -1543,6 +1593,30 @@ export async function POST(request: NextRequest) {
       isUrgent: overlayIsUrgent,
       isDirectRequest: overlayIsDirectRequest,
     });
+    const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
+    const dailyFocusEligible = shouldTriggerDailyFocus({
+      isSessionStart: context.isSessionStart,
+      now,
+      intent: overlayIntent,
+      posture,
+      riskLevel,
+      energy: userState?.energy ?? null,
+      hasTodayFocus,
+    });
+
+    if (pendingFocusCapture && overlayUser.todayFocusDate !== dayKey) {
+      const parsed = extractTodayFocus(sttResult.transcript);
+      if (parsed) {
+        pendingFocusCapture = false;
+        overlayUser.lastDailyFocusAt = now.toISOString();
+        overlayUser.todayFocusDate = dayKey;
+        if (parsed.status === "set") {
+          overlayUser.todayFocus = parsed.focus;
+        } else {
+          overlayUser.todayFocus = null;
+        }
+      }
+    }
 
     if (pendingDismissType) {
       if (isDismissal(sttResult.transcript)) {
@@ -1622,6 +1696,14 @@ export async function POST(request: NextRequest) {
         openLoops: context.overlayContext?.openLoops,
         commitments: context.overlayContext?.commitments,
         overlayUsed,
+        dailyFocusEligible,
+        hasTodayFocus: overlayUser.todayFocusDate === dayKey,
+        conflictSignals: {
+          pressure,
+          riskLevel,
+          mood: userState?.mood,
+          tone: userState?.tone,
+        },
         userLastTugAt: overlayUser.lastTugAt ?? null,
         tugBackoff: overlayUser.tugBackoff,
         now,
@@ -1644,6 +1726,11 @@ export async function POST(request: NextRequest) {
         pendingDismissType = "accountability_tug";
         pendingTopicKey = normalized;
       }
+      if (overlayType === "daily_focus") {
+        overlayUsed = { ...overlayUsed, dailyFocus: true };
+        pendingFocusCapture = true;
+        overlayUser.lastDailyFocusAt = now.toISOString();
+      }
     }
 
     let overlayBlock: string | null = null;
@@ -1659,6 +1746,7 @@ export async function POST(request: NextRequest) {
       pendingDismissType,
       pendingTopicKey,
       shortReplyStreak,
+      pendingFocusCapture,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -1946,6 +2034,9 @@ function runShadowJudgeIfEnabled(params: Parameters<typeof processShadowPath>[0]
 export const __test__runShadowJudgeIfEnabled = runShadowJudgeIfEnabled;
 export const __test__runLibrarianReflex = runLibrarianReflex;
 export const __test__buildChatMessages = buildChatMessages;
+export const __test__shouldTriggerDailyFocus = shouldTriggerDailyFocus;
+export const __test__isMorningLocalWindow = isMorningLocalWindow;
+export const __test__extractTodayFocus = extractTodayFocus;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
 };

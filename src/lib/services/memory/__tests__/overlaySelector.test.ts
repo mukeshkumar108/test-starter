@@ -117,6 +117,60 @@ async function main() {
     expect(decision.overlayType).toBe("curiosity_spiral");
   });
 
+  await runTest("daily focus triggers when eligible and no focus set", () => {
+    const decision = selectOverlay({
+      transcript: "what should we do today",
+      overlayUsed: {},
+      dailyFocusEligible: true,
+      hasTodayFocus: false,
+    });
+    expect(decision).toMatchObject({
+      overlayType: "daily_focus",
+      triggerReason: "daily_focus_morning",
+    });
+  });
+
+  await runTest("daily focus does not trigger after focus already set", () => {
+    const decision = selectOverlay({
+      transcript: "what should we do today",
+      overlayUsed: {},
+      dailyFocusEligible: true,
+      hasTodayFocus: true,
+    });
+    expect(decision.overlayType).toBe("none");
+  });
+
+  await runTest("conflict regulation overrides curiosity on high-pressure relationship vent", () => {
+    const decision = selectOverlay({
+      transcript: "I argued with my girlfriend again and it turned into a huge fight",
+      overlayUsed: {},
+      conflictSignals: {
+        pressure: "HIGH",
+        riskLevel: "MED",
+        mood: "FRUSTRATED",
+        tone: "DIRECT",
+      },
+    });
+    expect(decision).toMatchObject({
+      overlayType: "conflict_regulation",
+      triggerReason: "conflict_regulation",
+    });
+  });
+
+  await runTest("low-intensity relationship story still allows curiosity", () => {
+    const decision = selectOverlay({
+      transcript: "my boyfriend and I had a funny moment at breakfast",
+      overlayUsed: {},
+      conflictSignals: {
+        pressure: "LOW",
+        riskLevel: "LOW",
+        mood: "UPBEAT",
+        tone: "PLAYFUL",
+      },
+    });
+    expect(decision.overlayType).toBe("curiosity_spiral");
+  });
+
   await runTest("curiosity triggers on narrative marker", () => {
     const decision = selectOverlay({
       transcript: "you won't believe what happened next",
