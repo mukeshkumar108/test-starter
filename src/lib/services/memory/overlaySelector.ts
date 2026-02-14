@@ -116,14 +116,31 @@ export function selectOverlay(params: {
   transcript: string;
   openLoops?: string[];
   commitments?: string[];
-  overlayUsed?: { curiositySpiral?: boolean; accountabilityTug?: boolean };
+  overlayUsed?: { curiositySpiral?: boolean; accountabilityTug?: boolean; dailyFocus?: boolean };
+  dailyFocusEligible?: boolean;
+  hasTodayFocus?: boolean;
   userLastTugAt?: string | null;
   tugBackoff?: Record<string, string>;
   now?: Date;
 }): OverlayDecision {
-  const { transcript, openLoops, commitments, overlayUsed, userLastTugAt, tugBackoff, now } =
+  const {
+    transcript,
+    openLoops,
+    commitments,
+    overlayUsed,
+    dailyFocusEligible,
+    hasTodayFocus,
+    userLastTugAt,
+    tugBackoff,
+    now,
+  } =
     params;
   if (!transcript.trim()) return { overlayType: "none", triggerReason: "empty" };
+
+  // Daily focus has first pass in morning start-of-day windows, before other overlays.
+  if (dailyFocusEligible && !hasTodayFocus && !overlayUsed?.dailyFocus) {
+    return { overlayType: "daily_focus", triggerReason: "daily_focus_morning" };
+  }
 
   if (!overlayUsed?.curiositySpiral) {
     const curiosityEligible = hasCuriosityTrigger(transcript);

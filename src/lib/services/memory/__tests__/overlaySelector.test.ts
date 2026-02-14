@@ -117,6 +117,29 @@ async function main() {
     expect(decision.overlayType).toBe("curiosity_spiral");
   });
 
+  await runTest("daily focus triggers when eligible and no focus set", () => {
+    const decision = selectOverlay({
+      transcript: "what should we do today",
+      overlayUsed: {},
+      dailyFocusEligible: true,
+      hasTodayFocus: false,
+    });
+    expect(decision).toMatchObject({
+      overlayType: "daily_focus",
+      triggerReason: "daily_focus_morning",
+    });
+  });
+
+  await runTest("daily focus does not trigger after focus already set", () => {
+    const decision = selectOverlay({
+      transcript: "what should we do today",
+      overlayUsed: {},
+      dailyFocusEligible: true,
+      hasTodayFocus: true,
+    });
+    expect(decision.overlayType).toBe("none");
+  });
+
   await runTest("curiosity triggers on narrative marker", () => {
     const decision = selectOverlay({
       transcript: "you won't believe what happened next",

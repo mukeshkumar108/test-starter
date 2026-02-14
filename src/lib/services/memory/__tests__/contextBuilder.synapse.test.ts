@@ -169,6 +169,57 @@ async function main() {
   expect(context).toEqual(sentinel);
   });
 
+  await runTest("buildContextFromSynapse surfaces local today focus in situational context", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-focus.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  const today = new Date();
+  const dayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Morning", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => ({
+    rollingSummary: null,
+    state: {
+      overlayState: {
+        user: {
+          todayFocus: "Finish proposal draft",
+          todayFocusDate: dayKey,
+        },
+      },
+    },
+  });
+
+  (globalThis as any).__synapseBriefOverride = async () => ({
+    facts: ["User is preparing a proposal."],
+    openLoops: [],
+    commitments: [],
+    activeLoops: [],
+    timeGapDescription: "5 minutes since last spoke",
+    timeOfDayLabel: "MORNING",
+    currentFocus: null,
+  });
+
+  const context = await buildContextFromSynapse(
+    "user-2",
+    "persona-2",
+    "hello",
+    "session-2",
+    true
+  );
+  delete (globalThis as any).__synapseBriefOverride;
+
+  if (!context?.situationalContext?.includes("CURRENT_FOCUS:\n- Finish proposal draft")) {
+    throw new Error("Expected local today focus to be included in situational context");
+  }
+  expect(context?.overlayContext?.currentFocus ?? null).toBe("Finish proposal draft");
+  });
+
   const failed = results.filter((r) => !r.passed);
   if (failed.length > 0) {
     console.error("Test failures:");

@@ -1,13 +1,14 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
 
-export type OverlayType = "curiosity_spiral" | "accountability_tug";
+export type OverlayType = "curiosity_spiral" | "accountability_tug" | "daily_focus";
 
 const overlayCache = new Map<OverlayType, string>();
 
 const OVERLAY_PATHS: Record<OverlayType, string> = {
   curiosity_spiral: "prompts/overlays/curiosity_spiral.md",
   accountability_tug: "prompts/overlays/accountability_tug.md",
+  daily_focus: "prompts/overlays/daily_focus.md",
 };
 
 export async function loadOverlay(overlayType: OverlayType): Promise<string> {
