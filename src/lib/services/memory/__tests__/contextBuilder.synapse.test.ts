@@ -72,14 +72,29 @@ async function main() {
     promptPath,
   });
   (prisma.message.findMany as any) = async () => [
-    { role: "user", content: "Hi there", createdAt: new Date() },
+    {
+      role: "user",
+      content: "I need to reply to Jordan about security questionnaire before lunch.",
+      createdAt: new Date(),
+    },
+    { role: "assistant", content: "Noted.", createdAt: new Date() },
   ];
   (prisma.sessionState.findUnique as any) = async () => null;
 
   (globalThis as any).__synapseBriefOverride = async () => ({
     facts: ["User is preparing a proposal.", "User is blocked on revisions."],
-    openLoops: ["Finish proposal"],
-    commitments: ["Send proposal draft"],
+    openLoops: [
+      "Finish proposal",
+      "Reply to Jordan about security questionnaire before lunch",
+      "Plan the Q3 roadmap alignment with design, product, and growth stakeholders",
+      "This should be dropped after cap",
+    ],
+    commitments: [
+      "Send proposal draft to legal team for review before noon tomorrow",
+      "Prepare meeting notes for cross functional standup and sync",
+      "Ask Maya for budget approval and attach latest spreadsheet revisions",
+      "Drop me due to cap",
+    ],
     activeLoops: ["Finish proposal", "Gets stuck on revisions"],
     timeGapDescription: "12 minutes since last spoke",
     timeOfDayLabel: "AFTERNOON",
@@ -114,7 +129,18 @@ async function main() {
   if (!context.situationalContext.includes("CURRENT_FOCUS:")) {
     throw new Error("Expected CURRENT_FOCUS in situationalContext");
   }
-  expect(context.recentMessages.length).toBe(1);
+  const openLoops = context.overlayContext?.openLoops ?? [];
+  const commitments = context.overlayContext?.commitments ?? [];
+  expect(openLoops.length).toBe(3);
+  expect(commitments.length).toBe(3);
+  expect(openLoops[0]).toBe("Reply to Jordan about security questionnaire before lunch");
+  for (const item of [...openLoops, ...commitments]) {
+    const words = item.split(/\s+/).filter(Boolean).length;
+    if (words > 12) {
+      throw new Error(`Expected overlay item to be <= 12 words, got ${words}: ${item}`);
+    }
+  }
+  expect(context.recentMessages.length).toBe(2);
   });
 
   await runTest("buildContext falls back when brief returns null", async () => {

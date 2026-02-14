@@ -21,6 +21,8 @@ export interface ConversationContext {
 
 const MAX_RECENT_MESSAGE_CHARS = 800;
 const BRIEF_CACHE_TTL_MS = 3 * 60 * 1000;
+const OVERLAY_CONTEXT_CAP = 3;
+const OVERLAY_ITEM_MAX_WORDS = 12;
 const briefCache = new Map<
   string,
   { fetchedAt: number; brief: SynapseBriefResponse }
@@ -240,6 +242,64 @@ function uniqueLimited(values: Array<string | null | undefined>, limit: number) 
   return Array.from(new Set(cleaned)).slice(0, limit);
 }
 
+function toOverlayItem(value: string) {
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (!trimmed) return null;
+  const words = trimmed.split(" ").slice(0, OVERLAY_ITEM_MAX_WORDS);
+  return words.join(" ");
+}
+
+function buildOverlayItems(
+  values: Array<string | null | undefined>,
+  recentMessages: Array<{ content: string }>
+) {
+  const items = values
+    .map((value, index) => {
+      if (typeof value !== "string") return null;
+      const normalized = toOverlayItem(value);
+      if (!normalized) return null;
+      return {
+        value: normalized,
+        lowered: normalized.toLowerCase(),
+        index,
+      };
+    })
+    .filter((item): item is { value: string; lowered: string; index: number } => Boolean(item));
+
+  const deduped: Array<{ value: string; lowered: string; index: number }> = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.lowered)) continue;
+    seen.add(item.lowered);
+    deduped.push(item);
+  }
+
+  const loweredMessages = recentMessages.map((message) => message.content.toLowerCase());
+
+  const ranked = deduped
+    .map((item) => {
+      let mentionIndex: number | null = null;
+      for (let i = 0; i < loweredMessages.length; i += 1) {
+        if (loweredMessages[i].includes(item.lowered)) {
+          mentionIndex = i;
+          break;
+        }
+      }
+      return { ...item, mentionIndex };
+    })
+    .sort((a, b) => {
+      const aMentioned = a.mentionIndex !== null;
+      const bMentioned = b.mentionIndex !== null;
+      if (aMentioned !== bMentioned) return aMentioned ? -1 : 1;
+      if (aMentioned && bMentioned && a.mentionIndex !== b.mentionIndex) {
+        return (a.mentionIndex ?? 0) - (b.mentionIndex ?? 0);
+      }
+      return a.index - b.index;
+    });
+
+  return ranked.slice(0, OVERLAY_CONTEXT_CAP).map((item) => item.value);
+}
+
 function buildSituationalContext(brief: SynapseBriefResponse) {
   const parts: string[] = [];
   const facts = uniqueLimited(brief.facts ?? [], 2);
@@ -375,8 +435,8 @@ export async function buildContextFromSynapse(
   if (cached && Date.now() - cached.fetchedAt < BRIEF_CACHE_TTL_MS) {
     const situationalContext = buildSituationalContext(cached.brief);
     const overlayContext = {
-      openLoops: uniqueLimited(cached.brief.openLoops ?? [], 1),
-      commitments: uniqueLimited(cached.brief.commitments ?? [], 1),
+      openLoops: buildOverlayItems(cached.brief.openLoops ?? [], messages),
+      commitments: buildOverlayItems(cached.brief.commitments ?? [], messages),
     };
     return {
       persona: personaPrompt,
@@ -413,8 +473,8 @@ export async function buildContextFromSynapse(
   briefCache.set(cacheKey, { fetchedAt: Date.now(), brief });
   const situationalContext = buildSituationalContext(brief);
   const overlayContext = {
-    openLoops: uniqueLimited(brief.openLoops ?? [], 1),
-    commitments: uniqueLimited(brief.commitments ?? [], 1),
+    openLoops: buildOverlayItems(brief.openLoops ?? [], messages),
+    commitments: buildOverlayItems(brief.commitments ?? [], messages),
   };
 
   if (env.FEATURE_LIBRARIAN_TRACE === "true") {
