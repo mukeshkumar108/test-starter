@@ -4,11 +4,11 @@
 export const MODELS = {
   // Chat models per persona
   CHAT: {
-    MENTOR: "meta-llama/llama-4-maverick",
-    SUPPORTIVE: "meta-llama/llama-4-maverick", 
-    COACH: "meta-llama/llama-4-maverick",
-    CREATIVE: "meta-llama/llama-4-maverick",
-    ANALYTICAL: "meta-llama/llama-4-maverick",
+    MENTOR: "bytedance-seed/seed-1.6-flash",
+    SUPPORTIVE: "bytedance-seed/seed-1.6-flash", 
+    COACH: "bytedance-seed/seed-1.6-flash",
+    CREATIVE: "bytedance-seed/seed-1.6-flash",
+    ANALYTICAL: "bytedance-seed/seed-1.6-flash",
     SAFETY: "bytedance-seed/seed-1.6",
   },
   
