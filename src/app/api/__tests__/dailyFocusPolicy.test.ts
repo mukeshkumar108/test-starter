@@ -33,17 +33,17 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 
 async function main() {
   await runTest("morning window true at 08:00 local", () => {
-    expect(__test__isMorningLocalWindow(new Date("2026-02-14T08:00:00"))).toBe(true);
+    expect(__test__isMorningLocalWindow(8)).toBe(true);
   });
 
   await runTest("morning window false at 15:00 local", () => {
-    expect(__test__isMorningLocalWindow(new Date("2026-02-14T15:00:00"))).toBe(false);
+    expect(__test__isMorningLocalWindow(15)).toBe(false);
   });
 
   await runTest("daily focus triggers for momentum morning session start", () => {
     const trigger = __test__shouldTriggerDailyFocus({
       isSessionStart: true,
-      now: new Date("2026-02-14T08:30:00"),
+      localHour: 8,
       intent: "momentum",
       posture: "COMPANION",
       riskLevel: "LOW",
@@ -56,7 +56,7 @@ async function main() {
   await runTest("daily focus blocked in afternoon", () => {
     const trigger = __test__shouldTriggerDailyFocus({
       isSessionStart: true,
-      now: new Date("2026-02-14T15:30:00"),
+      localHour: 15,
       intent: "momentum",
       posture: "MOMENTUM",
       riskLevel: "LOW",
@@ -69,7 +69,7 @@ async function main() {
   await runTest("daily focus blocked when energy is LOW", () => {
     const trigger = __test__shouldTriggerDailyFocus({
       isSessionStart: true,
-      now: new Date("2026-02-14T08:30:00"),
+      localHour: 8,
       intent: "momentum",
       posture: "MOMENTUM",
       riskLevel: "LOW",

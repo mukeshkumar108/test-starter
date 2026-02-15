@@ -117,9 +117,19 @@ export function selectOverlay(params: {
   transcript: string;
   openLoops?: string[];
   commitments?: string[];
-  overlayUsed?: { curiositySpiral?: boolean; accountabilityTug?: boolean; dailyFocus?: boolean };
+  overlayUsed?: {
+    curiositySpiral?: boolean;
+    accountabilityTug?: boolean;
+    dailyFocus?: boolean;
+    dailyReview?: boolean;
+    weeklyCompass?: boolean;
+  };
   dailyFocusEligible?: boolean;
+  dailyReviewEligible?: boolean;
+  weeklyCompassEligible?: boolean;
   hasTodayFocus?: boolean;
+  hasDailyReviewToday?: boolean;
+  hasWeeklyCompass?: boolean;
   conflictSignals?: {
     pressure?: "LOW" | "MED" | "HIGH";
     riskLevel?: "LOW" | "MED" | "HIGH" | "CRISIS";
@@ -136,7 +146,11 @@ export function selectOverlay(params: {
     commitments,
     overlayUsed,
     dailyFocusEligible,
+    dailyReviewEligible,
+    weeklyCompassEligible,
     hasTodayFocus,
+    hasDailyReviewToday,
+    hasWeeklyCompass,
     conflictSignals,
     userLastTugAt,
     tugBackoff,
@@ -146,8 +160,15 @@ export function selectOverlay(params: {
   if (!transcript.trim()) return { overlayType: "none", triggerReason: "empty" };
 
   // Daily focus has first pass in morning start-of-day windows, before other overlays.
+  // Ritual precedence: daily/weekly trajectory overlays run before conversational overlays.
   if (dailyFocusEligible && !hasTodayFocus && !overlayUsed?.dailyFocus) {
     return { overlayType: "daily_focus", triggerReason: "daily_focus_morning" };
+  }
+  if (dailyReviewEligible && !hasDailyReviewToday && !overlayUsed?.dailyReview) {
+    return { overlayType: "daily_review", triggerReason: "daily_review_evening" };
+  }
+  if (weeklyCompassEligible && !hasWeeklyCompass && !overlayUsed?.weeklyCompass) {
+    return { overlayType: "weekly_compass", triggerReason: "weekly_compass_window" };
   }
 
   const lowered = transcript.toLowerCase();

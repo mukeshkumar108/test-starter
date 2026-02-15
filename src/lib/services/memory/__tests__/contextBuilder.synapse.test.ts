@@ -179,7 +179,30 @@ async function main() {
   await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
 
   const today = new Date();
-  const dayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const dayParts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Zagreb",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(today);
+  const dayPart = (type: Intl.DateTimeFormatPartTypes) =>
+    dayParts.find((part) => part.type === type)?.value ?? "";
+  const dayKey = `${dayPart("year")}-${dayPart("month")}-${dayPart("day")}`;
+  const weekday = today
+    .toLocaleDateString("en-GB", { weekday: "long", timeZone: "Europe/Zagreb" })
+    .toLowerCase();
+  const weekdayIndex = new Map<string, number>([
+    ["monday", 0],
+    ["tuesday", 1],
+    ["wednesday", 2],
+    ["thursday", 3],
+    ["friday", 4],
+    ["saturday", 5],
+    ["sunday", 6],
+  ]).get(weekday) ?? 0;
+  const utcMidnight = new Date(Date.UTC(Number.parseInt(dayPart("year"), 10), Number.parseInt(dayPart("month"), 10) - 1, Number.parseInt(dayPart("day"), 10)));
+  utcMidnight.setUTCDate(utcMidnight.getUTCDate() - weekdayIndex);
+  const weekStartKey = `${utcMidnight.getUTCFullYear()}-${String(utcMidnight.getUTCMonth() + 1).padStart(2, "0")}-${String(utcMidnight.getUTCDate()).padStart(2, "0")}`;
 
   (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
   (prisma.message.findMany as any) = async () => [{ role: "user", content: "Morning", createdAt: new Date() }];
@@ -190,6 +213,8 @@ async function main() {
         user: {
           todayFocus: "Finish proposal draft",
           todayFocusDate: dayKey,
+          weeklyNorthStar: "Build resilient momentum across Body Mind Freedom Experience",
+          weeklyNorthStarWeekStartDate: weekStartKey,
         },
       },
     },
@@ -217,7 +242,13 @@ async function main() {
   if (!context?.situationalContext?.includes("CURRENT_FOCUS:\n- Finish proposal draft")) {
     throw new Error("Expected local today focus to be included in situational context");
   }
+  if (!context?.situationalContext?.includes("WEEKLY_NORTH_STAR:")) {
+    throw new Error("Expected weekly north star to be included in situational context");
+  }
   expect(context?.overlayContext?.currentFocus ?? null).toBe("Finish proposal draft");
+  expect(context?.overlayContext?.weeklyNorthStar ?? null).toBe(
+    "Build resilient momentum across Body Mind Freedom Experience"
+  );
   });
 
   const failed = results.filter((r) => !r.passed);

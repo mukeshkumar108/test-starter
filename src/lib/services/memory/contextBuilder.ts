@@ -14,6 +14,7 @@ export interface ConversationContext {
     openLoops?: string[];
     commitments?: string[];
     currentFocus?: string;
+    weeklyNorthStar?: string;
   };
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   /** True if this is the first turn of a new session (for conditional SessionSummary injection) */
@@ -347,25 +348,75 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
   return uniqueParts.length > 0 ? uniqueParts.join("\n") : null;
 }
 
-function toLocalDateKey(value: Date) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function getZonedParts(now: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+  });
+  const parts = formatter.formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const year = Number.parseInt(get("year"), 10);
+  const month = Number.parseInt(get("month"), 10);
+  const day = Number.parseInt(get("day"), 10);
+  return {
+    dayKey: `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    weekday: get("weekday").toLowerCase(),
+  };
 }
 
-function getTodayFocusFromState(state: unknown, now: Date) {
+function getWeekStartKey(dayKey: string, weekday: string) {
+  const [yRaw, mRaw, dRaw] = dayKey.split("-");
+  const year = Number.parseInt(yRaw, 10);
+  const month = Number.parseInt(mRaw, 10);
+  const day = Number.parseInt(dRaw, 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return dayKey;
+  const weekdayIndex = new Map<string, number>([
+    ["monday", 0],
+    ["tuesday", 1],
+    ["wednesday", 2],
+    ["thursday", 3],
+    ["friday", 4],
+    ["saturday", 5],
+    ["sunday", 6],
+  ]).get(weekday);
+  if (weekdayIndex === undefined) return dayKey;
+  const utcMidnight = new Date(Date.UTC(year, month - 1, day));
+  utcMidnight.setUTCDate(utcMidnight.getUTCDate() - weekdayIndex);
+  const startYear = utcMidnight.getUTCFullYear();
+  const startMonth = String(utcMidnight.getUTCMonth() + 1).padStart(2, "0");
+  const startDay = String(utcMidnight.getUTCDate()).padStart(2, "0");
+  return `${startYear}-${startMonth}-${startDay}`;
+}
+
+function getTrajectoryStateFromSession(state: unknown, now: Date, timeZone: string) {
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
   const overlayState = (state as Record<string, unknown>).overlayState;
   if (!overlayState || typeof overlayState !== "object" || Array.isArray(overlayState)) return null;
   const user = (overlayState as Record<string, unknown>).user;
   if (!user || typeof user !== "object" || Array.isArray(user)) return null;
-  const todayFocus = (user as Record<string, unknown>).todayFocus;
-  const todayFocusDate = (user as Record<string, unknown>).todayFocusDate;
-  if (typeof todayFocus !== "string" || !todayFocus.trim()) return null;
-  if (typeof todayFocusDate !== "string") return null;
-  if (todayFocusDate !== toLocalDateKey(now)) return null;
-  return todayFocus.trim();
+  const values = user as Record<string, unknown>;
+  const zoned = getZonedParts(now, timeZone);
+  const weekStart = getWeekStartKey(zoned.dayKey, zoned.weekday);
+
+  const todayFocus =
+    typeof values.todayFocus === "string" &&
+    values.todayFocus.trim() &&
+    values.todayFocusDate === zoned.dayKey
+      ? values.todayFocus.trim()
+      : null;
+  const weeklyNorthStar =
+    typeof values.weeklyNorthStar === "string" &&
+    values.weeklyNorthStar.trim() &&
+    values.weeklyNorthStarWeekStartDate === weekStart
+      ? values.weeklyNorthStar.trim()
+      : null;
+
+  if (!todayFocus && !weeklyNorthStar) return null;
+  return { todayFocus, weeklyNorthStar };
 }
 
 function getSynapseBrief() {
@@ -407,7 +458,7 @@ export async function buildContextFromSynapse(
     where: { userId_personaId: { userId, personaId } },
     select: { rollingSummary: true, state: true },
   });
-  const localTodayFocus = getTodayFocusFromState(sessionState?.state, new Date());
+  const localTrajectory = getTrajectoryStateFromSession(sessionState?.state, new Date(), "Europe/Zagreb");
 
   const heuristic = heuristicQuery(transcript);
   let selectedQuery = heuristic;
@@ -457,19 +508,27 @@ export async function buildContextFromSynapse(
   const cached = briefCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < BRIEF_CACHE_TTL_MS) {
     const situationalContext = buildSituationalContext(cached.brief);
-    const effectiveFocus = cached.brief.currentFocus?.trim() || localTodayFocus || undefined;
+    const effectiveFocus = cached.brief.currentFocus?.trim() || localTrajectory?.todayFocus || undefined;
+    const effectiveWeeklyNorthStar = localTrajectory?.weeklyNorthStar || undefined;
     const situationalWithFocus =
       effectiveFocus && !(situationalContext ?? "").includes("CURRENT_FOCUS:")
         ? [situationalContext, `CURRENT_FOCUS:\n- ${effectiveFocus}`].filter(Boolean).join("\n")
         : situationalContext;
+    const situationalWithTrajectory =
+      effectiveWeeklyNorthStar && !(situationalWithFocus ?? "").includes("WEEKLY_NORTH_STAR:")
+        ? [situationalWithFocus, `WEEKLY_NORTH_STAR:\n- ${effectiveWeeklyNorthStar}`]
+            .filter(Boolean)
+            .join("\n")
+        : situationalWithFocus;
     const overlayContext = {
       openLoops: buildOverlayItems(cached.brief.openLoops ?? [], messages),
       commitments: buildOverlayItems(cached.brief.commitments ?? [], messages),
       currentFocus: effectiveFocus,
+      weeklyNorthStar: effectiveWeeklyNorthStar,
     };
     return {
       persona: personaPrompt,
-      situationalContext: situationalWithFocus ?? undefined,
+      situationalContext: situationalWithTrajectory ?? undefined,
       rollingSummary: sessionState?.rollingSummary ?? undefined,
       overlayContext,
       recentMessages: messages
@@ -501,15 +560,23 @@ export async function buildContextFromSynapse(
   if (!brief) return null;
   briefCache.set(cacheKey, { fetchedAt: Date.now(), brief });
   const situationalContext = buildSituationalContext(brief);
-  const effectiveFocus = brief.currentFocus?.trim() || localTodayFocus || undefined;
+  const effectiveFocus = brief.currentFocus?.trim() || localTrajectory?.todayFocus || undefined;
+  const effectiveWeeklyNorthStar = localTrajectory?.weeklyNorthStar || undefined;
   const situationalWithFocus =
     effectiveFocus && !(situationalContext ?? "").includes("CURRENT_FOCUS:")
       ? [situationalContext, `CURRENT_FOCUS:\n- ${effectiveFocus}`].filter(Boolean).join("\n")
       : situationalContext;
+  const situationalWithTrajectory =
+    effectiveWeeklyNorthStar && !(situationalWithFocus ?? "").includes("WEEKLY_NORTH_STAR:")
+      ? [situationalWithFocus, `WEEKLY_NORTH_STAR:\n- ${effectiveWeeklyNorthStar}`]
+          .filter(Boolean)
+          .join("\n")
+      : situationalWithFocus;
   const overlayContext = {
     openLoops: buildOverlayItems(brief.openLoops ?? [], messages),
     commitments: buildOverlayItems(brief.commitments ?? [], messages),
     currentFocus: effectiveFocus,
+    weeklyNorthStar: effectiveWeeklyNorthStar,
   };
 
   if (env.FEATURE_LIBRARIAN_TRACE === "true") {
@@ -521,7 +588,7 @@ export async function buildContextFromSynapse(
         kind: "brief",
         memoryQuery: selectedQuery ? { query: selectedQuery } : undefined,
         brief,
-        supplementalContext: situationalWithFocus ?? null,
+        supplementalContext: situationalWithTrajectory ?? null,
       },
     }).catch((error) => {
       console.warn("[librarian.trace] failed to log brief", { error });
@@ -530,7 +597,7 @@ export async function buildContextFromSynapse(
 
   return {
     persona: personaPrompt,
-    situationalContext: situationalWithFocus ?? undefined,
+    situationalContext: situationalWithTrajectory ?? undefined,
     rollingSummary: sessionState?.rollingSummary ?? undefined,
     overlayContext,
     recentMessages: messages

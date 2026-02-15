@@ -22,6 +22,8 @@ import { env } from "@/env";
 import { getChatModelForGate } from "@/lib/providers/models";
 import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
+import { readFile } from "fs/promises";
+import { join } from "path";
 
 export const runtime = "nodejs";
 
@@ -196,6 +198,8 @@ type OverlayUsed = {
   curiositySpiral?: boolean;
   accountabilityTug?: boolean;
   dailyFocus?: boolean;
+  dailyReview?: boolean;
+  weeklyCompass?: boolean;
 };
 
 type OverlayUserState = {
@@ -204,6 +208,11 @@ type OverlayUserState = {
   todayFocus?: string | null;
   todayFocusDate?: string | null;
   lastDailyFocusAt?: string | null;
+  lastDailyReviewDate?: string | null;
+  lastDailyReviewSummary?: string | null;
+  weeklyNorthStar?: string | null;
+  weeklyNorthStarWeekStartDate?: string | null;
+  weeklyPriorities?: string[];
 };
 
 type OverlayState = {
@@ -215,6 +224,8 @@ type OverlayState = {
   pendingTopicKey?: string | null;
   shortReplyStreak?: number;
   pendingFocusCapture?: boolean;
+  pendingDailyReviewCapture?: boolean;
+  pendingWeeklyCompassCapture?: boolean;
   user?: OverlayUserState;
 };
 
@@ -232,6 +243,13 @@ type ChatTimingSpans = {
 const postureStateCache = new Map<string, PostureState>();
 const userStateCache = new Map<string, UserStateState>();
 const overlayStateCache = new Map<string, OverlayState>();
+const userProfileCache = new Map<string, string>();
+
+const PRODUCT_KERNEL_TRAJECTORY_BLOCK = `[PRODUCT_KERNEL]
+Maintain trajectory continuity over time:
+- Ensure a North Star, weekly focus, and today focus exist and stay current.
+- Use ritual overlays for collection and refresh, not ad hoc branching in core behavior.
+- Keep rituals light: one prompt, grounded language, practical next motion.`;
 
 function buildChatTrace(params: {
   traceId: string;
@@ -417,8 +435,19 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
     pendingTopicKey: typeof raw.pendingTopicKey === "string" ? raw.pendingTopicKey : null,
     shortReplyStreak: typeof raw.shortReplyStreak === "number" ? raw.shortReplyStreak : 0,
     pendingFocusCapture: typeof raw.pendingFocusCapture === "boolean" ? raw.pendingFocusCapture : false,
+    pendingDailyReviewCapture:
+      typeof raw.pendingDailyReviewCapture === "boolean" ? raw.pendingDailyReviewCapture : false,
+    pendingWeeklyCompassCapture:
+      typeof raw.pendingWeeklyCompassCapture === "boolean" ? raw.pendingWeeklyCompassCapture : false,
     user: typeof raw.user === "object" && raw.user && !Array.isArray(raw.user)
-      ? (raw.user as OverlayUserState)
+      ? {
+          ...(raw.user as OverlayUserState),
+          weeklyPriorities: Array.isArray((raw.user as OverlayUserState).weeklyPriorities)
+            ? ((raw.user as OverlayUserState).weeklyPriorities as unknown[])
+                .filter((entry): entry is string => typeof entry === "string")
+                .slice(0, 3)
+            : undefined,
+        }
       : undefined,
   };
 }
@@ -1337,6 +1366,8 @@ async function runLibrarianReflex(params: {
 
 function buildChatMessages(params: {
   persona: string;
+  productKernelBlock?: string | null;
+  userProfileBlock?: string | null;
   situationalContext?: string;
   continuityBlock?: string | null;
   overlayBlock?: string | null;
@@ -1359,6 +1390,10 @@ function buildChatMessages(params: {
   const sessionFacts = rollingSummary ? clampSessionFacts(rollingSummary) : "";
   return [
     { role: "system" as const, content: params.persona },
+    ...(params.productKernelBlock
+      ? [{ role: "system" as const, content: params.productKernelBlock }]
+      : []),
+    ...(params.userProfileBlock ? [{ role: "system" as const, content: params.userProfileBlock }] : []),
     { role: "system" as const, content: styleGuard },
     { role: "system" as const, content: postureBlock },
     ...(situationalContext
@@ -1405,21 +1440,66 @@ function computeTimeGapMinutes(
   return Math.max(0, Math.floor(diffMs / 60000));
 }
 
-function toLocalDayKey(now: Date) {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function getZonedParts(now: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    weekday: "long",
+  });
+  const parts = formatter.formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const year = Number.parseInt(get("year"), 10);
+  const month = Number.parseInt(get("month"), 10);
+  const day = Number.parseInt(get("day"), 10);
+  const hour = Number.parseInt(get("hour"), 10);
+  const weekday = get("weekday").toLowerCase();
+  return {
+    dayKey: `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    hour,
+    weekday,
+  };
 }
 
-function isMorningLocalWindow(now: Date) {
-  const hour = now.getHours();
+function getWeekStartKey(dayKey: string, weekday: string) {
+  const [yRaw, mRaw, dRaw] = dayKey.split("-");
+  const year = Number.parseInt(yRaw, 10);
+  const month = Number.parseInt(mRaw, 10);
+  const day = Number.parseInt(dRaw, 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return dayKey;
+  const weekdayIndex = new Map<string, number>([
+    ["monday", 0],
+    ["tuesday", 1],
+    ["wednesday", 2],
+    ["thursday", 3],
+    ["friday", 4],
+    ["saturday", 5],
+    ["sunday", 6],
+  ]).get(weekday);
+  if (weekdayIndex === undefined) return dayKey;
+  const utcMidnight = new Date(Date.UTC(year, month - 1, day));
+  utcMidnight.setUTCDate(utcMidnight.getUTCDate() - weekdayIndex);
+  const startYear = utcMidnight.getUTCFullYear();
+  const startMonth = String(utcMidnight.getUTCMonth() + 1).padStart(2, "0");
+  const startDay = String(utcMidnight.getUTCDate()).padStart(2, "0");
+  return `${startYear}-${startMonth}-${startDay}`;
+}
+
+function isMorningLocalWindow(hour: number) {
   return hour >= 5 && hour < 12;
+}
+
+function isEveningWindow(hour: number) {
+  return hour >= 18 || hour < 2;
 }
 
 function shouldTriggerDailyFocus(params: {
   isSessionStart: boolean;
-  now: Date;
+  localHour: number;
   intent: OverlayIntent;
   posture: ConversationPosture;
   riskLevel: RiskLevel;
@@ -1427,7 +1507,7 @@ function shouldTriggerDailyFocus(params: {
   hasTodayFocus: boolean;
 }) {
   if (!params.isSessionStart) return false;
-  if (!isMorningLocalWindow(params.now)) return false;
+  if (!isMorningLocalWindow(params.localHour)) return false;
   if (params.hasTodayFocus) return false;
   if (params.riskLevel !== "LOW") return false;
   if (params.energy === "LOW") return false;
@@ -1444,6 +1524,104 @@ function extractTodayFocus(transcript: string) {
   }
   const focus = normalized.split(/\s+/).slice(0, 12).join(" ");
   return { status: "set" as const, focus };
+}
+
+function shouldTriggerDailyReview(params: {
+  isSessionStart: boolean;
+  localHour: number;
+  riskLevel: RiskLevel;
+  hasDailyReviewToday: boolean;
+}) {
+  if (!params.isSessionStart) return false;
+  if (!isEveningWindow(params.localHour)) return false;
+  if (params.riskLevel !== "LOW") return false;
+  if (params.hasDailyReviewToday) return false;
+  return true;
+}
+
+function extractDailyReviewSummary(transcript: string) {
+  const normalized = normalizeWhitespace(transcript);
+  if (!normalized) return null;
+  if (/^hold[.!?]?$/i.test(normalized)) {
+    return { status: "hold" as const, summary: null };
+  }
+  return {
+    status: "set" as const,
+    summary: normalized.split(/\s+/).slice(0, 24).join(" "),
+  };
+}
+
+function shouldTriggerWeeklyCompass(params: {
+  isSessionStart: boolean;
+  weekday: string;
+  localHour: number;
+  weekStartKey: string;
+  weeklyNorthStarWeekStartDate?: string | null;
+}) {
+  if (!params.isSessionStart) return false;
+  const isSunday = params.weekday === "sunday";
+  const isMondayMorning = params.weekday === "monday" && isMorningLocalWindow(params.localHour);
+  if (!isSunday && !isMondayMorning) return false;
+  return params.weeklyNorthStarWeekStartDate !== params.weekStartKey;
+}
+
+function toWeeklyPriority(input: string) {
+  const normalized = input.trim().replace(/^[\-\d.)\s]+/, "").replace(/\s+/g, " ");
+  if (!normalized) return null;
+  return normalized.split(" ").slice(0, 12).join(" ");
+}
+
+function extractWeeklyCompass(transcript: string) {
+  const normalized = normalizeWhitespace(transcript);
+  if (!normalized) return null;
+  if (/^hold[.!?]?$/i.test(normalized)) {
+    return {
+      status: "hold" as const,
+      weeklyNorthStar: null,
+      weeklyPriorities: [] as string[],
+    };
+  }
+
+  const segments = normalized.split(/[.;\n]/).map((segment) => segment.trim()).filter(Boolean);
+  const weeklyNorthStarSource = segments[0] ?? normalized;
+  const weeklyNorthStar = weeklyNorthStarSource.split(/\s+/).slice(0, 16).join(" ");
+  const priorityCandidates =
+    segments.length > 1 ? segments.slice(1) : normalized.split(/[,|]/).map((segment) => segment.trim());
+  const weeklyPriorities = priorityCandidates
+    .map((entry) => toWeeklyPriority(entry))
+    .filter((entry): entry is string => Boolean(entry))
+    .slice(0, 3);
+
+  return {
+    status: "set" as const,
+    weeklyNorthStar,
+    weeklyPriorities,
+  };
+}
+
+function isMukeshUser(user: { clerkUserId?: string | null; email?: string | null }) {
+  const targets = [user.clerkUserId ?? "", user.email ?? ""].map((value) => value.toLowerCase());
+  return targets.some((value) => value.includes("mukesh"));
+}
+
+async function loadUserProfileBlockIfEligible(params: {
+  user: { clerkUserId?: string | null; email?: string | null };
+  personaId: string;
+  personaSlug: string;
+}) {
+  const personaLooksMukesh = params.personaId.toLowerCase().includes("mukesh");
+  if (params.personaSlug !== "creative" && !personaLooksMukesh) return null;
+  if (!personaLooksMukesh && !isMukeshUser(params.user)) return null;
+
+  const cacheKey = "mukesh.config.md";
+  const cached = userProfileCache.get(cacheKey);
+  if (cached) return cached;
+
+  const path = join(process.cwd(), "src/personas/config/mukesh.config.md");
+  const file = (await readFile(path, "utf-8")).trim();
+  const block = `[USER_PROFILE]\n${file}`;
+  userProfileCache.set(cacheKey, block);
+  return block;
 }
 
 function isUrgentOpener(text: string) {
@@ -1657,8 +1835,14 @@ export async function POST(request: NextRequest) {
     let pendingTopicKey = overlayState.pendingTopicKey ?? null;
     let shortReplyStreak = overlayState.shortReplyStreak ?? 0;
     let pendingFocusCapture = overlayState.pendingFocusCapture ?? false;
+    let pendingDailyReviewCapture = overlayState.pendingDailyReviewCapture ?? false;
+    let pendingWeeklyCompassCapture = overlayState.pendingWeeklyCompassCapture ?? false;
     const overlayUser = overlayState.user ?? {};
-    const dayKey = toLocalDayKey(now);
+    // Trajectory rituals are day/week scoped to the user's configured local zone.
+    const timeZone = "Europe/Zagreb";
+    const zoned = getZonedParts(now, timeZone);
+    const dayKey = zoned.dayKey;
+    const weekStartKey = getWeekStartKey(zoned.dayKey, zoned.weekday);
 
     if (overlayState.lastSessionId && overlayState.lastSessionId !== session.id) {
       overlayUsed = {};
@@ -1668,6 +1852,8 @@ export async function POST(request: NextRequest) {
       pendingTopicKey = null;
       shortReplyStreak = 0;
       pendingFocusCapture = false;
+      pendingDailyReviewCapture = false;
+      pendingWeeklyCompassCapture = false;
     }
 
     let overlayType: OverlayType | "none" = "none";
@@ -1682,14 +1868,29 @@ export async function POST(request: NextRequest) {
     });
     const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
     const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
+    const hasDailyReviewToday = overlayUser.lastDailyReviewDate === dayKey;
+    const hasWeeklyCompass = overlayUser.weeklyNorthStarWeekStartDate === weekStartKey;
     const dailyFocusEligible = shouldTriggerDailyFocus({
       isSessionStart: context.isSessionStart,
-      now,
+      localHour: zoned.hour,
       intent: overlayIntent,
       posture,
       riskLevel,
       energy: userState?.energy ?? null,
       hasTodayFocus,
+    });
+    const dailyReviewEligible = shouldTriggerDailyReview({
+      isSessionStart: context.isSessionStart,
+      localHour: zoned.hour,
+      riskLevel,
+      hasDailyReviewToday,
+    });
+    const weeklyCompassEligible = shouldTriggerWeeklyCompass({
+      isSessionStart: context.isSessionStart,
+      weekday: zoned.weekday,
+      localHour: zoned.hour,
+      weekStartKey,
+      weeklyNorthStarWeekStartDate: overlayUser.weeklyNorthStarWeekStartDate,
     });
 
     if (pendingFocusCapture && overlayUser.todayFocusDate !== dayKey) {
@@ -1702,6 +1903,30 @@ export async function POST(request: NextRequest) {
           overlayUser.todayFocus = parsed.focus;
         } else {
           overlayUser.todayFocus = null;
+        }
+      }
+    }
+
+    if (pendingDailyReviewCapture && overlayUser.lastDailyReviewDate !== dayKey) {
+      const parsed = extractDailyReviewSummary(sttResult.transcript);
+      if (parsed) {
+        pendingDailyReviewCapture = false;
+        overlayUser.lastDailyReviewDate = dayKey;
+        overlayUser.lastDailyReviewSummary = parsed.status === "set" ? parsed.summary : null;
+      }
+    }
+
+    if (pendingWeeklyCompassCapture && overlayUser.weeklyNorthStarWeekStartDate !== weekStartKey) {
+      const parsed = extractWeeklyCompass(sttResult.transcript);
+      if (parsed) {
+        pendingWeeklyCompassCapture = false;
+        overlayUser.weeklyNorthStarWeekStartDate = weekStartKey;
+        if (parsed.status === "set") {
+          overlayUser.weeklyNorthStar = parsed.weeklyNorthStar;
+          overlayUser.weeklyPriorities = parsed.weeklyPriorities.slice(0, 3);
+        } else {
+          overlayUser.weeklyNorthStar = null;
+          overlayUser.weeklyPriorities = [];
         }
       }
     }
@@ -1785,7 +2010,11 @@ export async function POST(request: NextRequest) {
         commitments: context.overlayContext?.commitments,
         overlayUsed,
         dailyFocusEligible,
+        dailyReviewEligible,
+        weeklyCompassEligible,
         hasTodayFocus: overlayUser.todayFocusDate === dayKey,
+        hasDailyReviewToday,
+        hasWeeklyCompass,
         conflictSignals: {
           pressure,
           riskLevel,
@@ -1819,6 +2048,14 @@ export async function POST(request: NextRequest) {
         pendingFocusCapture = true;
         overlayUser.lastDailyFocusAt = now.toISOString();
       }
+      if (overlayType === "daily_review") {
+        overlayUsed = { ...overlayUsed, dailyReview: true };
+        pendingDailyReviewCapture = true;
+      }
+      if (overlayType === "weekly_compass") {
+        overlayUsed = { ...overlayUsed, weeklyCompass: true };
+        pendingWeeklyCompassCapture = true;
+      }
     }
 
     let overlayBlock: string | null = null;
@@ -1835,6 +2072,8 @@ export async function POST(request: NextRequest) {
       pendingTopicKey,
       shortReplyStreak,
       pendingFocusCapture,
+      pendingDailyReviewCapture,
+      pendingWeeklyCompassCapture,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -1863,6 +2102,12 @@ export async function POST(request: NextRequest) {
 
     const messages = buildChatMessages({
       persona: context.persona,
+      productKernelBlock: PRODUCT_KERNEL_TRAJECTORY_BLOCK,
+      userProfileBlock: await loadUserProfileBlockIfEligible({
+        user: { clerkUserId: user.clerkUserId, email: user.email },
+        personaId,
+        personaSlug: persona.slug,
+      }),
       situationalContext,
       continuityBlock,
       overlayBlock,

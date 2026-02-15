@@ -140,6 +140,52 @@ async function main() {
     expect(decision.overlayType).toBe("none");
   });
 
+  await runTest("daily review triggers in evening session-start window", () => {
+    const decision = selectOverlay({
+      transcript: "end of day check in",
+      overlayUsed: {},
+      dailyReviewEligible: true,
+      hasDailyReviewToday: false,
+    });
+    expect(decision).toMatchObject({
+      overlayType: "daily_review",
+      triggerReason: "daily_review_evening",
+    });
+  });
+
+  await runTest("daily review does not retrigger same day", () => {
+    const decision = selectOverlay({
+      transcript: "end of day check in",
+      overlayUsed: {},
+      dailyReviewEligible: true,
+      hasDailyReviewToday: true,
+    });
+    expect(decision.overlayType).toBe("none");
+  });
+
+  await runTest("weekly compass triggers in weekly window when plan missing", () => {
+    const decision = selectOverlay({
+      transcript: "new week setup",
+      overlayUsed: {},
+      weeklyCompassEligible: true,
+      hasWeeklyCompass: false,
+    });
+    expect(decision).toMatchObject({
+      overlayType: "weekly_compass",
+      triggerReason: "weekly_compass_window",
+    });
+  });
+
+  await runTest("weekly compass does not retrigger within same week", () => {
+    const decision = selectOverlay({
+      transcript: "new week setup",
+      overlayUsed: {},
+      weeklyCompassEligible: true,
+      hasWeeklyCompass: true,
+    });
+    expect(decision.overlayType).toBe("none");
+  });
+
   await runTest("conflict regulation overrides curiosity on high-pressure relationship vent", () => {
     const decision = selectOverlay({
       transcript: "I argued with my girlfriend again and it turned into a huge fight",
