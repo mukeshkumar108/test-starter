@@ -71,7 +71,7 @@ async function testExplicitRecall() {
     { summary: "Cinnamon Pea Protein: 9/10 flavor, slightly chalky." },
   ];
 
-  let gateCalled = false;
+  let gateCallCount = 0;
   let specCalled = false;
   let relevanceCalled = false;
   let queryCalled = false;
@@ -84,7 +84,7 @@ async function testExplicitRecall() {
       const body = JSON.parse(String(init?.body ?? "{}"));
       const prompt = body?.messages?.[0]?.content ?? "";
       if (prompt.includes("Memory Gate")) {
-        gateCalled = true;
+        gateCallCount += 1;
         return new Response(
           JSON.stringify({
             choices: [
@@ -172,7 +172,7 @@ async function testExplicitRecall() {
     });
 
     const supplementalText = supplemental?.supplementalContext ?? null;
-    expect(gateCalled, "Expected gate to be called");
+    expect(gateCallCount === 1, `Expected exactly one gate call, got ${gateCallCount}`);
     expect(specCalled, "Expected spec to be called");
     expect(relevanceCalled, "Expected relevance check to be called");
     expect(queryCalled, "Expected memory query to be called");
@@ -374,6 +374,103 @@ async function testIrrelevantRejected() {
     );
   } finally {
     global.fetch = originalFetch;
+  }
+}
+
+async function testLibrarianBudgetGuardrailStillReturns() {
+  const transcript = "What did we decide about onboarding?";
+  const originalFetch = global.fetch;
+  const originalNow = Date.now;
+  let gateCallCount = 0;
+  let specCalled = false;
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate")) {
+        gateCallCount += 1;
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    action: "memory_query",
+                    confidence: 0.95,
+                    explicit: true,
+                    posture: "MOMENTUM",
+                    pressure: "MED",
+                    posture_confidence: 0.8,
+                    explicit_topic_shift: false,
+                    mood: "NEUTRAL",
+                    energy: "MED",
+                    tone: "SERIOUS",
+                    state_confidence: 0.7,
+                    explicit_state_shift: false,
+                    risk_level: "LOW",
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("Memory Query Specifier")) {
+        specCalled = true;
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    entities: ["onboarding"],
+                    topics: ["flow"],
+                    time_hint: null,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+    }
+    if (url.endsWith("/memory/query")) {
+      return new Response(JSON.stringify({ facts: [], entities: [] }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+  let fakeNow = 0;
+  Date.now = () => {
+    fakeNow += 3000;
+    return fakeNow;
+  };
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-guardrail",
+      userId: "user-guardrail",
+      personaId: "persona-guardrail",
+      sessionId: "session-guardrail",
+      transcript,
+      recentMessages: [{ role: "user", content: "Hi" }],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(Boolean(result), "Expected librarian result object");
+    const supplemental = result?.supplementalContext ?? null;
+    if (supplemental && !supplemental.startsWith("No matching memories found for")) {
+      throw new Error(`Expected no recall sheet under exhausted budget, got: ${supplemental}`);
+    }
+    expect(gateCallCount === 1, `Expected exactly one gate call, got ${gateCallCount}`);
+    expect(!specCalled, "Expected optional spec step to be skipped under tight budget");
+  } finally {
+    global.fetch = originalFetch;
+    Date.now = originalNow;
   }
 }
 
@@ -1068,6 +1165,7 @@ async function testUserStateResetsOnLongGapNewSession() {
 async function run() {
   await test("Explicit recall triggers query and injects supplemental context", testExplicitRecall);
   await test("Ambient mention requires high confidence", testAmbientRequiresHighConfidence);
+  await test("Librarian budget guardrail keeps single gate pass and returns", testLibrarianBudgetGuardrailStillReturns);
   await test("Irrelevant retrieval rejected by relevance check", testIrrelevantRejected);
   await test("No 'no memories' text for ambient recall", testNoNoMemoriesForAmbient);
   await test("Posture block present even when action=none", testPostureBlockPresentWhenActionNone);

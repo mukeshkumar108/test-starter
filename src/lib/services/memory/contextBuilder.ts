@@ -513,21 +513,19 @@ export async function buildContextFromSynapse(
   };
 
   if (env.FEATURE_LIBRARIAN_TRACE === "true") {
-    try {
-      await prisma.librarianTrace.create({
-        data: {
-          userId,
-          personaId,
-          sessionId: sessionId || null,
-          kind: "brief",
-          memoryQuery: selectedQuery ? { query: selectedQuery } : undefined,
-          brief,
-          supplementalContext: situationalWithFocus ?? null,
-        },
-      });
-    } catch (error) {
+    void prisma.librarianTrace.create({
+      data: {
+        userId,
+        personaId,
+        sessionId: sessionId || null,
+        kind: "brief",
+        memoryQuery: selectedQuery ? { query: selectedQuery } : undefined,
+        brief,
+        supplementalContext: situationalWithFocus ?? null,
+      },
+    }).catch((error) => {
       console.warn("[librarian.trace] failed to log brief", { error });
-    }
+    });
   }
 
   return {

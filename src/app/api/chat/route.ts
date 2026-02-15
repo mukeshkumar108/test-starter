@@ -31,6 +31,7 @@ interface ChatRequestBody {
 }
 
 const DEFAULT_LIBRARIAN_TIMEOUT_MS = 5000;
+const MIN_OPTIONAL_LIBRARIAN_STEP_MS = 300;
 const DEFAULT_POSTURE_RESET_GAP_MINUTES = 180;
 const DEFAULT_USER_STATE_RESET_GAP_MINUTES = 180;
 
@@ -217,9 +218,56 @@ type OverlayState = {
   user?: OverlayUserState;
 };
 
+type ChatTimingSpans = {
+  stt_ms: number;
+  context_ms: number;
+  librarian_ms: number;
+  overlay_ms: number;
+  llm_ms: number;
+  tts_ms: number;
+  db_write_ms: number;
+  total_ms: number;
+};
+
 const postureStateCache = new Map<string, PostureState>();
 const userStateCache = new Map<string, UserStateState>();
 const overlayStateCache = new Map<string, OverlayState>();
+
+function buildChatTrace(params: {
+  traceId: string;
+  requestId: string;
+  userId: string;
+  personaId: string;
+  sessionId: string;
+  chosenModel: string;
+  riskLevel: RiskLevel;
+  intent: OverlayIntent;
+  overlaySelected: OverlayType | "none";
+  overlaySkipReason: string | null;
+  counts: {
+    recentMessages: number;
+    situationalContext: number;
+    supplementalContext: number;
+    rollingSummary: number;
+  };
+  timings: ChatTimingSpans;
+}) {
+  return {
+    trace_id: params.traceId,
+    request_id: params.requestId,
+    userId: params.userId,
+    personaId: params.personaId,
+    sessionId: params.sessionId,
+    chosenModel: params.chosenModel,
+    risk_level: params.riskLevel,
+    intent: params.intent,
+    overlaySelected: params.overlaySelected,
+    overlaySkipReason: params.overlaySkipReason,
+    token_usage: null,
+    counts: params.counts,
+    timings: params.timings,
+  };
+}
 
 function normalizePosture(value?: string | null): ConversationPosture {
   if (value) {
@@ -1055,24 +1103,32 @@ async function runLibrarianReflex(params: {
   }
 
   if (shouldTrace) {
-    try {
-      await prisma.librarianTrace.create({
-        data: {
-          userId,
-          personaId,
-          sessionId,
-          requestId,
-          kind: "gate",
-          transcript,
-          bouncer: gateResult,
-        },
-      });
-    } catch (error) {
+    void prisma.librarianTrace.create({
+      data: {
+        userId,
+        personaId,
+        sessionId,
+        requestId,
+        kind: "gate",
+        transcript,
+        bouncer: gateResult,
+      },
+    }).catch((error) => {
       console.warn("[librarian.trace] failed to log gate", { error });
-    }
+    });
   }
 
   if (remaining() <= 0) {
+    return {
+      supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+      userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
+    };
+  }
+  if (remaining() < MIN_OPTIONAL_LIBRARIAN_STEP_MS) {
     return {
       supplementalContext: null,
       posture: postureResult.posture,
@@ -1113,6 +1169,16 @@ async function runLibrarianReflex(params: {
   if (remaining() <= 0) {
     return {
       supplementalContext: null,
+      posture: postureResult.posture,
+      pressure: postureResult.pressure,
+      userState: userStateResult,
+      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      ...gateSignals,
+    };
+  }
+  if (remaining() < MIN_OPTIONAL_LIBRARIAN_STEP_MS) {
+    return {
+      supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
@@ -1187,6 +1253,16 @@ async function runLibrarianReflex(params: {
         ...gateSignals,
       };
     }
+    if (remaining() < MIN_OPTIONAL_LIBRARIAN_STEP_MS) {
+      return {
+        supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
+        posture: postureResult.posture,
+        pressure: postureResult.pressure,
+        userState: userStateResult,
+        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        ...gateSignals,
+      };
+    }
     const relevance = await runRecallRelevanceCheck({
       query: sanitized,
       facts,
@@ -1207,24 +1283,22 @@ async function runLibrarianReflex(params: {
     const supplemental = buildRecallSheet({ query: sanitized, facts, entities });
 
     if (shouldTrace) {
-      try {
-        await prisma.librarianTrace.create({
-          data: {
-            userId,
-            personaId,
-            sessionId,
-            requestId,
-            kind: "librarian",
-            transcript,
-            bouncer: gateResult,
-            memoryQuery: { query: sanitized, limit: 10, spec, relevance },
-            memoryResponse: data,
-            supplementalContext: supplemental,
-          },
-        });
-      } catch (error) {
+      void prisma.librarianTrace.create({
+        data: {
+          userId,
+          personaId,
+          sessionId,
+          requestId,
+          kind: "librarian",
+          transcript,
+          bouncer: gateResult,
+          memoryQuery: { query: sanitized, limit: 10, spec, relevance },
+          memoryResponse: data,
+          supplementalContext: supplemental,
+        },
+      }).catch((error) => {
         console.warn("[librarian.trace] failed to log librarian", { error });
-      }
+      });
     }
 
     return {
@@ -1507,13 +1581,20 @@ export async function POST(request: NextRequest) {
     }
 
     // FAST PATH: STT → Context → LLM → TTS
-    let stt_ms = 0;
-    let llm_ms = 0; 
-    let tts_ms = 0;
+    const timings: ChatTimingSpans = {
+      stt_ms: 0,
+      context_ms: 0,
+      librarian_ms: 0,
+      overlay_ms: 0,
+      llm_ms: 0,
+      tts_ms: 0,
+      db_write_ms: 0,
+      total_ms: 0,
+    };
 
     // Step 1: Speech-to-Text
     const sttResult = await transcribeAudio(audioFile, preferredLanguage || undefined);
-    stt_ms = sttResult.duration_ms;
+    timings.stt_ms = sttResult.duration_ms;
 
     if (!sttResult.transcript || sttResult.transcript.trim().length < 2) {
       return NextResponse.json(
@@ -1527,7 +1608,9 @@ export async function POST(request: NextRequest) {
     const session = await ensureActiveSession(user.id, personaId, now);
 
     // Step 2: Build conversation context
+    const contextStart = Date.now();
     const context = await buildContext(user.id, personaId, sttResult.transcript);
+    timings.context_ms = Date.now() - contextStart;
 
     // Step 3: Generate LLM response
     const rollingSummary = context.rollingSummary ?? "";
@@ -1535,6 +1618,7 @@ export async function POST(request: NextRequest) {
     const shouldTraceLibrarian =
       env.FEATURE_LIBRARIAN_TRACE === "true" ||
       request.headers.get("x-debug-librarian") === "1";
+    const librarianStart = Date.now();
     const librarianResult = await runLibrarianReflex({
       requestId,
       userId: user.id,
@@ -1545,6 +1629,7 @@ export async function POST(request: NextRequest) {
       now,
       shouldTrace: shouldTraceLibrarian,
     });
+    timings.librarian_ms = Date.now() - librarianStart;
     const supplementalContext = librarianResult?.supplementalContext ?? null;
     const posture = librarianResult?.posture ?? DEFAULT_POSTURE;
     const pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
@@ -1563,6 +1648,7 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
     });
 
+    const overlayStart = Date.now();
     const overlayState = (await readOverlayState(user.id, personaId)) ?? {};
     let overlayUsed: OverlayUsed = overlayState.overlayUsed ?? {};
     let overlayTypeActive = overlayState.overlayTypeActive ?? null;
@@ -1754,27 +1840,26 @@ export async function POST(request: NextRequest) {
     });
 
     if (shouldTraceLibrarian) {
-      try {
-        await prisma.librarianTrace.create({
-          data: {
-            userId: user.id,
-            personaId,
-            sessionId: session.id,
-            kind: "overlay",
-            transcript: sttResult.transcript,
-            memoryQuery: {
-              overlayTriggered: overlayType,
-              triggerReason: overlayTriggerReason,
-              overlayTurnCount,
-              overlayExitReason,
-              topicKey: overlayTopicKey ?? null,
-            },
+      void prisma.librarianTrace.create({
+        data: {
+          userId: user.id,
+          personaId,
+          sessionId: session.id,
+          kind: "overlay",
+          transcript: sttResult.transcript,
+          memoryQuery: {
+            overlayTriggered: overlayType,
+            triggerReason: overlayTriggerReason,
+            overlayTurnCount,
+            overlayExitReason,
+            topicKey: overlayTopicKey ?? null,
           },
-        });
-      } catch (error) {
+        },
+      }).catch((error) => {
         console.warn("[librarian.trace] failed to log overlay", { error });
-      }
+      });
     }
+    timings.overlay_ms = Date.now() - overlayStart;
 
     const messages = buildChatMessages({
       persona: context.persona,
@@ -1815,27 +1900,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(
-      "[chat.trace]",
-      JSON.stringify({
-        trace_id: traceId,
-        userId: user.id,
-        personaId,
-        chosenModel: model,
-        risk_level: riskLevel,
-        intent: overlayIntent,
-        overlaySelected: overlayType,
-        overlaySkipReason,
-        token_usage: null,
-        counts: {
-          recentMessages: context.recentMessages.length,
-          situationalContext: situationalContext ? 1 : 0,
-          supplementalContext: supplementalContext ? 1 : 0,
-          rollingSummary: rollingSummary ? 1 : 0,
-        },
-      })
-    );
-
     const debugEnabled =
       env.FEATURE_CONTEXT_DEBUG === "true" &&
       request.headers.get("x-debug-context") === "1";
@@ -1853,16 +1917,15 @@ export async function POST(request: NextRequest) {
     }
 
     const llmResponse = await generateResponse(messages, persona.slug, model);
-    llm_ms = llmResponse.duration_ms;
+    timings.llm_ms = llmResponse.duration_ms;
 
     // Step 4: Text-to-Speech
     const ttsResult = await synthesizeSpeech(llmResponse.content, persona.ttsVoiceId);
-    tts_ms = ttsResult.duration_ms;
-
-    const total_ms = Date.now() - totalStartTime;
+    timings.tts_ms = ttsResult.duration_ms;
 
     // Step 5: Store message with timing metadata
-    await prisma.message.create({
+    const dbWriteStart = Date.now();
+    const userWrite = prisma.message.create({
       data: {
         userId: user.id,
         personaId,
@@ -1870,14 +1933,13 @@ export async function POST(request: NextRequest) {
         content: sttResult.transcript,
         metadata: {
           stt_confidence: sttResult.confidence,
-          stt_ms,
-          total_ms,
+          stt_ms: timings.stt_ms,
+          total_ms: Date.now() - totalStartTime,
           request_id: requestId,
         },
       },
     });
-
-    await prisma.message.create({
+    const assistantWrite = prisma.message.create({
       data: {
         userId: user.id,
         personaId,
@@ -1885,13 +1947,22 @@ export async function POST(request: NextRequest) {
         content: llmResponse.content,
         audioUrl: ttsResult.audioUrl,
         metadata: {
-          llm_ms,
-          tts_ms,
-          total_ms,
+          llm_ms: timings.llm_ms,
+          tts_ms: timings.tts_ms,
+          total_ms: Date.now() - totalStartTime,
           request_id: requestId,
         },
       },
     });
+    const writeResults = await Promise.allSettled([userWrite, assistantWrite]);
+    if (writeResults[0].status === "rejected") {
+      console.warn("[chat.db.write.user.failed]", { requestId, error: writeResults[0].reason });
+    }
+    if (writeResults[1].status === "rejected") {
+      console.warn("[chat.db.write.assistant.failed]", { requestId, error: writeResults[1].reason });
+    }
+    timings.db_write_ms = Date.now() - dbWriteStart;
+    timings.total_ms = Date.now() - totalStartTime;
 
     if (
       env.FEATURE_SYNAPSE_INGEST === "true" &&
@@ -1928,24 +1999,51 @@ export async function POST(request: NextRequest) {
       console.warn("[rolling.summary.err]", { userId: user.id, personaId, error });
     });
 
-    if (isEndOfSessionIntent(sttResult.transcript)) {
-      await closeSessionOnExplicitEnd(user.id, personaId, new Date());
-    }
+    const shouldCloseSession = isEndOfSessionIntent(sttResult.transcript);
+
+    const tracePayload = buildChatTrace({
+      traceId,
+      requestId,
+      userId: user.id,
+      personaId,
+      sessionId: session.id,
+      chosenModel: model,
+      riskLevel,
+      intent: overlayIntent,
+      overlaySelected: overlayType,
+      overlaySkipReason,
+      counts: {
+        recentMessages: context.recentMessages.length,
+        situationalContext: situationalContext ? 1 : 0,
+        supplementalContext: supplementalContext ? 1 : 0,
+        rollingSummary: rollingSummary ? 1 : 0,
+      },
+      timings,
+    });
+    console.log("[chat.trace]", JSON.stringify(tracePayload));
 
     // Return fast response
-    return NextResponse.json({
+    const payload = NextResponse.json({
       transcript: sttResult.transcript,
       response: llmResponse.content,
       audioUrl: ttsResult.audioUrl,
       timing: {
-        stt_ms,
-        llm_ms,
-        tts_ms,
-        total_ms,
+        stt_ms: timings.stt_ms,
+        llm_ms: timings.llm_ms,
+        tts_ms: timings.tts_ms,
+        total_ms: timings.total_ms,
       },
       requestId,
       ...(debugPayload ? { debug: debugPayload } : {}),
     });
+
+    if (shouldCloseSession) {
+      void closeSessionOnExplicitEnd(user.id, personaId, new Date()).catch((error) => {
+        console.warn("[session.close.err]", { userId: user.id, personaId, requestId, error });
+      });
+    }
+
+    return payload;
 
   } catch (error) {
     console.error("Chat API Error:", { requestId, traceId, error });
@@ -2044,6 +2142,7 @@ function runShadowJudgeIfEnabled(params: Parameters<typeof processShadowPath>[0]
 export const __test__runShadowJudgeIfEnabled = runShadowJudgeIfEnabled;
 export const __test__runLibrarianReflex = runLibrarianReflex;
 export const __test__buildChatMessages = buildChatMessages;
+export const __test__buildChatTrace = buildChatTrace;
 export const __test__shouldTriggerDailyFocus = shouldTriggerDailyFocus;
 export const __test__isMorningLocalWindow = isMorningLocalWindow;
 export const __test__extractTodayFocus = extractTodayFocus;
