@@ -7,6 +7,7 @@ const tests: TestDef[] = [
   { name: "synapseClient", command: [...nodeWithTsx, "src/lib/services/__tests__/synapseClient.test.ts"] },
   { name: "sessionSynapseIngest", command: [...nodeWithTsx, "src/lib/services/session/__tests__/sessionSynapseIngest.test.ts"] },
   { name: "chatSynapseIngest", command: [...nodeWithTsx, "src/app/api/__tests__/chat.synapse-ingest.test.ts"] },
+  { name: "chatTrace", command: [...nodeWithTsx, "src/app/api/__tests__/chat.trace.test.ts"] },
   { name: "entityNormalizer", command: [...nodeWithTsx, "src/lib/services/memory/__tests__/entityNormalizer.test.ts"] },
   { name: "queryRouterSynapse", command: [...nodeWithTsx, "src/lib/services/memory/__tests__/queryRouter.synapse.test.ts"] },
   { name: "contextBuilderSynapse", command: [...nodeWithTsx, "src/lib/services/memory/__tests__/contextBuilder.synapse.test.ts"] },
