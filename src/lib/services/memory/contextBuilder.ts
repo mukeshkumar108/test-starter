@@ -1,10 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { readFile } from "fs/promises";
-import { join } from "path";
 import { env } from "@/env";
 import * as synapseClient from "@/lib/services/synapseClient";
 import type { SynapseBriefResponse } from "@/lib/services/synapseClient";
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
+import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
 
 export interface ConversationContext {
   persona: string;
@@ -440,8 +439,10 @@ export async function buildContextFromSynapse(
     throw new Error("Persona not found");
   }
 
-  const promptPath = join(process.cwd(), persona.promptPath);
-  const personaPrompt = await readFile(promptPath, "utf-8");
+  const personaPrompt = await loadPersonaPrompt({
+    slug: (persona as { slug?: string | null }).slug ?? null,
+    promptPath: persona.promptPath,
+  });
 
   const messages = await prisma.message.findMany({
     where: { userId, personaId },
@@ -623,8 +624,10 @@ async function buildContextLocal(
       throw new Error("Persona not found");
     }
 
-    const promptPath = join(process.cwd(), persona.promptPath);
-    const personaPrompt = await readFile(promptPath, "utf-8");
+    const personaPrompt = await loadPersonaPrompt({
+      slug: (persona as { slug?: string | null }).slug ?? null,
+      promptPath: persona.promptPath,
+    });
 
     const messages = await prisma.message.findMany({
       where: { userId, personaId },
