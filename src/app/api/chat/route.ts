@@ -2161,6 +2161,9 @@ export async function POST(request: NextRequest) {
     const promptDebugEnabled =
       env.FEATURE_CONTEXT_DEBUG === "true" &&
       request.headers.get("x-debug-prompt") === "1";
+    const tracePromptPacket =
+      env.FEATURE_LIBRARIAN_TRACE === "true" ||
+      request.headers.get("x-debug-prompt") === "1";
 
     let debugPayload: Record<string, unknown> | undefined;
     if (debugEnabled) {
@@ -2183,6 +2186,35 @@ export async function POST(request: NextRequest) {
 
     const llmResponse = await generateResponse(messages, persona.slug, model);
     timings.llm_ms = llmResponse.duration_ms;
+
+    if (tracePromptPacket) {
+      void prisma.librarianTrace.create({
+        data: {
+          userId: user.id,
+          personaId,
+          sessionId: session.id,
+          requestId,
+          kind: "prompt_packet",
+          transcript: sttResult.transcript,
+          memoryQuery: {
+            chosenModel: model,
+            risk_level: riskLevel,
+            intent: overlayIntent,
+            overlaySelected: overlayType,
+            overlaySkipReason,
+            startbrief_used: Boolean(context.startBrief?.used),
+            startbrief_fallback: context.startBrief?.fallback ?? null,
+            startbrief_items_count: context.startBrief?.itemsCount ?? 0,
+            bridgeText_chars: context.startBrief?.bridgeTextChars ?? 0,
+          },
+          memoryResponse: {
+            messages,
+          },
+        },
+      }).catch((error) => {
+        console.warn("[librarian.trace] failed to log prompt_packet", { error });
+      });
+    }
 
     // Step 4: Text-to-Speech
     const ttsResult = await synthesizeSpeech(llmResponse.content, persona.ttsVoiceId);

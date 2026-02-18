@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
   const userId = searchParams.get("userId") || undefined;
   const personaId = searchParams.get("personaId") || undefined;
   const sessionId = searchParams.get("sessionId") || undefined;
+  const kind = searchParams.get("kind") || undefined;
   const includeText = searchParams.get("includeText") === "1";
   const limit = getLimit(searchParams);
   const since = getSince(searchParams);
@@ -43,6 +44,7 @@ export async function GET(request: NextRequest) {
       ...(userId ? { userId } : {}),
       ...(personaId ? { personaId } : {}),
       ...(sessionId ? { sessionId } : {}),
+      ...(kind ? { kind } : {}),
       ...(since ? { createdAt: { gte: since } } : {}),
     },
     orderBy: { createdAt: "desc" },
