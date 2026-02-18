@@ -1655,6 +1655,61 @@ function isUrgentOpener(text: string) {
   return urgentPhrases.some((phrase) => lowered.includes(phrase));
 }
 
+const PROFANITY_TOKENS = ["fuck", "fucking", "shit", "bullshit", "wtf"];
+
+function hasProfanityBurst(text: string) {
+  const lowered = text.toLowerCase();
+  let hits = 0;
+  for (const token of PROFANITY_TOKENS) {
+    if (lowered.includes(token)) hits += 1;
+  }
+  return hits >= 2;
+}
+
+function isExplicitAssistantCorrection(text: string) {
+  const lowered = text.toLowerCase();
+  const markers = [
+    "what are you talking about",
+    "what movie",
+    "not movie time",
+    "that's wrong",
+    "thats wrong",
+    "you're wrong",
+    "you are wrong",
+    "i didn't say",
+    "i did not say",
+    "stop making",
+    "making shit up",
+    "not what i said",
+  ];
+  return markers.some((marker) => lowered.includes(marker));
+}
+
+function hasCorrectionFrictionSignal(text: string) {
+  return isExplicitAssistantCorrection(text) || hasProfanityBurst(text);
+}
+
+async function clearStartBriefForSession(userId: string, personaId: string, sessionId: string) {
+  if (!sessionId) return;
+  if (process.env.NODE_ENV === "test") return;
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
+  const baseState =
+    existing?.state && typeof existing.state === "object" && !Array.isArray(existing.state)
+      ? { ...(existing.state as Record<string, unknown>) }
+      : {};
+  if (baseState.startBriefSessionId !== sessionId) return;
+  delete baseState.startBriefSessionId;
+  delete baseState.startBriefData;
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId, personaId } },
+    update: { state: baseState as any, updatedAt: new Date() },
+    create: { userId, personaId, state: baseState as any },
+  });
+}
+
 function buildContinuityBlock(params: { timeGapMinutes: number | null; transcript: string }) {
   const gapMinutes = params.timeGapMinutes ?? 0;
   if (gapMinutes < 60) return null;
@@ -1802,7 +1857,7 @@ export async function POST(request: NextRequest) {
 
     // Step 3: Generate LLM response
     const rollingSummary = context.rollingSummary ?? "";
-    const situationalContext = context.situationalContext ?? "";
+    let situationalContext = context.situationalContext ?? "";
     const shouldTraceLibrarian =
       env.FEATURE_LIBRARIAN_TRACE === "true" ||
       request.headers.get("x-debug-librarian") === "1";
@@ -1820,12 +1875,26 @@ export async function POST(request: NextRequest) {
     timings.librarian_ms = Date.now() - librarianStart;
     const supplementalContext = librarianResult?.supplementalContext ?? null;
     const posture = librarianResult?.posture ?? DEFAULT_POSTURE;
-    const pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
+    let pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
     const userState = librarianResult?.userState ?? null;
-    const riskLevel = librarianResult?.riskLevel ?? DEFAULT_RISK;
+    let riskLevel = librarianResult?.riskLevel ?? DEFAULT_RISK;
     const overlayIntent = librarianResult?.intent ?? DEFAULT_GATE_INTENT;
     const overlayIsUrgent = librarianResult?.isUrgent ?? false;
     const overlayIsDirectRequest = librarianResult?.isDirectRequest ?? false;
+    const correctionSignal = isExplicitAssistantCorrection(sttResult.transcript);
+    const frictionSignal = hasCorrectionFrictionSignal(sttResult.transcript);
+    if (frictionSignal) {
+      pressure = "HIGH";
+      if (riskLevel === "LOW") {
+        riskLevel = "MED";
+      }
+    }
+    if (correctionSignal && context.startBrief?.used) {
+      situationalContext = "";
+      void clearStartBriefForSession(user.id, personaId, session.id).catch((error) => {
+        console.warn("[startbrief.invalidate.err]", { userId: user.id, personaId, sessionId: session.id, error });
+      });
+    }
     const model = getChatModelForGate({
       personaId: persona.slug,
       gate: { risk_level: riskLevel },
@@ -1871,11 +1940,14 @@ export async function POST(request: NextRequest) {
     let overlayExitReason: "cap" | "dismiss" | "topicShift" | "helpRequest" | "lowEnergy" | "policy" | "none" =
       "none";
     let overlayTopicKey: string | undefined;
-    const overlayPolicy = shouldSkipOverlaySelection({
+    const baseOverlayPolicy = shouldSkipOverlaySelection({
       intent: overlayIntent,
       isUrgent: overlayIsUrgent,
       isDirectRequest: overlayIsDirectRequest,
     });
+    const overlayPolicy = frictionSignal
+      ? { skip: true as const, reason: "friction_correction" as const }
+      : baseOverlayPolicy;
     const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
     const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
     const hasDailyReviewToday = overlayUser.lastDailyReviewDate === dayKey;
