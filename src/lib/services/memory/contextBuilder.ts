@@ -24,6 +24,7 @@ const MAX_RECENT_MESSAGE_CHARS = 800;
 const BRIEF_CACHE_TTL_MS = 3 * 60 * 1000;
 const OVERLAY_CONTEXT_CAP = 3;
 const OVERLAY_ITEM_MAX_WORDS = 12;
+const ROLLING_SUMMARY_SESSION_KEY = "rollingSummarySessionId";
 const briefCache = new Map<
   string,
   { fetchedAt: number; brief: SynapseBriefResponse }
@@ -418,6 +419,23 @@ function getTrajectoryStateFromSession(state: unknown, now: Date, timeZone: stri
   return { todayFocus, weeklyNorthStar };
 }
 
+function asStateRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function getRollingSummaryForSession(
+  sessionState: { rollingSummary?: string | null; state?: unknown } | null | undefined,
+  sessionId: string
+) {
+  if (!sessionState?.rollingSummary) return undefined;
+  if (!sessionId) return undefined;
+  const scopedSessionId = asStateRecord(sessionState.state)[ROLLING_SUMMARY_SESSION_KEY];
+  if (typeof scopedSessionId !== "string" || !scopedSessionId.trim()) return undefined;
+  if (scopedSessionId !== sessionId) return undefined;
+  return sessionState.rollingSummary;
+}
+
 function getSynapseBrief() {
   const override = (globalThis as { __synapseBriefOverride?: typeof synapseClient.sessionBrief })
     .__synapseBriefOverride;
@@ -459,6 +477,7 @@ export async function buildContextFromSynapse(
     where: { userId_personaId: { userId, personaId } },
     select: { rollingSummary: true, state: true },
   });
+  const rollingSummary = getRollingSummaryForSession(sessionState, sessionId);
   const localTrajectory = getTrajectoryStateFromSession(sessionState?.state, new Date(), "Europe/Zagreb");
 
   const heuristic = heuristicQuery(transcript);
@@ -530,7 +549,7 @@ export async function buildContextFromSynapse(
     return {
       persona: personaPrompt,
       situationalContext: situationalWithTrajectory ?? undefined,
-      rollingSummary: sessionState?.rollingSummary ?? undefined,
+      rollingSummary,
       overlayContext,
       recentMessages: messages
         .map((message) => ({
@@ -599,7 +618,7 @@ export async function buildContextFromSynapse(
   return {
     persona: personaPrompt,
     situationalContext: situationalWithTrajectory ?? undefined,
-    rollingSummary: sessionState?.rollingSummary ?? undefined,
+    rollingSummary,
     overlayContext,
     recentMessages: messages
       .map((message) => ({
@@ -613,7 +632,9 @@ export async function buildContextFromSynapse(
 
 async function buildContextLocal(
   userId: string,
-  personaId: string
+  personaId: string,
+  sessionId?: string,
+  isSessionStartOverride?: boolean
 ): Promise<ConversationContext> {
   try {
     const persona = await prisma.personaProfile.findUnique({
@@ -642,15 +663,17 @@ async function buildContextLocal(
 
     const sessionState = await prisma.sessionState.findUnique({
       where: { userId_personaId: { userId, personaId } },
-      select: { rollingSummary: true },
+      select: { rollingSummary: true, state: true },
     });
 
-    const isSessionStart = messages.length === 0;
+    const isSessionStart =
+      typeof isSessionStartOverride === "boolean" ? isSessionStartOverride : messages.length === 0;
+    const rollingSummary = getRollingSummaryForSession(sessionState, sessionId ?? "");
 
     return {
       persona: personaPrompt,
       situationalContext: undefined,
-      rollingSummary: sessionState?.rollingSummary ?? undefined,
+      rollingSummary,
       overlayContext: undefined,
       recentMessages: messages
         .map((message) => ({
@@ -677,22 +700,22 @@ export async function buildContext(
   personaId: string,
   userMessage: string,
 ): Promise<ConversationContext> {
+  const session = await prisma.session.findFirst({
+    where: { userId, personaId, endedAt: null },
+    orderBy: { lastActivityAt: "desc" },
+    select: { id: true },
+  });
+  const lastMessage = await prisma.message.findFirst({
+    where: { userId, personaId },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  const isSessionStart = !lastMessage;
+  const sessionId = session?.id ?? "";
+
   const shouldUseSynapse = env.FEATURE_SYNAPSE_BRIEF === "true";
   if (shouldUseSynapse) {
     try {
-      const session = await prisma.session.findFirst({
-        where: { userId, personaId, endedAt: null },
-        orderBy: { lastActivityAt: "desc" },
-        select: { id: true },
-      });
-      const lastMessage = await prisma.message.findFirst({
-        where: { userId, personaId },
-        orderBy: { createdAt: "desc" },
-        select: { id: true },
-      });
-      const isSessionStart = !lastMessage;
-      const sessionId = session?.id ?? "";
-
       const synapseContext = await buildContextFromSynapse(
         userId,
         personaId,
@@ -709,5 +732,5 @@ export async function buildContext(
     }
   }
 
-  return getLocalBuilder()(userId, personaId);
+  return getLocalBuilder()(userId, personaId, sessionId, isSessionStart);
 }

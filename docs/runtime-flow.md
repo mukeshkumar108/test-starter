@@ -65,3 +65,5 @@ Order is fixed:
 - Synapse `/session/brief` is designed to be light‑weight and narrative.
 - CONTINUITY injects only when timeGapMinutes ≥ 60 and the opener is not urgent.
 - Session boundaries are based on **last user message**, not assistant activity.
+- SESSION FACTS is session-scoped: it is included only when the stored
+  `rollingSummarySessionId` equals the active `sessionId`.

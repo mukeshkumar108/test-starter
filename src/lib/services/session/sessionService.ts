@@ -6,6 +6,7 @@ import * as synapseClient from "@/lib/services/synapseClient";
 const DEFAULT_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
 const ROLLING_SUMMARY_TURN_INTERVAL = 4;
 const ROLLING_SUMMARY_RECENT_MESSAGES = 8;
+const ROLLING_SUMMARY_SESSION_KEY = "rollingSummarySessionId";
 
 function isRollingSummaryEnabled() {
   return env.FEATURE_ROLLING_SUMMARY !== "false";
@@ -21,6 +22,46 @@ function getActiveWindowMs() {
 
 function isSummaryEnabled() {
   return env.FEATURE_SESSION_SUMMARY === "true";
+}
+
+function asStateRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function withRollingSummarySessionId(state: unknown, sessionId: string) {
+  const base = asStateRecord(state);
+  return {
+    ...base,
+    [ROLLING_SUMMARY_SESSION_KEY]: sessionId,
+  };
+}
+
+function getRollingSummarySessionId(state: unknown) {
+  const value = asStateRecord(state)[ROLLING_SUMMARY_SESSION_KEY];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+async function resetRollingSummaryForSession(params: {
+  userId: string;
+  personaId: string;
+  sessionId: string;
+}) {
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    select: { state: true },
+  });
+  const nextState = withRollingSummarySessionId(existing?.state, params.sessionId);
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    update: { rollingSummary: null, state: nextState as any, updatedAt: new Date() },
+    create: {
+      userId: params.userId,
+      personaId: params.personaId,
+      rollingSummary: null,
+      state: nextState as any,
+    },
+  });
 }
 
 async function createSessionSummary(session: {
@@ -301,11 +342,7 @@ export async function ensureActiveSession(
         turnCount: 1,
       },
     });
-    await prisma.sessionState.upsert({
-      where: { userId_personaId: { userId, personaId } },
-      update: { rollingSummary: null, updatedAt: new Date() },
-      create: { userId, personaId, rollingSummary: null },
-    });
+    await resetRollingSummaryForSession({ userId, personaId, sessionId: session.id });
     return session;
   }
   const activeSession = await prisma.session.findFirst({
@@ -336,11 +373,7 @@ export async function ensureActiveSession(
       turnCount: 1,
     },
   });
-  await prisma.sessionState.upsert({
-    where: { userId_personaId: { userId, personaId } },
-    update: { rollingSummary: null, updatedAt: new Date() },
-    create: { userId, personaId, rollingSummary: null },
-  });
+  await resetRollingSummaryForSession({ userId, personaId, sessionId: session.id });
   return session;
 }
 
@@ -383,22 +416,28 @@ export async function maybeUpdateRollingSummary(params: {
 
   const previous = await prisma.sessionState.findUnique({
     where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
-    select: { rollingSummary: true },
+    select: { rollingSummary: true, state: true },
   });
+  const previousSummary =
+    getRollingSummarySessionId(previous?.state) === params.sessionId
+      ? previous?.rollingSummary ?? undefined
+      : undefined;
 
   const summary = await summarizeRollingSessionFromMessages({
     messages: olderMessages,
-    previousSummary: previous?.rollingSummary ?? undefined,
+    previousSummary,
   });
   if (!summary) return;
+  const nextState = withRollingSummarySessionId(previous?.state, params.sessionId);
 
   await prisma.sessionState.upsert({
     where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
-    update: { rollingSummary: summary, updatedAt: new Date() },
+    update: { rollingSummary: summary, state: nextState as any, updatedAt: new Date() },
     create: {
       userId: params.userId,
       personaId: params.personaId,
       rollingSummary: summary,
+      state: nextState as any,
     },
   });
 }

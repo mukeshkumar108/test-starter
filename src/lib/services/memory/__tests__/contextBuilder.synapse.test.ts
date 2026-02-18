@@ -251,6 +251,84 @@ async function main() {
   );
   });
 
+  await runTest("buildContextFromSynapse keeps rolling summary only for matching session", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-rolling-match.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => ({
+    rollingSummary: "same-session-summary",
+    state: {
+      rollingSummarySessionId: "session-match",
+    },
+  });
+  (globalThis as any).__synapseBriefOverride = async () => ({
+    facts: [],
+    openLoops: [],
+    commitments: [],
+    activeLoops: [],
+    timeGapDescription: "2 minutes",
+    timeOfDayLabel: "MORNING",
+    currentFocus: null,
+  });
+
+  const context = await buildContextFromSynapse(
+    "user-3",
+    "persona-3",
+    "hello",
+    "session-match",
+    true
+  );
+  delete (globalThis as any).__synapseBriefOverride;
+
+  expect(context?.rollingSummary ?? null).toBe("same-session-summary");
+  });
+
+  await runTest("buildContextFromSynapse drops rolling summary for different session", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-rolling-mismatch.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => ({
+    rollingSummary: "old-session-summary",
+    state: {
+      rollingSummarySessionId: "session-old",
+    },
+  });
+  (globalThis as any).__synapseBriefOverride = async () => ({
+    facts: [],
+    openLoops: [],
+    commitments: [],
+    activeLoops: [],
+    timeGapDescription: "2 minutes",
+    timeOfDayLabel: "MORNING",
+    currentFocus: null,
+  });
+
+  const context = await buildContextFromSynapse(
+    "user-4",
+    "persona-4",
+    "hello",
+    "session-new",
+    true
+  );
+  delete (globalThis as any).__synapseBriefOverride;
+
+  expect(context?.rollingSummary ?? null).toBe(null);
+  });
+
   const failed = results.filter((r) => !r.passed);
   if (failed.length > 0) {
     console.error("Test failures:");

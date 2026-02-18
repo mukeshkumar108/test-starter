@@ -2,8 +2,10 @@
 
 ## Working Memory (Local)
 - Last 6 turns in the active session
-- Optional rolling summary (cleared on new session start)
-- Lives only in Prisma, scoped to the session
+- Optional rolling session summary (older turns only)
+- `SessionState.rollingSummary` is used only when `SessionState.state.rollingSummarySessionId`
+  matches the active `sessionId`
+- New session start clears summary and stamps a new `rollingSummarySessionId`
 
 ## Session Model
 - A session is open until **5 minutes after the last user message** (configurable)
