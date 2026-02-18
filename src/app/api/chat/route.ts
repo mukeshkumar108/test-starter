@@ -262,6 +262,12 @@ function buildChatTrace(params: {
   intent: OverlayIntent;
   overlaySelected: OverlayType | "none";
   overlaySkipReason: string | null;
+  startbrief: {
+    used: boolean;
+    fallback: "session/brief" | null;
+    items_count: number;
+    bridgeText_chars: number;
+  };
   counts: {
     recentMessages: number;
     situationalContext: number;
@@ -281,6 +287,10 @@ function buildChatTrace(params: {
     intent: params.intent,
     overlaySelected: params.overlaySelected,
     overlaySkipReason: params.overlaySkipReason,
+    startbrief_used: params.startbrief.used,
+    startbrief_fallback: params.startbrief.fallback,
+    startbrief_items_count: params.startbrief.items_count,
+    bridgeText_chars: params.startbrief.bridgeText_chars,
     token_usage: null,
     counts: params.counts,
     timings: params.timings,
@@ -2148,6 +2158,9 @@ export async function POST(request: NextRequest) {
     const debugEnabled =
       env.FEATURE_CONTEXT_DEBUG === "true" &&
       request.headers.get("x-debug-context") === "1";
+    const promptDebugEnabled =
+      env.FEATURE_CONTEXT_DEBUG === "true" &&
+      request.headers.get("x-debug-prompt") === "1";
 
     let debugPayload: Record<string, unknown> | undefined;
     if (debugEnabled) {
@@ -2158,6 +2171,13 @@ export async function POST(request: NextRequest) {
           supplementalContext,
           rollingSummary,
         },
+        startBrief: context.startBrief ?? null,
+        composedPrompt: promptDebugEnabled
+          ? {
+              chosenModel: model,
+              messages,
+            }
+          : undefined,
       };
     }
 
@@ -2257,6 +2277,12 @@ export async function POST(request: NextRequest) {
       intent: overlayIntent,
       overlaySelected: overlayType,
       overlaySkipReason,
+      startbrief: {
+        used: Boolean(context.startBrief?.used),
+        fallback: context.startBrief?.fallback ?? null,
+        items_count: context.startBrief?.itemsCount ?? 0,
+        bridgeText_chars: context.startBrief?.bridgeTextChars ?? 0,
+      },
       counts: {
         recentMessages: context.recentMessages.length,
         situationalContext: situationalContext ? 1 : 0,

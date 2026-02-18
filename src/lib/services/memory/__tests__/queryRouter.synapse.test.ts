@@ -59,6 +59,10 @@ async function setupPersona() {
 
   const { prisma } = await import("../../../prisma");
   (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
   (prisma.message.findMany as any) = async () => [
     { role: "assistant", content: "Last reply", createdAt: new Date() },
   ];
@@ -87,7 +91,7 @@ async function main() {
       "persona-1",
       "remember what we decided",
       "session-1",
-      false
+      true
     );
 
     delete (globalThis as any).__queryRouterOverride;
@@ -118,7 +122,7 @@ async function main() {
       "persona-2",
       "my brother is stressing me out",
       "session-2",
-      false
+      true
     );
 
     delete (globalThis as any).__queryRouterOverride;
@@ -148,7 +152,7 @@ async function main() {
       "persona-3",
       "hello how are you",
       "session-3",
-      false
+      true
     );
 
     delete (globalThis as any).__queryRouterOverride;
@@ -178,7 +182,7 @@ async function main() {
       "persona-4",
       "my girlfriend Ashley in Guatemala has 3 kids",
       "session-4",
-      false
+      true
     );
 
     delete (globalThis as any).__queryRouterOverride;
@@ -211,7 +215,7 @@ async function main() {
       "persona-5",
       "my girlfriend Ashley in Guatemala has 3 kids",
       "session-5",
-      false
+      true
     );
 
     delete (globalThis as any).__queryRouterOverride;

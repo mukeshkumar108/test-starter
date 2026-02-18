@@ -19,6 +19,21 @@ export type SynapseBriefResponse = {
   currentFocus?: string | null;
 };
 
+export type SynapseStartBriefResponse = {
+  timeOfDayLabel?: string | null;
+  timeGapHuman?: string | null;
+  bridgeText?: string | null;
+  items?: Array<{
+    kind?: string | null;
+    text?: string | null;
+    type?: string | null;
+    timeHorizon?: string | null;
+    dueDate?: string | null;
+    salience?: number | null;
+    lastSeenAt?: string | null;
+  }> | null;
+};
+
 const DEFAULT_TIMEOUT_MS = 3000;
 
 function resolveTimeoutMs() {
@@ -135,6 +150,23 @@ export async function sessionBrief<TPayload = unknown, TResponse = unknown>(
     }
   }
   const path = `/session/brief${params.toString() ? `?${params.toString()}` : ""}`;
+  const result = await requestJson<undefined, TResponse>("GET", path);
+  if (!result?.ok) return null;
+  return result.data;
+}
+
+export async function sessionStartBrief<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const params = new URLSearchParams();
+  const asRecord = (payload ?? {}) as Record<string, unknown>;
+  for (const key of ["tenantId", "userId", "personaId", "sessionId", "timezone", "now"]) {
+    const value = asRecord[key];
+    if (typeof value === "string" && value.length > 0) {
+      params.set(key, value);
+    }
+  }
+  const path = `/session/startbrief${params.toString() ? `?${params.toString()}` : ""}`;
   const result = await requestJson<undefined, TResponse>("GET", path);
   if (!result?.ok) return null;
   return result.data;

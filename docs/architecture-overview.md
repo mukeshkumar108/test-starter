@@ -20,7 +20,8 @@ The system optimizes for continuity without bloating every request.
 ### 2) Session Boundary (Bookends)
 - A session ends when **last user message > 5 minutes** (configurable)
 - On close, we send the full transcript to Synapse `/session/ingest`
-- On start, we pull Synapse `/session/brief`
+- On start, we pull Synapse `/session/startbrief` (cached per session)
+- `/session/brief` is fallback-only
 
 ### 3) Long‑Term Memory (Synapse / Graphiti)
 - Episodic + semantic memory built from entire sessions

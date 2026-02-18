@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
 import * as synapseClient from "@/lib/services/synapseClient";
-import type { SynapseBriefResponse } from "@/lib/services/synapseClient";
+import type { SynapseBriefResponse, SynapseStartBriefResponse } from "@/lib/services/synapseClient";
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
 
@@ -9,6 +9,12 @@ export interface ConversationContext {
   persona: string;
   situationalContext?: string;
   rollingSummary?: string;
+  startBrief?: {
+    used: boolean;
+    fallback: "session/brief" | null;
+    itemsCount: number;
+    bridgeTextChars: number;
+  };
   overlayContext?: {
     openLoops?: string[];
     commitments?: string[];
@@ -25,10 +31,14 @@ const BRIEF_CACHE_TTL_MS = 3 * 60 * 1000;
 const OVERLAY_CONTEXT_CAP = 3;
 const OVERLAY_ITEM_MAX_WORDS = 12;
 const ROLLING_SUMMARY_SESSION_KEY = "rollingSummarySessionId";
+const START_BRIEF_SESSION_KEY = "startBriefSessionId";
+const START_BRIEF_DATA_KEY = "startBriefData";
 const briefCache = new Map<
   string,
   { fetchedAt: number; brief: SynapseBriefResponse }
 >();
+
+type SessionWindow = { startedAt: Date; endedAt: Date | null };
 
 function limitWords(input: string, maxWords: number) {
   return input.trim().split(/\s+/).slice(0, maxWords).join(" ");
@@ -54,6 +64,47 @@ function getQueryRouter() {
   const override = (globalThis as { __queryRouterOverride?: typeof queryRouter })
     .__queryRouterOverride;
   return typeof override === "function" ? override : queryRouter;
+}
+
+function buildSessionWindowWhere(window?: SessionWindow | null) {
+  if (!window) return {};
+  return {
+    createdAt: {
+      gte: window.startedAt,
+      ...(window.endedAt ? { lte: window.endedAt } : {}),
+    },
+  };
+}
+
+async function getSessionWindow(sessionId: string): Promise<SessionWindow | null> {
+  if (!sessionId) return null;
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    select: { startedAt: true, endedAt: true },
+  });
+  if (!session) return null;
+  return {
+    startedAt: session.startedAt,
+    endedAt: session.endedAt,
+  };
+}
+
+async function getRecentSessionMessages(userId: string, personaId: string, sessionId: string) {
+  const window = await getSessionWindow(sessionId);
+  return prisma.message.findMany({
+    where: {
+      userId,
+      personaId,
+      ...buildSessionWindowWhere(window),
+    },
+    orderBy: { createdAt: "desc" },
+    take: 8,
+    select: {
+      role: true,
+      content: true,
+      createdAt: true,
+    },
+  });
 }
 
 function getLastAssistantTurn(
@@ -348,6 +399,86 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
   return uniqueParts.length > 0 ? uniqueParts.join("\n") : null;
 }
 
+function buildSessionStartContext(
+  brief: SynapseStartBriefResponse,
+  trajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null
+) {
+  const lines: string[] = [];
+  const timeLabel = typeof brief.timeOfDayLabel === "string" ? brief.timeOfDayLabel.trim() : "";
+  const timeGap = typeof brief.timeGapHuman === "string" ? brief.timeGapHuman.trim() : "";
+  const timeLineParts: string[] = [];
+  if (timeLabel) timeLineParts.push(timeLabel);
+  if (timeGap) timeLineParts.push(timeGap);
+  if (timeLineParts.length > 0) {
+    lines.push(`Session start context: ${timeLineParts.join(" • ")}.`);
+  }
+
+  const bridgeText = typeof brief.bridgeText === "string" ? brief.bridgeText.trim() : "";
+  if (bridgeText) lines.push(bridgeText);
+
+  const items = Array.isArray(brief.items) ? brief.items : [];
+  const loops = items
+    .filter((item) => (item?.kind ?? "").toLowerCase() === "loop")
+    .map((item) => (typeof item?.text === "string" ? item.text.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 3);
+  if (loops.length > 0) {
+    lines.push(`Active threads: ${loops.join(" | ")}`);
+  }
+
+  const tensions = items
+    .filter((item) => (item?.kind ?? "").toLowerCase() === "tension")
+    .map((item) => (typeof item?.text === "string" ? item.text.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 2);
+  if (tensions.length > 0) {
+    lines.push(`Durable tensions: ${tensions.join(" | ")}`);
+  }
+
+  const focus = trajectory?.todayFocus?.trim();
+  if (focus) {
+    lines.push(`CURRENT_FOCUS:\n- ${focus}`);
+  }
+  const weekly = trajectory?.weeklyNorthStar?.trim();
+  if (weekly) {
+    lines.push(`WEEKLY_NORTH_STAR:\n- ${weekly}`);
+  }
+
+  const compact = lines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  return compact.length > 0 ? compact.join("\n") : null;
+}
+
+function getOverlayContextFromStartBrief(
+  brief: SynapseStartBriefResponse,
+  recentMessages: Array<{ content: string }>,
+  trajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null
+) {
+  const items = Array.isArray(brief.items) ? brief.items : [];
+  const loopItems = items
+    .filter((item) => (item?.kind ?? "").toLowerCase() === "loop")
+    .map((item) => (typeof item?.text === "string" ? item.text.trim() : null))
+    .filter((item): item is string => Boolean(item));
+  const commitmentItems = items
+    .filter(
+      (item) =>
+        (item?.kind ?? "").toLowerCase() === "loop" &&
+        typeof item?.type === "string" &&
+        item.type.toLowerCase().includes("commit")
+    )
+    .map((item) => (typeof item?.text === "string" ? item.text.trim() : null))
+    .filter((item): item is string => Boolean(item));
+
+  return {
+    openLoops: buildOverlayItems(loopItems, recentMessages),
+    commitments: buildOverlayItems(commitmentItems, recentMessages),
+    currentFocus: trajectory?.todayFocus ?? undefined,
+    weeklyNorthStar: trajectory?.weeklyNorthStar ?? undefined,
+  };
+}
+
 function getZonedParts(now: Date, timeZone: string) {
   const formatter = new Intl.DateTimeFormat("en-GB", {
     timeZone,
@@ -436,10 +567,38 @@ function getRollingSummaryForSession(
   return sessionState.rollingSummary;
 }
 
+function getStartBriefForSession(state: unknown, sessionId: string) {
+  if (!sessionId) return null;
+  const scoped = asStateRecord(state)[START_BRIEF_SESSION_KEY];
+  if (typeof scoped !== "string" || scoped !== sessionId) return null;
+  const raw = asStateRecord(state)[START_BRIEF_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw as SynapseStartBriefResponse;
+}
+
+function withStartBriefForSession(
+  state: unknown,
+  sessionId: string,
+  brief: SynapseStartBriefResponse
+) {
+  const base = asStateRecord(state);
+  return {
+    ...base,
+    [START_BRIEF_SESSION_KEY]: sessionId,
+    [START_BRIEF_DATA_KEY]: brief,
+  };
+}
+
 function getSynapseBrief() {
   const override = (globalThis as { __synapseBriefOverride?: typeof synapseClient.sessionBrief })
     .__synapseBriefOverride;
   return typeof override === "function" ? override : synapseClient.sessionBrief;
+}
+
+function getSynapseStartBrief() {
+  const override = (globalThis as { __synapseStartBriefOverride?: typeof synapseClient.sessionStartBrief })
+    .__synapseStartBriefOverride;
+  return typeof override === "function" ? override : synapseClient.sessionStartBrief;
 }
 
 export async function buildContextFromSynapse(
@@ -462,16 +621,7 @@ export async function buildContextFromSynapse(
     promptPath: persona.promptPath,
   });
 
-  const messages = await prisma.message.findMany({
-    where: { userId, personaId },
-    orderBy: { createdAt: "desc" },
-    take: 8,
-    select: {
-      role: true,
-      content: true,
-      createdAt: true,
-    },
-  });
+  const messages = await getRecentSessionMessages(userId, personaId, sessionId);
 
   const sessionState = await prisma.sessionState.findUnique({
     where: { userId_personaId: { userId, personaId } },
@@ -479,6 +629,123 @@ export async function buildContextFromSynapse(
   });
   const rollingSummary = getRollingSummaryForSession(sessionState, sessionId);
   const localTrajectory = getTrajectoryStateFromSession(sessionState?.state, new Date(), "Europe/Zagreb");
+  const cachedStartBrief = getStartBriefForSession(sessionState?.state, sessionId);
+
+  if (cachedStartBrief) {
+    const cachedItemsCount = Array.isArray(cachedStartBrief.items) ? cachedStartBrief.items.length : 0;
+    const cachedBridgeTextChars =
+      typeof cachedStartBrief.bridgeText === "string" ? cachedStartBrief.bridgeText.trim().length : 0;
+    if (env.FEATURE_LIBRARIAN_TRACE === "true") {
+      void prisma.librarianTrace.create({
+        data: {
+          userId,
+          personaId,
+          sessionId: sessionId || null,
+          kind: "startbrief",
+          transcript,
+          memoryQuery: {
+            startbrief_used: true,
+            startbrief_fallback: null,
+            startbrief_items_count: cachedItemsCount,
+            bridgeText_chars: cachedBridgeTextChars,
+            source: "session_cache",
+          },
+          brief: cachedStartBrief as any,
+        },
+      }).catch((error) => {
+        console.warn("[librarian.trace] failed to log startbrief(cache)", { error });
+      });
+    }
+    return {
+      persona: personaPrompt,
+      situationalContext: buildSessionStartContext(cachedStartBrief, localTrajectory) ?? undefined,
+      rollingSummary,
+      startBrief: {
+        used: true,
+        fallback: null,
+        itemsCount: cachedItemsCount,
+        bridgeTextChars: cachedBridgeTextChars,
+      },
+      overlayContext: getOverlayContextFromStartBrief(cachedStartBrief, messages, localTrajectory),
+      recentMessages: messages
+        .map((message) => ({
+          ...message,
+          content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+        }))
+        .reverse(),
+      isSessionStart,
+    };
+  }
+
+  if (isSessionStart) {
+    const startBrief = await getSynapseStartBrief()<{
+      tenantId?: string;
+      userId: string;
+      personaId: string;
+      sessionId: string;
+      timezone?: string;
+      now: string;
+    }, SynapseStartBriefResponse>({
+      tenantId: env.SYNAPSE_TENANT_ID,
+      userId,
+      personaId,
+      sessionId,
+      timezone: "Europe/Zagreb",
+      now: new Date().toISOString(),
+    });
+
+    if (startBrief) {
+      const nextState = withStartBriefForSession(sessionState?.state, sessionId, startBrief);
+      await prisma.sessionState.upsert({
+        where: { userId_personaId: { userId, personaId } },
+        update: { state: nextState as any, updatedAt: new Date() },
+        create: { userId, personaId, state: nextState as any },
+      });
+      const startItemsCount = Array.isArray(startBrief.items) ? startBrief.items.length : 0;
+      const startBridgeTextChars =
+        typeof startBrief.bridgeText === "string" ? startBrief.bridgeText.trim().length : 0;
+      if (env.FEATURE_LIBRARIAN_TRACE === "true") {
+        void prisma.librarianTrace.create({
+          data: {
+            userId,
+            personaId,
+            sessionId: sessionId || null,
+            kind: "startbrief",
+            transcript,
+            memoryQuery: {
+              startbrief_used: true,
+              startbrief_fallback: null,
+              startbrief_items_count: startItemsCount,
+              bridgeText_chars: startBridgeTextChars,
+              source: "synapse_startbrief",
+            },
+            brief: startBrief as any,
+          },
+        }).catch((error) => {
+          console.warn("[librarian.trace] failed to log startbrief(fetch)", { error });
+        });
+      }
+      return {
+        persona: personaPrompt,
+        situationalContext: buildSessionStartContext(startBrief, localTrajectory) ?? undefined,
+        rollingSummary,
+        startBrief: {
+          used: true,
+          fallback: null,
+          itemsCount: startItemsCount,
+          bridgeTextChars: startBridgeTextChars,
+        },
+        overlayContext: getOverlayContextFromStartBrief(startBrief, messages, localTrajectory),
+        recentMessages: messages
+          .map((message) => ({
+            ...message,
+            content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+          }))
+          .reverse(),
+        isSessionStart,
+      };
+    }
+  }
 
   const heuristic = heuristicQuery(transcript);
   let selectedQuery = heuristic;
@@ -524,6 +791,33 @@ export async function buildContextFromSynapse(
     }
   }
 
+  if (!isSessionStart) {
+    return {
+      persona: personaPrompt,
+      situationalContext: undefined,
+      rollingSummary,
+      startBrief: {
+        used: false,
+        fallback: null,
+        itemsCount: 0,
+        bridgeTextChars: 0,
+      },
+      overlayContext: {
+        openLoops: [],
+        commitments: [],
+        currentFocus: localTrajectory?.todayFocus ?? undefined,
+        weeklyNorthStar: localTrajectory?.weeklyNorthStar ?? undefined,
+      },
+      recentMessages: messages
+        .map((message) => ({
+          ...message,
+          content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+        }))
+        .reverse(),
+      isSessionStart,
+    };
+  }
+
   const cacheKey = `${userId}:${personaId}:${sessionId}`;
   const cached = briefCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < BRIEF_CACHE_TTL_MS) {
@@ -546,10 +840,36 @@ export async function buildContextFromSynapse(
       currentFocus: effectiveFocus,
       weeklyNorthStar: effectiveWeeklyNorthStar,
     };
+    if (env.FEATURE_LIBRARIAN_TRACE === "true") {
+      void prisma.librarianTrace.create({
+        data: {
+          userId,
+          personaId,
+          sessionId: sessionId || null,
+          kind: "startbrief",
+          transcript,
+          memoryQuery: {
+            startbrief_used: false,
+            startbrief_fallback: "session/brief",
+            startbrief_items_count: 0,
+            bridgeText_chars: 0,
+            source: "session_brief_cache",
+          },
+        },
+      }).catch((error) => {
+        console.warn("[librarian.trace] failed to log startbrief(fallback-cache)", { error });
+      });
+    }
     return {
       persona: personaPrompt,
       situationalContext: situationalWithTrajectory ?? undefined,
       rollingSummary,
+      startBrief: {
+        used: false,
+        fallback: "session/brief",
+        itemsCount: 0,
+        bridgeTextChars: 0,
+      },
       overlayContext,
       recentMessages: messages
         .map((message) => ({
@@ -605,6 +925,24 @@ export async function buildContextFromSynapse(
         userId,
         personaId,
         sessionId: sessionId || null,
+        kind: "startbrief",
+        transcript,
+        memoryQuery: {
+          startbrief_used: false,
+          startbrief_fallback: "session/brief",
+          startbrief_items_count: 0,
+          bridgeText_chars: 0,
+          source: "session_brief_fetch",
+        },
+      },
+    }).catch((error) => {
+      console.warn("[librarian.trace] failed to log startbrief(fallback-fetch)", { error });
+    });
+    void prisma.librarianTrace.create({
+      data: {
+        userId,
+        personaId,
+        sessionId: sessionId || null,
         kind: "brief",
         memoryQuery: selectedQuery ? { query: selectedQuery } : undefined,
         brief,
@@ -619,6 +957,12 @@ export async function buildContextFromSynapse(
     persona: personaPrompt,
     situationalContext: situationalWithTrajectory ?? undefined,
     rollingSummary,
+    startBrief: {
+      used: false,
+      fallback: "session/brief",
+      itemsCount: 0,
+      bridgeTextChars: 0,
+    },
     overlayContext,
     recentMessages: messages
       .map((message) => ({
@@ -650,16 +994,7 @@ async function buildContextLocal(
       promptPath: persona.promptPath,
     });
 
-    const messages = await prisma.message.findMany({
-      where: { userId, personaId },
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      select: {
-        role: true,
-        content: true,
-        createdAt: true,
-      },
-    });
+    const messages = await getRecentSessionMessages(userId, personaId, sessionId ?? "");
 
     const sessionState = await prisma.sessionState.findUnique({
       where: { userId_personaId: { userId, personaId } },
@@ -674,6 +1009,12 @@ async function buildContextLocal(
       persona: personaPrompt,
       situationalContext: undefined,
       rollingSummary,
+      startBrief: {
+        used: false,
+        fallback: null,
+        itemsCount: 0,
+        bridgeTextChars: 0,
+      },
       overlayContext: undefined,
       recentMessages: messages
         .map((message) => ({
@@ -705,12 +1046,18 @@ export async function buildContext(
     orderBy: { lastActivityAt: "desc" },
     select: { id: true },
   });
-  const lastMessage = await prisma.message.findFirst({
-    where: { userId, personaId },
-    orderBy: { createdAt: "desc" },
-    select: { id: true },
-  });
-  const isSessionStart = !lastMessage;
+  const sessionWindow = session?.id ? await getSessionWindow(session.id) : null;
+  const firstSessionMessage = sessionWindow
+    ? await prisma.message.findFirst({
+        where: {
+          userId,
+          personaId,
+          ...buildSessionWindowWhere(sessionWindow),
+        },
+        select: { id: true },
+      })
+    : null;
+  const isSessionStart = !firstSessionMessage;
   const sessionId = session?.id ?? "";
 
   const shouldUseSynapse = env.FEATURE_SYNAPSE_BRIEF === "true";

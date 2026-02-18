@@ -53,6 +53,12 @@ async function main() {
       intent: "companion",
       overlaySelected: "none",
       overlaySkipReason: null,
+      startbrief: {
+        used: true,
+        fallback: null,
+        items_count: 3,
+        bridgeText_chars: 128,
+      },
       counts: {
         recentMessages: 2,
         situationalContext: 1,
@@ -76,6 +82,8 @@ async function main() {
     expect(trace.timings.context_ms).toBe(50);
     expect(trace.request_id).toBe("req-1");
     expect(trace.overlaySkipReason).toBe(null);
+    expect(trace.startbrief_used).toBe(true);
+    expect(trace.startbrief_items_count).toBe(3);
   });
 
   const failed = results.filter((result) => !result.passed);

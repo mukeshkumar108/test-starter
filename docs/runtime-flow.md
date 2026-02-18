@@ -19,8 +19,9 @@ Two paths run in parallel:
    - Start or continue active session
 6. **Context build** (`contextBuilder.ts`)
    - Persona prompt
-   - Last 8 messages
-   - Synapse `/session/brief` if enabled
+   - Last 8 messages from the active session only
+   - On session start: Synapse `/session/startbrief` (cached per session)
+   - Fallback: Synapse `/session/brief` if startbrief unavailable
 7. **Librarian Reflex** (optional)
    - Gate decides if memory query is needed (explicit vs ambient)
    - Spec extracts entities/topics/time intent
@@ -62,8 +63,20 @@ Order is fixed:
 ---
 
 ## Notes
-- Synapse `/session/brief` is designed to be light‑weight and narrative.
+- Synapse `/session/startbrief` is the primary session-start continuity source.
+- `/session/brief` is a fallback path.
 - CONTINUITY injects only when timeGapMinutes ≥ 60 and the opener is not urgent.
 - Session boundaries are based on **last user message**, not assistant activity.
 - SESSION FACTS is session-scoped: it is included only when the stored
   `rollingSummarySessionId` equals the active `sessionId`.
+- Recent messages are session-scoped: no carryover from previous session.
+
+## Debug & Trace
+- `[chat.trace]` includes:
+  - `startbrief_used`
+  - `startbrief_fallback`
+  - `startbrief_items_count`
+  - `bridgeText_chars`
+- Debug headers:
+  - `x-debug-context: 1` with `FEATURE_CONTEXT_DEBUG=true` adds context debug blocks.
+  - `x-debug-prompt: 1` additionally includes the fully composed prompt packet (`model + messages`).

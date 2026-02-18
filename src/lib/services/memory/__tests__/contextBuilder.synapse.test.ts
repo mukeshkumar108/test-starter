@@ -59,7 +59,7 @@ function expect<T>(actual: T) {
 }
 
 async function main() {
-  await runTest("buildContextFromSynapse maps brief payload", async () => {
+  await runTest("buildContextFromSynapse maps startbrief payload", async () => {
   const { prisma } = await import("../../../prisma");
   const { buildContextFromSynapse } = await import("../contextBuilder");
 
@@ -71,6 +71,10 @@ async function main() {
   (prisma.personaProfile.findUnique as any) = async () => ({
     promptPath,
   });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
   (prisma.message.findMany as any) = async () => [
     {
       role: "user",
@@ -80,25 +84,19 @@ async function main() {
     { role: "assistant", content: "Noted.", createdAt: new Date() },
   ];
   (prisma.sessionState.findUnique as any) = async () => null;
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-1" });
 
-  (globalThis as any).__synapseBriefOverride = async () => ({
-    facts: ["User is preparing a proposal.", "User is blocked on revisions."],
-    openLoops: [
-      "Finish proposal",
-      "Reply to Jordan about security questionnaire before lunch",
-      "Plan the Q3 roadmap alignment with design, product, and growth stakeholders",
-      "This should be dropped after cap",
-    ],
-    commitments: [
-      "Send proposal draft to legal team for review before noon tomorrow",
-      "Prepare meeting notes for cross functional standup and sync",
-      "Ask Maya for budget approval and attach latest spreadsheet revisions",
-      "Drop me due to cap",
-    ],
-    activeLoops: ["Finish proposal", "Gets stuck on revisions"],
-    timeGapDescription: "12 minutes since last spoke",
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
     timeOfDayLabel: "AFTERNOON",
-    currentFocus: "Finish proposal draft",
+    timeGapHuman: "12 minutes since last session",
+    bridgeText: "Last session: you were preparing the proposal and blocked on revisions.",
+    items: [
+      { kind: "loop", text: "Reply to Jordan about security questionnaire before lunch", type: "OPEN_LOOP" },
+      { kind: "loop", text: "Finish proposal draft and send to legal", type: "COMMITMENT" },
+      { kind: "loop", text: "Plan Q3 roadmap alignment with design and product", type: "OPEN_LOOP" },
+      { kind: "loop", text: "This should be dropped after cap", type: "OPEN_LOOP" },
+      { kind: "tension", text: "Pressure between speed and quality in revisions", type: "TENSION" },
+    ],
   });
 
   const context = await buildContextFromSynapse(
@@ -106,10 +104,10 @@ async function main() {
     "persona-1",
     "Remember my name",
     "session-1",
-    false
+    true
   );
 
-  delete (globalThis as any).__synapseBriefOverride;
+  delete (globalThis as any).__synapseStartBriefOverride;
 
   if (!context) throw new Error("Expected context, got null");
 
@@ -117,22 +115,16 @@ async function main() {
   if (!context.situationalContext) {
     throw new Error("Expected situationalContext to be set");
   }
-  if (!context.situationalContext.includes("FACTS:")) {
-    throw new Error("Expected FACTS in situationalContext");
+  if (!context.situationalContext.includes("Session start context: AFTERNOON")) {
+    throw new Error("Expected session start time line in situationalContext");
   }
-  if (!context.situationalContext.includes("Time Gap: 12 minutes since last spoke")) {
-    throw new Error("Expected time gap in situationalContext");
-  }
-  if (!context.situationalContext.includes("Time: AFTERNOON")) {
-    throw new Error("Expected time label in situationalContext");
-  }
-  if (!context.situationalContext.includes("CURRENT_FOCUS:")) {
-    throw new Error("Expected CURRENT_FOCUS in situationalContext");
+  if (!context.situationalContext.includes("Last session: you were preparing the proposal")) {
+    throw new Error("Expected bridge text in situationalContext");
   }
   const openLoops = context.overlayContext?.openLoops ?? [];
   const commitments = context.overlayContext?.commitments ?? [];
   expect(openLoops.length).toBe(3);
-  expect(commitments.length).toBe(3);
+  expect(commitments.length).toBe(1);
   expect(openLoops[0]).toBe("Reply to Jordan about security questionnaire before lunch");
   for (const item of [...openLoops, ...commitments]) {
     const words = item.split(/\s+/).filter(Boolean).length;
@@ -148,9 +140,15 @@ async function main() {
   const { buildContext } = await import("../contextBuilder");
 
   (prisma.session.findFirst as any) = async () => ({ id: "session-2" });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
   (prisma.message.findFirst as any) = async () => null;
   (prisma.sessionState.findUnique as any) = async () => null;
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-2" });
 
+  (globalThis as any).__synapseStartBriefOverride = async () => null;
   (globalThis as any).__synapseBriefOverride = async () => null;
   const sentinel = {
     persona: "LOCAL",
@@ -163,6 +161,7 @@ async function main() {
 
   const context = await buildContext("user-1", "persona-1", "hello");
 
+  delete (globalThis as any).__synapseStartBriefOverride;
   delete (globalThis as any).__synapseBriefOverride;
   delete (globalThis as any).__buildContextLocalOverride;
 
@@ -205,6 +204,10 @@ async function main() {
   const weekStartKey = `${utcMidnight.getUTCFullYear()}-${String(utcMidnight.getUTCMonth() + 1).padStart(2, "0")}-${String(utcMidnight.getUTCDate()).padStart(2, "0")}`;
 
   (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
   (prisma.message.findMany as any) = async () => [{ role: "user", content: "Morning", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => ({
     rollingSummary: null,
@@ -219,15 +222,13 @@ async function main() {
       },
     },
   });
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-3" });
 
-  (globalThis as any).__synapseBriefOverride = async () => ({
-    facts: ["User is preparing a proposal."],
-    openLoops: [],
-    commitments: [],
-    activeLoops: [],
-    timeGapDescription: "5 minutes since last spoke",
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
     timeOfDayLabel: "MORNING",
-    currentFocus: null,
+    timeGapHuman: "5 minutes since last session",
+    bridgeText: "Last session: proposal drafting remained active.",
+    items: [],
   });
 
   const context = await buildContextFromSynapse(
@@ -237,7 +238,7 @@ async function main() {
     "session-2",
     true
   );
-  delete (globalThis as any).__synapseBriefOverride;
+  delete (globalThis as any).__synapseStartBriefOverride;
 
   if (!context?.situationalContext?.includes("CURRENT_FOCUS:\n- Finish proposal draft")) {
     throw new Error("Expected local today focus to be included in situational context");
@@ -261,6 +262,10 @@ async function main() {
   await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
 
   (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
   (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => ({
     rollingSummary: "same-session-summary",
@@ -268,14 +273,12 @@ async function main() {
       rollingSummarySessionId: "session-match",
     },
   });
-  (globalThis as any).__synapseBriefOverride = async () => ({
-    facts: [],
-    openLoops: [],
-    commitments: [],
-    activeLoops: [],
-    timeGapDescription: "2 minutes",
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-4" });
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
     timeOfDayLabel: "MORNING",
-    currentFocus: null,
+    timeGapHuman: "2 minutes",
+    bridgeText: null,
+    items: [],
   });
 
   const context = await buildContextFromSynapse(
@@ -285,7 +288,7 @@ async function main() {
     "session-match",
     true
   );
-  delete (globalThis as any).__synapseBriefOverride;
+  delete (globalThis as any).__synapseStartBriefOverride;
 
   expect(context?.rollingSummary ?? null).toBe("same-session-summary");
   });
@@ -300,6 +303,10 @@ async function main() {
   await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
 
   (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
   (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => ({
     rollingSummary: "old-session-summary",
@@ -307,14 +314,12 @@ async function main() {
       rollingSummarySessionId: "session-old",
     },
   });
-  (globalThis as any).__synapseBriefOverride = async () => ({
-    facts: [],
-    openLoops: [],
-    commitments: [],
-    activeLoops: [],
-    timeGapDescription: "2 minutes",
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-5" });
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
     timeOfDayLabel: "MORNING",
-    currentFocus: null,
+    timeGapHuman: "2 minutes",
+    bridgeText: null,
+    items: [],
   });
 
   const context = await buildContextFromSynapse(
@@ -324,7 +329,7 @@ async function main() {
     "session-new",
     true
   );
-  delete (globalThis as any).__synapseBriefOverride;
+  delete (globalThis as any).__synapseStartBriefOverride;
 
   expect(context?.rollingSummary ?? null).toBe(null);
   });
