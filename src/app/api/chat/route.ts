@@ -213,6 +213,7 @@ type OverlayUserState = {
   weeklyNorthStar?: string | null;
   weeklyNorthStarWeekStartDate?: string | null;
   weeklyPriorities?: string[];
+  sessionFactCorrections?: string[];
 };
 
 type OverlayState = {
@@ -226,6 +227,7 @@ type OverlayState = {
   pendingFocusCapture?: boolean;
   pendingDailyReviewCapture?: boolean;
   pendingWeeklyCompassCapture?: boolean;
+  correctionOverlayCooldownTurns?: number;
   user?: OverlayUserState;
 };
 
@@ -1379,6 +1381,7 @@ function buildChatMessages(params: {
   productKernelBlock?: string | null;
   userProfileBlock?: string | null;
   situationalContext?: string;
+  correctionBlock?: string | null;
   continuityBlock?: string | null;
   overlayBlock?: string | null;
   supplementalContext?: string | null;
@@ -1409,6 +1412,7 @@ function buildChatMessages(params: {
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
       : []),
+    ...(params.correctionBlock ? [{ role: "system" as const, content: params.correctionBlock }] : []),
     ...(params.continuityBlock
       ? [{ role: "system" as const, content: params.continuityBlock }]
       : []),
@@ -1689,6 +1693,47 @@ function hasCorrectionFrictionSignal(text: string) {
   return isExplicitAssistantCorrection(text) || hasProfanityBurst(text);
 }
 
+function extractCorrectionFactClaims(text: string) {
+  const normalized = normalizeWhitespace(text).toLowerCase();
+  if (!normalized) return [];
+  const claims: string[] = [];
+  if (normalized.includes("what movie") || normalized.includes("not movie time")) {
+    claims.push("Do not assume user is watching a movie unless confirmed this session.");
+  }
+  if (normalized.includes("i didn't say") || normalized.includes("i did not say")) {
+    claims.push("Do not attribute claims the user explicitly denies saying.");
+  }
+  if (
+    normalized.includes("stop making") ||
+    normalized.includes("making shit up") ||
+    normalized.includes("that's wrong") ||
+    normalized.includes("thats wrong")
+  ) {
+    claims.push("If uncertain, ask one clarifying question before asserting context.");
+  }
+  return claims;
+}
+
+function mergeCorrectionFacts(existing: string[] | undefined, next: string[]) {
+  const merged = [...(existing ?? []), ...next];
+  return Array.from(new Set(merged)).slice(-6);
+}
+
+function nextCorrectionOverlayCooldownTurns(current: number, correctionSignal: boolean) {
+  if (correctionSignal) return Math.max(current, 2);
+  if (current > 0) return current - 1;
+  return 0;
+}
+
+function buildCorrectionGuardBlock(corrections: string[] | undefined) {
+  if (!corrections || corrections.length === 0) return null;
+  const lines = corrections.map((item) => `- ${item}`).join("\n");
+  return `[SESSION_FACT_CORRECTIONS]
+Apply these corrections for this session:
+${lines}
+Do not reintroduce corrected assumptions unless user explicitly confirms them again.`;
+}
+
 async function clearStartBriefForSession(userId: string, personaId: string, sessionId: string) {
   if (!sessionId) return;
   if (process.env.NODE_ENV === "test") return;
@@ -1916,6 +1961,7 @@ export async function POST(request: NextRequest) {
     let pendingFocusCapture = overlayState.pendingFocusCapture ?? false;
     let pendingDailyReviewCapture = overlayState.pendingDailyReviewCapture ?? false;
     let pendingWeeklyCompassCapture = overlayState.pendingWeeklyCompassCapture ?? false;
+    let correctionOverlayCooldownTurns = overlayState.correctionOverlayCooldownTurns ?? 0;
     const overlayUser = overlayState.user ?? {};
     // Trajectory rituals are day/week scoped to the user's configured local zone.
     const timeZone = "Europe/Zagreb";
@@ -1933,6 +1979,7 @@ export async function POST(request: NextRequest) {
       pendingFocusCapture = false;
       pendingDailyReviewCapture = false;
       pendingWeeklyCompassCapture = false;
+      correctionOverlayCooldownTurns = 0;
     }
 
     let overlayType: OverlayType | "none" = "none";
@@ -1945,7 +1992,18 @@ export async function POST(request: NextRequest) {
       isUrgent: overlayIsUrgent,
       isDirectRequest: overlayIsDirectRequest,
     });
-    const overlayPolicy = frictionSignal
+    correctionOverlayCooldownTurns = nextCorrectionOverlayCooldownTurns(
+      correctionOverlayCooldownTurns,
+      correctionSignal
+    );
+    if (correctionSignal) {
+      overlayUser.sessionFactCorrections = mergeCorrectionFacts(
+        overlayUser.sessionFactCorrections,
+        extractCorrectionFactClaims(sttResult.transcript)
+      );
+    }
+
+    const overlayPolicy = frictionSignal || correctionOverlayCooldownTurns > 0
       ? { skip: true as const, reason: "friction_correction" as const }
       : baseOverlayPolicy;
     const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
@@ -2156,6 +2214,7 @@ export async function POST(request: NextRequest) {
       pendingFocusCapture,
       pendingDailyReviewCapture,
       pendingWeeklyCompassCapture,
+      correctionOverlayCooldownTurns,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -2191,6 +2250,7 @@ export async function POST(request: NextRequest) {
         personaSlug: persona.slug,
       }),
       situationalContext,
+      correctionBlock: buildCorrectionGuardBlock(overlayUser.sessionFactCorrections),
       continuityBlock,
       overlayBlock,
       supplementalContext,
@@ -2521,6 +2581,10 @@ export const __test__buildChatTrace = buildChatTrace;
 export const __test__shouldTriggerDailyFocus = shouldTriggerDailyFocus;
 export const __test__isMorningLocalWindow = isMorningLocalWindow;
 export const __test__extractTodayFocus = extractTodayFocus;
+export const __test__extractCorrectionFactClaims = extractCorrectionFactClaims;
+export const __test__mergeCorrectionFacts = mergeCorrectionFacts;
+export const __test__nextCorrectionOverlayCooldownTurns = nextCorrectionOverlayCooldownTurns;
+export const __test__buildCorrectionGuardBlock = buildCorrectionGuardBlock;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
 };
