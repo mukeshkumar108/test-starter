@@ -37,7 +37,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
    - Persona (Identity Anchor)
    - Style guard (single line)
    - CONVERSATION_POSTURE (neutral labels + momentum guard when relevant)
-   - SITUATIONAL_CONTEXT (Synapse brief)
+   - SITUATIONAL_CONTEXT (minimal handoff on session-open; deterministic mid-turn cues only)
    - SESSION_FACT_CORRECTIONS (optional)
    - CONTINUITY (optional; gap-based)
    - OVERLAY (optional; curiosity/accountability lenses)
@@ -55,8 +55,11 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 ### Opening Book: Synapse Brief
 - Called via `/session/startbrief` (primary)
 - Fallback: `/session/brief`
-- Provides a compact **situational narrative** for this user+persona+session
-- Injected as a single block: `SITUATIONAL_CONTEXT` (includes CURRENT_FOCUS when present)
+- Provides a compact session-open handoff:
+  - opener sentence (time/gap + one key thing)
+  - optional one-line steering note (high confidence only)
+  - optional active threads (max 2) when intent/direct-request says it is relevant
+- User-model profile fields are fetched at session-start but deferred for mid-turn injection only under explicit gates.
 
 ### Closing Book: Synapse Ingest
 - Called via `/session/ingest` when a session ends
@@ -82,6 +85,7 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 
 ### 2) When do we fetch Synapse context?
 - On session start, call `/session/startbrief` to build `SITUATIONAL_CONTEXT` and cache by session
+- On session start, call `/user/model` and `/analysis/daily` (best-effort) and cache as deferred cues
 - Use `/session/brief` only as fallback
 
 ### 3) When do we fetch extra memory (Librarian Reflex)?
@@ -97,7 +101,7 @@ Blocks are in this order:
 - Persona (Identity Anchor)
 - Style guard (single line)
 - CONVERSATION_POSTURE (mode + pressure; neutral)
-- SITUATIONAL_CONTEXT (Synapse brief)
+- SITUATIONAL_CONTEXT (session-open handoff + deterministic mid-turn additions)
 - SESSION_FACT_CORRECTIONS (optional)
 - CONTINUITY (optional; gap-based)
 - OVERLAY (optional; curiosity/accountability lenses)
@@ -106,6 +110,13 @@ Blocks are in this order:
 - Last 8 messages
  
 Posture is computed in the Memory Gate call (no extra LLM calls). Hysteresis lives in `SessionState.state.postureState`.
+
+Mid-turn deferred context uses explicit triggers only:
+- `relationships`: posture `RELATIONSHIP` or tracked name mention
+- `patterns`: bouncer/gate avoidance-or-drift signal
+- `work_context`: intent `momentum` or `output_task`
+- `long_term_direction`: intent `momentum` + direct request
+- `communication_preference`: explicit tone/style request
 
 ---
 

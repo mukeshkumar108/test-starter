@@ -12,9 +12,27 @@ import type {
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
 
+export type SessionStartHandoff = {
+  opener?: string;
+  steeringNote?: string;
+  steeringConfidence?: "high" | "low";
+  activeThreads?: string[];
+};
+
+export type DeferredProfileContext = {
+  relationshipNames?: string[];
+  relationshipsLine?: string;
+  patternLine?: string;
+  workContextLine?: string;
+  longTermDirectionLine?: string;
+  communicationPreferenceLine?: string;
+};
+
 export interface ConversationContext {
   persona: string;
   situationalContext?: string;
+  sessionStartHandoff?: SessionStartHandoff;
+  deferredProfileContext?: DeferredProfileContext;
   rollingSummary?: string;
   startBrief?: {
     used: boolean;
@@ -414,64 +432,42 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
 function buildSessionStartContext(
   brief: SynapseStartBriefResponse,
   trajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null,
-  userModelLines?: string[],
   dailyAnalysis?: SynapseDailyAnalysisResponse | null
 ) {
-  const lines: string[] = [];
   const timeLabel = typeof brief.timeOfDayLabel === "string" ? brief.timeOfDayLabel.trim() : "";
   const timeGap = typeof brief.timeGapHuman === "string" ? brief.timeGapHuman.trim() : "";
-  const timeLineParts: string[] = [];
-  if (timeLabel) timeLineParts.push(timeLabel);
-  if (timeGap) timeLineParts.push(timeGap);
-  if (timeLineParts.length > 0) {
-    lines.push(`Session start context: ${timeLineParts.join(" • ")}.`);
-  }
-
-  const bridgeText = typeof brief.bridgeText === "string" ? brief.bridgeText.trim() : "";
-  if (bridgeText) lines.push(bridgeText);
-
-  const dailyLines = buildDailyAnalysisLines(bridgeText, dailyAnalysis);
-  if (dailyLines.length > 0) {
-    lines.push(...dailyLines);
-  }
-
-  if (Array.isArray(userModelLines) && userModelLines.length > 0) {
-    lines.push(...userModelLines);
-  }
-
+  const bridgeRaw = typeof brief.bridgeText === "string" ? brief.bridgeText.trim() : "";
+  const bridge = splitBridgeText(bridgeRaw);
   const items = Array.isArray(brief.items) ? brief.items : [];
-  const loops = items
+  const activeThreads = items
     .filter((item) => (item?.kind ?? "").toLowerCase() === "loop")
     .map((item) => (typeof item?.text === "string" ? item.text.trim() : ""))
     .filter(Boolean)
-    .slice(0, 5);
-  if (loops.length > 0) {
-    lines.push(`Active threads: ${loops.join(" | ")}`);
-  }
-
-  const tensions = items
-    .filter((item) => (item?.kind ?? "").toLowerCase() === "tension")
-    .map((item) => (typeof item?.text === "string" ? item.text.trim() : ""))
-    .filter(Boolean)
     .slice(0, 2);
-  if (tensions.length > 0) {
-    lines.push(`Durable tensions: ${tensions.join(" | ")}`);
-  }
 
-  const focus = trajectory?.todayFocus?.trim();
-  if (focus) {
-    lines.push(`CURRENT_FOCUS:\n- ${focus}`);
-  }
-  const weekly = trajectory?.weeklyNorthStar?.trim();
-  if (weekly) {
-    lines.push(`WEEKLY_NORTH_STAR:\n- ${weekly}`);
-  }
+  const keyThing =
+    activeThreads[0] ??
+    trajectory?.todayFocus?.trim() ??
+    bridge.recap ??
+    (trajectory?.weeklyNorthStar?.trim() ? `weekly north star: ${trajectory.weeklyNorthStar.trim()}` : null);
+  const opener = buildSessionOpener({
+    timeLabel,
+    timeGap,
+    keyThing,
+  });
 
-  const compact = lines
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 10);
-  return compact.length > 0 ? compact.join("\n") : null;
+  const steeringNote = selectHighConfidenceSteeringNote({
+    bridgeSteering: bridge.steering,
+    bridgeRecap: bridge.recap,
+    dailyAnalysis,
+  });
+
+  return {
+    opener,
+    steeringNote: steeringNote ?? undefined,
+    steeringConfidence: steeringNote ? "high" : undefined,
+    activeThreads,
+  } satisfies SessionStartHandoff;
 }
 
 function getOverlayContextFromStartBrief(
@@ -734,42 +730,60 @@ function shouldInjectDailyAnalysis(bridgeText: string, analysis: SynapseDailyAna
   return isDailyAnalysisLowConfidence(analysis);
 }
 
-function buildDailyAnalysisLines(
-  bridgeText: string,
-  analysis?: SynapseDailyAnalysisResponse | null
-) {
-  if (!analysis || analysis.exists === false) return [] as string[];
-  if (!shouldInjectDailyAnalysis(bridgeText, analysis)) return [] as string[];
+function toSingleSentence(input: string, maxWords = 24) {
+  const normalized = input.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  const first = normalized.split(/(?<=[.!?])\s+/)[0]?.trim() ?? normalized;
+  const words = first.split(/\s+/).slice(0, maxWords).join(" ");
+  return words.replace(/[;:,]+$/, "").trim();
+}
 
+function splitBridgeText(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { steering: null as string | null, recap: null as string | null };
+  }
+  if (/^steering note:\s*/i.test(trimmed)) {
+    const steeringRaw = trimmed.replace(/^steering note:\s*/i, "");
+    return {
+      steering: toSingleSentence(steeringRaw, 24),
+      recap: null,
+    };
+  }
+  return {
+    steering: null,
+    recap: toSingleSentence(trimmed, 24),
+  };
+}
+
+function buildSessionOpener(params: {
+  timeLabel: string;
+  timeGap: string;
+  keyThing: string | null;
+}) {
+  const label = params.timeLabel ? params.timeLabel.toLowerCase() : "this moment";
+  const gap = params.timeGap.replace(/\.$/, "").trim();
+  const keyThing = (params.keyThing ?? "").replace(/\.$/, "").trim();
+  const timePart = gap ? `It's ${label}, and it's been ${gap}` : `It's ${label}`;
+  if (!keyThing) return `${timePart}.`;
+  return `${timePart}; the main thing to hold right now is ${limitWords(keyThing, 14)}.`;
+}
+
+function selectHighConfidenceSteeringNote(params: {
+  bridgeSteering: string | null;
+  bridgeRecap: string | null;
+  dailyAnalysis?: SynapseDailyAnalysisResponse | null;
+}) {
+  if (params.bridgeSteering) return toSingleSentence(params.bridgeSteering, 24);
+  if (!params.dailyAnalysis || params.dailyAnalysis.exists === false) return null;
+  if (isDailyAnalysisLowConfidence(params.dailyAnalysis)) return null;
   const steering =
-    typeof analysis.steeringNote === "string" && analysis.steeringNote.trim()
-      ? analysis.steeringNote.trim()
-      : null;
-  const themes = Array.isArray(analysis.themes)
-    ? analysis.themes
-        .map((theme) => (typeof theme === "string" ? theme.trim() : ""))
-        .filter(Boolean)
-        .slice(0, 2)
-    : [];
-  // Keep score + quality fields parsed for telemetry, but do not surface
-  // numeric or quality labels in model-facing prompt context.
-  void toScore1to5(analysis.scores?.curiosity);
-  void toScore1to5(analysis.scores?.warmth);
-  void toScore1to5(analysis.scores?.usefulness);
-  void toScore1to5(analysis.scores?.forward_motion);
-  void asQualityFlag(analysis.metadata?.quality_flag);
-  const lowConfidence = isDailyAnalysisLowConfidence(analysis);
-
-  const lines: string[] = [];
-  if (steering) {
-    lines.push(
-      lowConfidence ? `Daily steering (low confidence): ${steering}` : `Daily steering: ${steering}`
-    );
-  }
-  if (themes.length > 0) {
-    lines.push(`Today's patterns: ${themes.join("; ")}`);
-  }
-  return lines.slice(0, 2);
+    typeof params.dailyAnalysis.steeringNote === "string"
+      ? params.dailyAnalysis.steeringNote.trim()
+      : "";
+  if (!steering) return null;
+  if (!shouldInjectDailyAnalysis(params.bridgeRecap ?? "", params.dailyAnalysis)) return null;
+  return toSingleSentence(steering, 24);
 }
 
 type NorthStarDomain = "relationships" | "work" | "health" | "spirituality" | "general";
@@ -902,29 +916,48 @@ function chooseNorthStarLine(params: {
   return null;
 }
 
-function toUserModelLines(userModel: SynapseUserModelResponse | null) {
-  if (!userModel || !userModel.exists || !isRecord(userModel.model)) return [] as string[];
+function toDeferredProfileContext(userModel: SynapseUserModelResponse | null): DeferredProfileContext {
+  if (!userModel || !userModel.exists || !isRecord(userModel.model)) return {};
   const score = userModel.completenessScore ?? {};
   const model = userModel.model;
-  const lines: string[] = [];
+  const output: DeferredProfileContext = {};
 
   if (toScoreValue(score, "north_star") >= 40) {
-    const northStarLine = chooseNorthStarLine({
+    const northStarRaw = chooseNorthStarLine({
       northStar: model.north_star,
       completenessScore: score,
     });
-    if (northStarLine) lines.push(northStarLine);
+    if (northStarRaw) {
+      const northStarText = northStarRaw.includes(":")
+        ? northStarRaw.split(":").slice(1).join(":").trim()
+        : northStarRaw.trim();
+      if (northStarText) {
+        output.longTermDirectionLine = limitWords(
+          `Long-term direction is ${northStarText.replace(/\.$/, "")}.`,
+          24
+        );
+      }
+    }
   }
 
   if (toScoreValue(score, "work") >= 40) {
     const currentFocus = extractText(model.current_focus);
     const workContext = extractText(model.work_context);
     if (currentFocus && workContext) {
-      lines.push(`Current focus: ${currentFocus}. Work context: ${workContext}`);
+      output.workContextLine = limitWords(
+        `Current work focus is ${currentFocus.replace(/\.$/, "")}, and work context is ${workContext.replace(/\.$/, "")}.`,
+        24
+      );
     } else if (currentFocus) {
-      lines.push(`Current focus: ${currentFocus}`);
+      output.workContextLine = limitWords(
+        `Current work focus is ${currentFocus.replace(/\.$/, "")}.`,
+        24
+      );
     } else if (workContext) {
-      lines.push(`Work context: ${workContext}`);
+      output.workContextLine = limitWords(
+        `Current work context is ${workContext.replace(/\.$/, "")}.`,
+        24
+      );
     }
   }
 
@@ -944,7 +977,11 @@ function toUserModelLines(userModel: SynapseUserModelResponse | null) {
       })
       .filter(Boolean);
     if (topRelationships.length > 0) {
-      lines.push(`Important relationships: ${topRelationships.join(", ")}`);
+      output.relationshipNames = topRelationships;
+      output.relationshipsLine = limitWords(
+        `People currently in focus include ${topRelationships.join(" and ")}.`,
+        20
+      );
     }
   }
 
@@ -962,7 +999,10 @@ function toUserModelLines(userModel: SynapseUserModelResponse | null) {
           .at(0)
       : null;
     if (patternLine) {
-      lines.push(`Pattern to watch: ${patternLine}`);
+      output.patternLine = limitWords(
+        `Pattern to watch: ${patternLine.replace(/\.$/, "")}.`,
+        22
+      );
     }
     if (isRecord(model.preferences)) {
       const tone = typeof model.preferences.tone === "string" ? model.preferences.tone.trim() : "";
@@ -975,22 +1015,14 @@ function toUserModelLines(userModel: SynapseUserModelResponse | null) {
         const parts: string[] = [];
         if (tone) parts.push(`prefers ${tone} tone`);
         if (avoid.length > 0) parts.push(`avoid ${avoid.join(", ")}`);
-        lines.push(`Communication preference: ${parts.join("; ")}`);
+        output.communicationPreferenceLine = limitWords(
+          `Communication preference: ${parts.join("; ")}.`,
+          24
+        );
       }
     }
   }
-
-  if (toScoreValue(score, "health") >= 40) {
-    const health = extractText(model.health);
-    if (health) lines.push(`Health thread: ${health}`);
-  }
-
-  if (toScoreValue(score, "spirituality") >= 40) {
-    const spirituality = extractText(model.spirituality);
-    if (spirituality) lines.push(`Spiritual thread: ${spirituality}`);
-  }
-
-  return lines.map((line) => limitWords(line, 24)).slice(0, 5);
+  return output;
 }
 
 function getUserModelForSession(state: unknown, sessionId: string) {
@@ -1084,7 +1116,7 @@ export async function buildContextFromSynapse(
   const cachedStartBrief = getStartBriefForSession(sessionState?.state, sessionId);
   const cachedUserModel = getUserModelForSession(sessionState?.state, sessionId);
   const cachedDailyAnalysis = getDailyAnalysisForSession(sessionState?.state, sessionId);
-  const userModelLines = toUserModelLines(cachedUserModel);
+  const deferredProfileContext = toDeferredProfileContext(cachedUserModel);
 
   if (cachedStartBrief) {
     const cachedItemsCount = Array.isArray(cachedStartBrief.items) ? cachedStartBrief.items.length : 0;
@@ -1115,15 +1147,19 @@ export async function buildContextFromSynapse(
     const overlayContext = loopItems
       ? getOverlayContextFromMemoryLoops(loopItems, messages, localTrajectory)
       : getOverlayContextFromStartBrief(cachedStartBrief, messages, localTrajectory);
+    const startHandoff = buildSessionStartContext(cachedStartBrief, localTrajectory, cachedDailyAnalysis);
     return {
       persona: personaPrompt,
-      situationalContext:
-        buildSessionStartContext(
-          cachedStartBrief,
-          localTrajectory,
-          userModelLines,
-          cachedDailyAnalysis
-        ) ?? undefined,
+      situationalContext: isSessionStart
+        ? [
+            startHandoff.opener,
+            startHandoff.steeringNote ? `Steering note: ${startHandoff.steeringNote}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : undefined,
+      sessionStartHandoff: isSessionStart ? startHandoff : undefined,
+      deferredProfileContext,
       rollingSummary,
       startBrief: {
         used: true,
@@ -1215,12 +1251,18 @@ export async function buildContextFromSynapse(
       const overlayContext = loopItems
         ? getOverlayContextFromMemoryLoops(loopItems, messages, localTrajectory)
         : getOverlayContextFromStartBrief(startBrief, messages, localTrajectory);
-      const fetchedUserModelLines = toUserModelLines(userModel);
+      const fetchedDeferredProfileContext = toDeferredProfileContext(userModel);
+      const startHandoff = buildSessionStartContext(startBrief, localTrajectory, dailyAnalysis);
       return {
         persona: personaPrompt,
-        situationalContext:
-          buildSessionStartContext(startBrief, localTrajectory, fetchedUserModelLines, dailyAnalysis) ??
-          undefined,
+        situationalContext: [
+          startHandoff.opener,
+          startHandoff.steeringNote ? `Steering note: ${startHandoff.steeringNote}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        sessionStartHandoff: startHandoff,
+        deferredProfileContext: fetchedDeferredProfileContext,
         rollingSummary,
         startBrief: {
           used: true,
@@ -1288,6 +1330,7 @@ export async function buildContextFromSynapse(
     return {
       persona: personaPrompt,
       situationalContext: undefined,
+      deferredProfileContext,
       rollingSummary,
       startBrief: {
         used: false,

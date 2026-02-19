@@ -4,7 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { transcribeAudio } from "@/lib/services/voice/sttService";
 import { generateResponse } from "@/lib/services/voice/llmService";
 import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
-import { buildContext } from "@/lib/services/memory/contextBuilder";
+import {
+  buildContext,
+  type DeferredProfileContext,
+  type SessionStartHandoff,
+} from "@/lib/services/memory/contextBuilder";
 import { loadOverlay, type OverlayType } from "@/lib/services/memory/overlayLoader";
 import {
   isDismissal,
@@ -967,6 +971,17 @@ ${transcript}`;
   } satisfies MemoryGateResult;
 }
 
+function detectAvoidanceOrDrift(gateResult: MemoryGateResult) {
+  const reasons = [gateResult.reason, gateResult.posture_reason, gateResult.state_reason]
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+  if (/\b(avoid|avoidance|drift|rationaliz|stall|procrastin|deflect)\b/.test(reasons)) {
+    return true;
+  }
+  return gateResult.posture === "MOMENTUM" && gateResult.pressure === "HIGH" && !gateResult.is_direct_request;
+}
+
 async function runMemoryQuerySpec(params: {
   transcript: string;
   lastTurns: string;
@@ -1045,6 +1060,7 @@ async function runLibrarianReflex(params: {
   intent: OverlayIntent;
   isUrgent: boolean;
   isDirectRequest: boolean;
+  avoidanceOrDrift: boolean;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -1062,6 +1078,7 @@ async function runLibrarianReflex(params: {
     intent: DEFAULT_GATE_INTENT,
     isUrgent: false,
     isDirectRequest: false,
+    avoidanceOrDrift: false,
   };
   if (remaining() <= 0) {
     return {
@@ -1092,6 +1109,7 @@ async function runLibrarianReflex(params: {
     intent: gateResult.intent ?? DEFAULT_GATE_INTENT,
     isUrgent: Boolean(gateResult.is_urgent),
     isDirectRequest: Boolean(gateResult.is_direct_request),
+    avoidanceOrDrift: detectAvoidanceOrDrift(gateResult),
   };
 
   const postureSuggestion = normalizePosture(gateResult.posture);
@@ -1793,6 +1811,122 @@ function buildContinuityBlock(params: { timeGapMinutes: number | null; transcrip
   return `[CONTINUITY]\nIt’s been ~${hours} hours since you last spoke. Open with a natural bridge that resumes the relationship and thread.\nBe low-assumption; don’t presume what the user is doing now.\nDo not force a question; it’s okay to let the moment land.`;
 }
 
+function normalizeContextSentence(input: string, maxWords = 24) {
+  const normalized = input.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  const firstSentence = normalized.split(/(?<=[.!?])\s+/)[0]?.trim() ?? normalized;
+  const clipped = firstSentence.split(/\s+/).slice(0, maxWords).join(" ");
+  return clipped.replace(/[;:,]+$/, "").trim();
+}
+
+function shouldIncludeSessionStartThreads(params: {
+  intent: OverlayIntent;
+  isDirectRequest: boolean;
+}) {
+  return params.isDirectRequest || params.intent === "momentum" || params.intent === "output_task";
+}
+
+function buildSessionStartSituationalContext(params: {
+  handoff?: SessionStartHandoff;
+  intent: OverlayIntent;
+  isDirectRequest: boolean;
+}) {
+  const handoff = params.handoff;
+  if (!handoff) return "";
+  const lines: string[] = [];
+  if (handoff.opener) {
+    lines.push(handoff.opener);
+  }
+  if (handoff.steeringNote && handoff.steeringConfidence === "high") {
+    lines.push(`Steering note: ${normalizeContextSentence(handoff.steeringNote, 24)}`);
+  }
+  const activeThreads = Array.isArray(handoff.activeThreads)
+    ? handoff.activeThreads.map((item) => normalizeContextSentence(item, 12)).filter(Boolean)
+    : [];
+  if (
+    activeThreads.length > 0 &&
+    shouldIncludeSessionStartThreads({
+      intent: params.intent,
+      isDirectRequest: params.isDirectRequest,
+    })
+  ) {
+    lines.push(`Right now the active threads are ${activeThreads.slice(0, 2).join("; ")}.`);
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
+function transcriptMentionsTrackedName(transcript: string, names: string[]) {
+  if (!transcript || names.length === 0) return false;
+  const lowered = transcript.toLowerCase();
+  return names.some((name) => {
+    const trimmed = name.trim().toLowerCase();
+    if (!trimmed) return false;
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(lowered);
+  });
+}
+
+function isStyleRequest(transcript: string) {
+  const lowered = transcript.toLowerCase();
+  return (
+    lowered.includes("tone") ||
+    lowered.includes("style") ||
+    lowered.includes("wording") ||
+    lowered.includes("rewrite this") ||
+    lowered.includes("how should i say")
+  );
+}
+
+function buildDeferredProfileContextLines(params: {
+  isSessionStart: boolean;
+  profile?: DeferredProfileContext;
+  posture: ConversationPosture;
+  intent: OverlayIntent;
+  isDirectRequest: boolean;
+  transcript: string;
+  avoidanceOrDrift: boolean;
+}) {
+  // Deterministic policy:
+  // - relationships: posture=RELATIONSHIP OR user names a tracked person
+  // - patterns: only when bouncer signals avoidance/drift
+  // - work context: only for momentum/output_task intent
+  // - long-term direction: only for momentum + direct request
+  // - communication preference: only when user asks about style/tone
+  if (params.isSessionStart || !params.profile) return [] as string[];
+  const lines: string[] = [];
+  const profile = params.profile;
+  const trackedNames = Array.isArray(profile.relationshipNames) ? profile.relationshipNames : [];
+
+  const includeRelationships =
+    params.posture === "RELATIONSHIP" ||
+    transcriptMentionsTrackedName(params.transcript, trackedNames);
+  if (includeRelationships && profile.relationshipsLine) {
+    lines.push(profile.relationshipsLine);
+  }
+
+  const includePatterns = params.avoidanceOrDrift;
+  if (includePatterns && profile.patternLine) {
+    lines.push(profile.patternLine);
+  }
+
+  const includeWorkContext = params.intent === "momentum" || params.intent === "output_task";
+  if (includeWorkContext && profile.workContextLine) {
+    lines.push(profile.workContextLine);
+  }
+
+  const includeLongTermDirection = params.intent === "momentum" && params.isDirectRequest;
+  if (includeLongTermDirection && profile.longTermDirectionLine) {
+    lines.push(profile.longTermDirectionLine);
+  }
+
+  const includeCommunicationPreference = isStyleRequest(params.transcript);
+  if (includeCommunicationPreference && profile.communicationPreferenceLine) {
+    lines.push(profile.communicationPreferenceLine);
+  }
+
+  return Array.from(new Set(lines)).slice(0, 2);
+}
+
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   const traceId = request.headers.get("x-trace-id") || crypto.randomUUID();
@@ -1951,6 +2085,26 @@ export async function POST(request: NextRequest) {
     const overlayIntent = librarianResult?.intent ?? DEFAULT_GATE_INTENT;
     const overlayIsUrgent = librarianResult?.isUrgent ?? false;
     const overlayIsDirectRequest = librarianResult?.isDirectRequest ?? false;
+    const avoidanceOrDrift = librarianResult?.avoidanceOrDrift ?? false;
+    if (context.isSessionStart && context.sessionStartHandoff) {
+      situationalContext = buildSessionStartSituationalContext({
+        handoff: context.sessionStartHandoff,
+        intent: overlayIntent,
+        isDirectRequest: overlayIsDirectRequest,
+      });
+    }
+    const deferredProfileLines = buildDeferredProfileContextLines({
+      isSessionStart: context.isSessionStart,
+      profile: context.deferredProfileContext,
+      posture,
+      intent: overlayIntent,
+      isDirectRequest: overlayIsDirectRequest,
+      transcript: sttResult.transcript,
+      avoidanceOrDrift,
+    });
+    if (deferredProfileLines.length > 0) {
+      situationalContext = [situationalContext, ...deferredProfileLines].filter(Boolean).join("\n");
+    }
     const correctionSignal = isExplicitAssistantCorrection(sttResult.transcript);
     const frictionSignal = hasCorrectionFrictionSignal(sttResult.transcript);
     if (frictionSignal) {
@@ -2642,6 +2796,8 @@ export const __test__nextCorrectionOverlayCooldownTurns = nextCorrectionOverlayC
 export const __test__shouldForceSessionWarmupOverlaySkip = shouldForceSessionWarmupOverlaySkip;
 export const __test__shouldHoldOverlayUntilRunway = shouldHoldOverlayUntilRunway;
 export const __test__buildCorrectionGuardBlock = buildCorrectionGuardBlock;
+export const __test__buildSessionStartSituationalContext = buildSessionStartSituationalContext;
+export const __test__buildDeferredProfileContextLines = buildDeferredProfileContextLines;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
 };

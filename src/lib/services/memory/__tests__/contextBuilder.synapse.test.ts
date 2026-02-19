@@ -200,29 +200,29 @@ async function main() {
   if (!context.situationalContext) {
     throw new Error("Expected situationalContext to be set");
   }
-  if (!context.situationalContext.includes("Session start context: AFTERNOON")) {
-    throw new Error("Expected session start time line in situationalContext");
+  if (!context.situationalContext.toLowerCase().includes("it's afternoon")) {
+    throw new Error("Expected natural opener with time-of-day in situationalContext");
   }
   if (!context.situationalContext.includes("Steering note: Stay practical and verify assumptions before nudging.")) {
     throw new Error("Expected steering-note bridge text in situationalContext");
   }
-  if (!context.situationalContext.includes("Active threads:")) {
-    throw new Error("Expected active threads line in situationalContext");
+  if (!context.sessionStartHandoff?.activeThreads || context.sessionStartHandoff.activeThreads.length !== 2) {
+    throw new Error("Expected session start handoff to carry top 2 active thread candidates");
   }
-  if (!context.situationalContext.includes("This should be dropped after cap")) {
-    throw new Error("Expected startbrief to render up to top 5 loop items");
+  if (context.sessionStartHandoff.activeThreads.includes("This should be dropped after cap")) {
+    throw new Error("Expected session start handoff threads to cap at 2");
   }
-  if (!context.situationalContext.includes("Long-term direction (general): Build a meaningful AI product")) {
-    throw new Error("Expected additive user model north-star direction line");
+  if (!context.deferredProfileContext?.longTermDirectionLine?.includes("meaningful AI product")) {
+    throw new Error("Expected long-term direction to be deferred into profile context");
   }
-  if (context.situationalContext.includes("Likely goal (work): Ship memory reliability improvements this month")) {
-    throw new Error("Expected user_stated vision to be preferred over inferred goal");
+  if (!context.deferredProfileContext?.workContextLine?.includes("Current work focus")) {
+    throw new Error("Expected work context to be deferred into profile context");
   }
-  if (!context.situationalContext.includes("Current focus: Stabilize memory integration")) {
-    throw new Error("Expected additive user model current focus/work line");
+  if (!context.deferredProfileContext?.relationshipsLine?.includes("Ashley")) {
+    throw new Error("Expected relationship context to be deferred into profile context");
   }
-  if (!context.situationalContext.includes("Important relationships: Ashley")) {
-    throw new Error("Expected additive user model relationships line");
+  if (context.situationalContext.includes("Long-term direction")) {
+    throw new Error("Did not expect deferred profile lines to be injected on session open");
   }
   const openLoops = context.overlayContext?.openLoops ?? [];
   const commitments = context.overlayContext?.commitments ?? [];
@@ -291,17 +291,11 @@ async function main() {
   delete (globalThis as any).__synapseUserModelOverride;
   delete (globalThis as any).__synapseDailyAnalysisOverride;
 
-  if (!context?.situationalContext?.includes("Daily steering: Lead with one practical step.")) {
+  if (!context?.situationalContext?.includes("Steering note: Lead with one practical step.")) {
     throw new Error("Expected daily steering line when bridge text missing");
   }
-  if (!context?.situationalContext?.includes("Today's patterns: clarity; execution")) {
-    throw new Error("Expected compact theme line in daily analysis block");
-  }
-  if (
-    context?.situationalContext?.includes("Quality:") ||
-    context?.situationalContext?.includes("C/W/U/F:")
-  ) {
-    throw new Error("Did not expect quality/score lines in model-facing daily analysis block");
+  if (context?.situationalContext?.includes("Today's patterns:")) {
+    throw new Error("Did not expect pattern labels in session-open situational context");
   }
   });
 
@@ -351,14 +345,11 @@ async function main() {
   delete (globalThis as any).__synapseUserModelOverride;
   delete (globalThis as any).__synapseDailyAnalysisOverride;
 
-  if (!context?.situationalContext?.includes("Daily steering (low confidence): Push one next step only.")) {
-    throw new Error("Expected low-confidence qualifier for needs_review analysis");
+  if (context?.situationalContext?.includes("Steering note: Push one next step only.")) {
+    throw new Error("Did not expect low-confidence daily steering on session open");
   }
-  if (
-    context?.situationalContext?.includes("Quality:") ||
-    context?.situationalContext?.includes("C/W/U/F:")
-  ) {
-    throw new Error("Did not expect quality/score lines in low-confidence daily analysis block");
+  if (!context?.situationalContext?.toLowerCase().includes("it's morning")) {
+    throw new Error("Expected opener to remain when daily analysis is low-confidence");
   }
   });
 
@@ -398,7 +389,7 @@ async function main() {
     true
   );
 
-  if (contextWithNoAnalysis?.situationalContext?.includes("Daily steering:")) {
+  if (contextWithNoAnalysis?.situationalContext?.includes("Steering note:")) {
     throw new Error("Did not expect daily analysis lines when exists=false");
   }
 
@@ -423,7 +414,7 @@ async function main() {
   if (!contextWithError?.situationalContext?.includes("Bridge stays primary.")) {
     throw new Error("Expected startbrief context to remain when daily analysis fails");
   }
-  if (contextWithError?.situationalContext?.includes("Daily steering:")) {
+  if (contextWithError?.situationalContext?.includes("Steering note:")) {
     throw new Error("Did not expect daily analysis lines when endpoint errors");
   }
   });
@@ -482,8 +473,8 @@ async function main() {
   delete (globalThis as any).__synapseMemoryLoopsOverride;
   delete (globalThis as any).__synapseUserModelOverride;
 
-  if (!context?.situationalContext?.includes("Likely goal (general): Build something durable with real user impact")) {
-    throw new Error("Expected legacy north_star.text to map to general goal fallback");
+  if (!context?.deferredProfileContext?.longTermDirectionLine?.includes("Build something durable with real user impact")) {
+    throw new Error("Expected legacy north_star.text to map to deferred long-term direction");
   }
   });
 
@@ -594,11 +585,8 @@ async function main() {
   delete (globalThis as any).__synapseStartBriefOverride;
   delete (globalThis as any).__synapseUserModelOverride;
 
-  if (!context?.situationalContext?.includes("CURRENT_FOCUS:\n- Finish proposal draft")) {
-    throw new Error("Expected local today focus to be included in situational context");
-  }
-  if (!context?.situationalContext?.includes("WEEKLY_NORTH_STAR:")) {
-    throw new Error("Expected weekly north star to be included in situational context");
+  if (!context?.situationalContext?.includes("Finish proposal draft")) {
+    throw new Error("Expected opener key thread to include local today focus");
   }
   expect(context?.overlayContext?.currentFocus ?? null).toBe("Finish proposal draft");
   expect(context?.overlayContext?.weeklyNorthStar ?? null).toBe(

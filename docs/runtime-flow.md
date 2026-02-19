@@ -21,8 +21,8 @@ Two paths run in parallel:
    - Persona prompt
    - Last 8 messages from the active session only
    - On session start: Synapse `/session/startbrief` (cached per session)
-   - On session start: Synapse `/user/model` (cached per session; additive context only)
-   - On session start: Synapse `/analysis/daily` (best-effort; additive context only)
+   - On session start: Synapse `/user/model` (cached per session; stored as deferred profile context)
+   - On session start: Synapse `/analysis/daily` (best-effort; used only for high-confidence steering)
    - Fallback: Synapse `/session/brief` if startbrief unavailable
    - Startbrief payload is normalized defensively:
      - `items` coerced to array
@@ -37,9 +37,14 @@ Two paths run in parallel:
    - `/memory/query` request explicitly sets `includeContext=false`
    - `/memory/query` parsing accepts both `facts: string[]` and `facts: {text}[]`
 8. **Prompt assembly** (`route.ts`)
-   - Persona → Style guard → CONVERSATION_POSTURE (with momentum guard when relevant) → SITUATIONAL_CONTEXT → SESSION_FACT_CORRECTIONS (optional) → CONTINUITY (optional) → OVERLAY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
+  - Persona → Style guard → CONVERSATION_POSTURE (with momentum guard when relevant) → SITUATIONAL_CONTEXT → SESSION_FACT_CORRECTIONS (optional) → CONTINUITY (optional) → OVERLAY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
   - Overlay loop inputs are sourced from Synapse `/memory/loops` on session start (fallback to startbrief loop items)
   - Loop continuity is user-scoped (not persona-partitioned)
+  - Session-open SITUATIONAL_CONTEXT is capped to a 3-part handoff:
+    - natural opener sentence (time + gap + one key thing)
+    - optional high-confidence steering note (one sentence)
+    - optional active threads (max 2) only when intent/direct-request indicates immediate task relevance
+  - Deferred profile context (relationships/patterns/work/long-term/prefs) is suppressed on session open and injected mid-conversation only under deterministic triggers.
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
@@ -64,6 +69,7 @@ Order is fixed:
 2. Style guard (single line)
 3. CONVERSATION_POSTURE (neutral labels)
 4. SITUATIONAL_CONTEXT (Synapse brief; includes CURRENT_FOCUS when present)
+4. SITUATIONAL_CONTEXT (minimal handoff at session-open; deterministic mid-turn augmentation only)
 5. SESSION_FACT_CORRECTIONS (optional)
 6. CONTINUITY (optional, gap-based)
 7. OVERLAY (optional)
@@ -92,12 +98,14 @@ Order is fixed:
   - `startbrief_items_count`
   - `bridgeText_chars`
 - Daily analysis behavior:
-  - If `bridgeText` is empty/short/truncated, Sophie appends a compact block from `/analysis/daily`:
-    - `Daily steering: ...`
-    - `Today's patterns: ...`
-  - `quality_flag=needs_review|insufficient_data` is treated as low-confidence and rendered as soft guidance wording on the steering line.
+  - Steering from `/analysis/daily` is included only when confidence is high.
+  - Low-confidence daily analysis (`needs_review` / `insufficient_data`) is not surfaced in model-facing `SITUATIONAL_CONTEXT`.
+- Mid-conversation deferred profile triggers:
+  - `relationships` only when `posture=RELATIONSHIP` or user names a tracked person.
+  - `patterns` only when bouncer/gate signals avoidance or drift.
+  - `work_context` only when `intent=momentum` or `intent=output_task`.
+  - `long_term_direction` only when `intent=momentum` and direct request is true.
+  - `communication_preference` only when user explicitly asks about tone/style/wording.
 - Debug headers:
   - `x-debug-context: 1` with `FEATURE_CONTEXT_DEBUG=true` adds context debug blocks.
   - `x-debug-prompt: 1` additionally includes the fully composed prompt packet (`model + messages`).
-   - User model is rendered as concise natural lines (3–5 max), filtered by completeness score (`>=40`)
-   - `north_star` is parsed per-domain (`relationships|work|health|spirituality|general`) and prefers `vision` from `user_stated`; otherwise cautious `goal` phrasing is used
