@@ -10,7 +10,14 @@ export type OverlayIntent = "companion" | "momentum" | "output_task" | "learning
 
 export type OverlayPolicyDecision = {
   skip: boolean;
-  reason: "allowed" | "urgent" | "output_task" | "direct_request_guard" | "friction_correction";
+  reason:
+    | "allowed"
+    | "urgent"
+    | "output_task"
+    | "direct_request_guard"
+    | "friction_correction"
+    | "session_warmup"
+    | "conversation_runway";
 };
 
 const narrativeMarkers = [

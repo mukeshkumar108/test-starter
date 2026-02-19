@@ -5,8 +5,10 @@
 
 import {
   __test__extractTodayFocus,
+  __test__isEveningWindow,
   __test__isMorningLocalWindow,
   __test__shouldTriggerDailyFocus,
+  __test__shouldTriggerDailyReview,
 } from "../chat/route";
 
 type TestResult = { name: string; passed: boolean; error?: string };
@@ -38,6 +40,18 @@ async function main() {
 
   await runTest("morning window false at 15:00 local", () => {
     expect(__test__isMorningLocalWindow(15)).toBe(false);
+  });
+
+  await runTest("daily review window false at 19:00 local", () => {
+    expect(__test__isEveningWindow(19)).toBe(false);
+  });
+
+  await runTest("daily review window true at 20:00 local", () => {
+    expect(__test__isEveningWindow(20)).toBe(true);
+  });
+
+  await runTest("daily review window true at 01:00 local", () => {
+    expect(__test__isEveningWindow(1)).toBe(true);
   });
 
   await runTest("daily focus triggers for momentum morning session start", () => {
@@ -77,6 +91,26 @@ async function main() {
       hasTodayFocus: false,
     });
     expect(trigger).toBe(false);
+  });
+
+  await runTest("daily review blocked before bedtime window", () => {
+    const trigger = __test__shouldTriggerDailyReview({
+      isSessionStart: true,
+      localHour: 19,
+      riskLevel: "LOW",
+      hasDailyReviewToday: false,
+    });
+    expect(trigger).toBe(false);
+  });
+
+  await runTest("daily review triggers in bedtime window", () => {
+    const trigger = __test__shouldTriggerDailyReview({
+      isSessionStart: true,
+      localHour: 21,
+      riskLevel: "LOW",
+      hasDailyReviewToday: false,
+    });
+    expect(trigger).toBe(true);
   });
 
   await runTest("extract focus supports hold", () => {

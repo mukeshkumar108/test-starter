@@ -18,6 +18,7 @@ const tests: TestDef[] = [
   { name: "safeCompletionStrip", command: [...nodeWithTsx, "src/lib/llm/__tests__/safeCompletion.strip.test.ts"] },
   { name: "librarian", command: [...nodeWithTsx, "src/synapse/librarian.test.ts"] },
   { name: "overlayInjection", command: [...nodeWithTsx, "src/app/api/__tests__/overlayInjection.test.ts"] },
+  { name: "overlayWarmupPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/overlayWarmupPolicy.test.ts"] },
   { name: "memoryQueryNormalization", command: [...nodeWithTsx, "src/app/api/__tests__/memoryQueryNormalization.test.ts"] },
   { name: "correctionGuards", command: [...nodeWithTsx, "src/app/api/__tests__/correctionGuards.test.ts"] },
   {

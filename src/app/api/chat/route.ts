@@ -1515,7 +1515,8 @@ function isMorningLocalWindow(hour: number) {
 }
 
 function isEveningWindow(hour: number) {
-  return hour >= 18 || hour < 2;
+  // Daily review should feel like bedtime wind-down, not early evening.
+  return hour >= 20 || hour < 2;
 }
 
 function shouldTriggerDailyFocus(params: {
@@ -1730,6 +1731,36 @@ function nextCorrectionOverlayCooldownTurns(current: number, correctionSignal: b
   if (correctionSignal) return Math.max(current, 2);
   if (current > 0) return current - 1;
   return 0;
+}
+
+function shouldForceSessionWarmupOverlaySkip(params: {
+  isSessionStart: boolean;
+  recentMessageCount: number;
+  intent: OverlayIntent;
+  isUrgent: boolean;
+  isDirectRequest: boolean;
+}) {
+  if (!params.isSessionStart) return false;
+  if (params.recentMessageCount !== 0) return false;
+  if (params.isUrgent) return false;
+  if (params.isDirectRequest) return false;
+  return params.intent === "companion";
+}
+
+const RUNWAY_REQUIRED_OVERLAYS: Array<OverlayType> = [
+  "accountability_tug",
+  "daily_review",
+  "weekly_compass",
+];
+
+function shouldHoldOverlayUntilRunway(params: {
+  overlayType: OverlayType | "none";
+  recentMessageCount: number;
+}) {
+  if (params.overlayType === "none") return false;
+  if (!RUNWAY_REQUIRED_OVERLAYS.includes(params.overlayType)) return false;
+  // Require one completed back-and-forth in-session before ritual nudges.
+  return params.recentMessageCount < 2;
 }
 
 function buildCorrectionGuardBlock(corrections: string[] | undefined) {
@@ -2010,9 +2041,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const overlayPolicy = frictionSignal || correctionOverlayCooldownTurns > 0
-      ? { skip: true as const, reason: "friction_correction" as const }
-      : baseOverlayPolicy;
+    const sessionWarmupSkip = shouldForceSessionWarmupOverlaySkip({
+      isSessionStart: context.isSessionStart,
+      recentMessageCount: context.recentMessages.length,
+      intent: overlayIntent,
+      isUrgent: overlayIsUrgent,
+      isDirectRequest: overlayIsDirectRequest,
+    });
+    const overlayPolicy =
+      frictionSignal || correctionOverlayCooldownTurns > 0
+        ? { skip: true as const, reason: "friction_correction" as const }
+        : sessionWarmupSkip
+          ? { skip: true as const, reason: "session_warmup" as const }
+          : baseOverlayPolicy;
     const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
     const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
     const hasDailyReviewToday = overlayUser.lastDailyReviewDate === dayKey;
@@ -2175,6 +2216,17 @@ export async function POST(request: NextRequest) {
       overlayType = decision.overlayType;
       overlayTriggerReason = decision.triggerReason;
       overlayTopicKey = decision.topicKey;
+
+      if (
+        shouldHoldOverlayUntilRunway({
+          overlayType,
+          recentMessageCount: context.recentMessages.length,
+        })
+      ) {
+        overlayType = "none";
+        overlayTriggerReason = "policy_skip_conversation_runway";
+        overlayTopicKey = undefined;
+      }
 
       if (overlayType === "curiosity_spiral") {
         overlayTypeActive = "curiosity_spiral";
@@ -2587,11 +2639,15 @@ export const __test__buildChatMessages = buildChatMessages;
 export const __test__buildChatTrace = buildChatTrace;
 export const __test__shouldTriggerDailyFocus = shouldTriggerDailyFocus;
 export const __test__isMorningLocalWindow = isMorningLocalWindow;
+export const __test__shouldTriggerDailyReview = shouldTriggerDailyReview;
+export const __test__isEveningWindow = isEveningWindow;
 export const __test__extractTodayFocus = extractTodayFocus;
 export const __test__normalizeMemoryQueryResponse = normalizeMemoryQueryResponse;
 export const __test__extractCorrectionFactClaims = extractCorrectionFactClaims;
 export const __test__mergeCorrectionFacts = mergeCorrectionFacts;
 export const __test__nextCorrectionOverlayCooldownTurns = nextCorrectionOverlayCooldownTurns;
+export const __test__shouldForceSessionWarmupOverlaySkip = shouldForceSessionWarmupOverlaySkip;
+export const __test__shouldHoldOverlayUntilRunway = shouldHoldOverlayUntilRunway;
 export const __test__buildCorrectionGuardBlock = buildCorrectionGuardBlock;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
