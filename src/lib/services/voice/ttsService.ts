@@ -31,21 +31,22 @@ function resolveVoiceSettings(params: {
   localHour?: number;
 }): VoiceSettings {
   const hasLaugh = /\bhaha\b/i.test(params.text);
+  const baseline: VoiceSettings = {
+    stability: 0.56,
+    similarity_boost: 0.76,
+    style: hasLaugh ? 0.32 : 0.16,
+    use_speaker_boost: true,
+  };
   if (isNightVoiceWindow(params.localHour)) {
     return {
-      // Slightly higher stability + lower style at night to reduce rushed delivery.
-      stability: 0.56,
+      // Extra-soft night mode on top of the new calmer baseline.
+      stability: 0.62,
       similarity_boost: 0.76,
-      style: hasLaugh ? 0.32 : 0.16,
+      style: hasLaugh ? 0.26 : 0.12,
       use_speaker_boost: true,
     };
   }
-  return {
-    stability: 0.46,
-    similarity_boost: 0.78,
-    style: hasLaugh ? 0.4 : 0.24,
-    use_speaker_boost: true,
-  };
+  return baseline;
 }
 
 export async function synthesizeSpeech(

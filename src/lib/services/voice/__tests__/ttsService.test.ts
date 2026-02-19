@@ -79,6 +79,13 @@ async function main() {
     expect(night.style).toBeLessThan(day.style);
   });
 
+  await runTest("day baseline matches calmer profile defaults", () => {
+    const day = __test__resolveVoiceSettings({ text: "hello there", localHour: 14 });
+    expect(day.stability).toBe(0.56);
+    expect(day.similarity_boost).toBe(0.76);
+    expect(day.style).toBe(0.16);
+  });
+
   await runTest("laugh handling still applies at night", () => {
     const nightPlain = __test__resolveVoiceSettings({ text: "hello there", localHour: 1 });
     const nightLaugh = __test__resolveVoiceSettings({ text: "haha hello there", localHour: 1 });
