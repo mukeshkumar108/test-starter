@@ -100,7 +100,14 @@ async function main() {
   });
   (globalThis as any).__synapseMemoryLoopsOverride = async () => ({
     items: [
-      { id: "l-1", type: "commitment", text: "Set 6 AM alarm for walk routine", salience: 5 },
+      {
+        id: "l-1",
+        type: "commitment",
+        text: "Set 6 AM alarm for walk routine",
+        salience: 5,
+        importance: 5,
+        urgency: 4,
+      },
       { id: "l-2", type: "thread", text: "Complete portfolio refresh and model rollout", salience: 5 },
     ],
     metadata: { count: 2, sort: "priority_desc" },
@@ -135,6 +142,7 @@ async function main() {
   expect(commitments.length).toBe(1);
   expect(openLoops[0]).toBe("Set 6 AM alarm for walk routine");
   expect(commitments[0]).toBe("Set 6 AM alarm for walk routine");
+  expect(context.overlayContext?.hasHighPriorityLoop ?? false).toBe(true);
   for (const item of [...openLoops, ...commitments]) {
     const words = item.split(/\s+/).filter(Boolean).length;
     if (words > 12) {

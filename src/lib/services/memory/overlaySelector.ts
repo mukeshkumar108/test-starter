@@ -145,6 +145,7 @@ export function selectOverlay(params: {
   };
   userLastTugAt?: string | null;
   tugBackoff?: Record<string, string>;
+  hasHighPriorityLoop?: boolean;
   now?: Date;
 }): OverlayDecision {
   const {
@@ -161,6 +162,7 @@ export function selectOverlay(params: {
     conflictSignals,
     userLastTugAt,
     tugBackoff,
+    hasHighPriorityLoop,
     now,
   } =
     params;
@@ -213,7 +215,7 @@ export function selectOverlay(params: {
     if (eligible && topicKey) {
       return {
         overlayType: "accountability_tug",
-        triggerReason: "accountability_tug",
+        triggerReason: hasHighPriorityLoop ? "accountability_tug_priority" : "accountability_tug",
         topicKey,
       };
     }

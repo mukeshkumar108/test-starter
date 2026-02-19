@@ -261,6 +261,21 @@ async function main() {
     expect(decision.overlayType).toBe("none");
   });
 
+  await runTest("high-priority loop marks accountability priority trigger", () => {
+    const decision = selectOverlay({
+      transcript: "hey",
+      openLoops: ["finish portfolio"],
+      commitments: [],
+      overlayUsed: {},
+      hasHighPriorityLoop: true,
+      now: new Date("2026-02-10T10:00:00Z"),
+    });
+    expect(decision).toMatchObject({
+      overlayType: "accountability_tug",
+      triggerReason: "accountability_tug_priority",
+    });
+  });
+
   const failed = results.filter((result) => !result.passed);
   if (failed.length > 0) {
     console.error("\nOverlay selector tests failed:");

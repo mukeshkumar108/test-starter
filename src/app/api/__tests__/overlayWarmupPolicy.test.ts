@@ -80,6 +80,15 @@ async function main() {
     expect(hold).toBe(false);
   });
 
+  await runTest("high-priority accountability_tug can bypass runway", () => {
+    const hold = __test__shouldHoldOverlayUntilRunway({
+      overlayType: "accountability_tug",
+      recentMessageCount: 1,
+      hasHighPriorityLoop: true,
+    });
+    expect(hold).toBe(false);
+  });
+
   await runTest("does not hold curiosity_spiral overlay", () => {
     const hold = __test__shouldHoldOverlayUntilRunway({
       overlayType: "curiosity_spiral",

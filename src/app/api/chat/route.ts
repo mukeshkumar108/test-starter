@@ -1404,13 +1404,10 @@ function buildChatMessages(params: {
     postureLines.push("", params.momentumGuardBlock);
   }
   const postureBlock = postureLines.join("\n");
-  const styleGuard =
-    "Avoid therapeutic mirroring; don’t restate the user’s feelings unless they explicitly asked for reflection.";
   const sessionFacts = rollingSummary ? clampSessionFacts(rollingSummary) : "";
   return [
     { role: "system" as const, content: params.persona },
     ...(params.userProfileBlock ? [{ role: "system" as const, content: params.userProfileBlock }] : []),
-    { role: "system" as const, content: styleGuard },
     { role: "system" as const, content: postureBlock },
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
@@ -1774,8 +1771,10 @@ const RUNWAY_REQUIRED_OVERLAYS: Array<OverlayType> = [
 function shouldHoldOverlayUntilRunway(params: {
   overlayType: OverlayType | "none";
   recentMessageCount: number;
+  hasHighPriorityLoop?: boolean;
 }) {
   if (params.overlayType === "none") return false;
+  if (params.overlayType === "accountability_tug" && params.hasHighPriorityLoop) return false;
   if (!RUNWAY_REQUIRED_OVERLAYS.includes(params.overlayType)) return false;
   // Require one completed back-and-forth in-session before ritual nudges.
   return params.recentMessageCount < 2;
@@ -2214,6 +2213,7 @@ export async function POST(request: NextRequest) {
         transcript: sttResult.transcript,
         openLoops: context.overlayContext?.openLoops,
         commitments: context.overlayContext?.commitments,
+        hasHighPriorityLoop: context.overlayContext?.hasHighPriorityLoop,
         overlayUsed,
         dailyFocusEligible,
         dailyReviewEligible,
@@ -2239,6 +2239,7 @@ export async function POST(request: NextRequest) {
         shouldHoldOverlayUntilRunway({
           overlayType,
           recentMessageCount: context.recentMessages.length,
+          hasHighPriorityLoop: context.overlayContext?.hasHighPriorityLoop,
         })
       ) {
         overlayType = "none";

@@ -25,6 +25,7 @@ export interface ConversationContext {
     commitments?: string[];
     currentFocus?: string;
     weeklyNorthStar?: string;
+    hasHighPriorityLoop?: boolean;
   };
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
   /** True if this is the first turn of a new session (for conditional SessionSummary injection) */
@@ -481,6 +482,7 @@ function getOverlayContextFromStartBrief(
     commitments: buildOverlayItems(commitmentItems, recentMessages),
     currentFocus: trajectory?.todayFocus ?? undefined,
     weeklyNorthStar: trajectory?.weeklyNorthStar ?? undefined,
+    hasHighPriorityLoop: false,
   };
 }
 
@@ -496,11 +498,15 @@ function getOverlayContextFromMemoryLoops(
     .filter((item) => (item.type ?? "").toLowerCase() === "commitment")
     .map((item) => (typeof item.text === "string" ? item.text.trim() : ""))
     .filter(Boolean);
+  const hasHighPriorityLoop = loops.some(
+    (item) => (item.urgency ?? 0) >= 4 && (item.importance ?? 0) >= 4
+  );
   return {
     openLoops: buildOverlayItems(openLoopItems, recentMessages),
     commitments: buildOverlayItems(commitmentItems, recentMessages),
     currentFocus: trajectory?.todayFocus ?? undefined,
     weeklyNorthStar: trajectory?.weeklyNorthStar ?? undefined,
+    hasHighPriorityLoop,
   };
 }
 
@@ -869,6 +875,7 @@ export async function buildContextFromSynapse(
         commitments: [],
         currentFocus: localTrajectory?.todayFocus ?? undefined,
         weeklyNorthStar: localTrajectory?.weeklyNorthStar ?? undefined,
+        hasHighPriorityLoop: false,
       },
       recentMessages: messages
         .map((message) => ({
@@ -901,6 +908,7 @@ export async function buildContextFromSynapse(
       commitments: buildOverlayItems(cached.brief.commitments ?? [], messages),
       currentFocus: effectiveFocus,
       weeklyNorthStar: effectiveWeeklyNorthStar,
+      hasHighPriorityLoop: false,
     };
     if (env.FEATURE_LIBRARIAN_TRACE === "true") {
       void prisma.librarianTrace.create({
@@ -979,6 +987,7 @@ export async function buildContextFromSynapse(
     commitments: buildOverlayItems(brief.commitments ?? [], messages),
     currentFocus: effectiveFocus,
     weeklyNorthStar: effectiveWeeklyNorthStar,
+    hasHighPriorityLoop: false,
   };
 
   if (env.FEATURE_LIBRARIAN_TRACE === "true") {
