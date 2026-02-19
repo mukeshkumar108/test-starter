@@ -1387,6 +1387,7 @@ function buildChatMessages(params: {
   persona: string;
   productKernelBlock?: string | null;
   userProfileBlock?: string | null;
+  momentumGuardBlock?: string | null;
   situationalContext?: string;
   correctionBlock?: string | null;
   continuityBlock?: string | null;
@@ -1416,6 +1417,7 @@ function buildChatMessages(params: {
     ...(params.userProfileBlock ? [{ role: "system" as const, content: params.userProfileBlock }] : []),
     { role: "system" as const, content: styleGuard },
     { role: "system" as const, content: postureBlock },
+    ...(params.momentumGuardBlock ? [{ role: "system" as const, content: params.momentumGuardBlock }] : []),
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
       : []),
@@ -1517,6 +1519,28 @@ function isMorningLocalWindow(hour: number) {
 function isEveningWindow(hour: number) {
   // Daily review should feel like bedtime wind-down, not early evening.
   return hour >= 20 || hour < 2;
+}
+
+function isLateNightMomentumWindow(hour: number) {
+  return hour >= 0 && hour < 5;
+}
+
+function buildMomentumGuardBlock(params: {
+  intent: OverlayIntent;
+  localHour: number;
+}) {
+  if (params.intent !== "momentum") return null;
+  const lines = [
+    "[MOMENTUM_GUARD]",
+    "- Stay action-oriented, but do not repeat the same setup/check question on consecutive turns.",
+    "- If user confirms a step, acknowledge it and move to one next concrete step or close the loop.",
+  ];
+  if (isLateNightMomentumWindow(params.localHour)) {
+    lines.push(
+      "- Late-night mode (00:00-05:00 local): soften pressure, ask at most one check question, then step back."
+    );
+  }
+  return lines.join("\n");
 }
 
 function shouldTriggerDailyFocus(params: {
@@ -2308,6 +2332,10 @@ export async function POST(request: NextRequest) {
         personaId,
         personaSlug: persona.slug,
       }),
+      momentumGuardBlock: buildMomentumGuardBlock({
+        intent: overlayIntent,
+        localHour: zoned.hour,
+      }),
       situationalContext,
       correctionBlock: buildCorrectionGuardBlock(overlayUser.sessionFactCorrections),
       continuityBlock,
@@ -2641,6 +2669,8 @@ export const __test__shouldTriggerDailyFocus = shouldTriggerDailyFocus;
 export const __test__isMorningLocalWindow = isMorningLocalWindow;
 export const __test__shouldTriggerDailyReview = shouldTriggerDailyReview;
 export const __test__isEveningWindow = isEveningWindow;
+export const __test__isLateNightMomentumWindow = isLateNightMomentumWindow;
+export const __test__buildMomentumGuardBlock = buildMomentumGuardBlock;
 export const __test__extractTodayFocus = extractTodayFocus;
 export const __test__normalizeMemoryQueryResponse = normalizeMemoryQueryResponse;
 export const __test__extractCorrectionFactClaims = extractCorrectionFactClaims;

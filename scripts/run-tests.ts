@@ -19,6 +19,7 @@ const tests: TestDef[] = [
   { name: "librarian", command: [...nodeWithTsx, "src/synapse/librarian.test.ts"] },
   { name: "overlayInjection", command: [...nodeWithTsx, "src/app/api/__tests__/overlayInjection.test.ts"] },
   { name: "overlayWarmupPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/overlayWarmupPolicy.test.ts"] },
+  { name: "momentumGuardPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/momentumGuardPolicy.test.ts"] },
   { name: "memoryQueryNormalization", command: [...nodeWithTsx, "src/app/api/__tests__/memoryQueryNormalization.test.ts"] },
   { name: "correctionGuards", command: [...nodeWithTsx, "src/app/api/__tests__/correctionGuards.test.ts"] },
   {
