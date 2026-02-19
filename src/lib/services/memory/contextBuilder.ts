@@ -6,6 +6,7 @@ import type {
   SynapseMemoryLoopItem,
   SynapseMemoryLoopsResponse,
   SynapseStartBriefResponse,
+  SynapseUserModelResponse,
 } from "@/lib/services/synapseClient";
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
@@ -39,6 +40,8 @@ const OVERLAY_ITEM_MAX_WORDS = 12;
 const ROLLING_SUMMARY_SESSION_KEY = "rollingSummarySessionId";
 const START_BRIEF_SESSION_KEY = "startBriefSessionId";
 const START_BRIEF_DATA_KEY = "startBriefData";
+const USER_MODEL_SESSION_KEY = "userModelSessionId";
+const USER_MODEL_DATA_KEY = "userModelData";
 const briefCache = new Map<
   string,
   { fetchedAt: number; brief: SynapseBriefResponse }
@@ -407,7 +410,8 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
 
 function buildSessionStartContext(
   brief: SynapseStartBriefResponse,
-  trajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null
+  trajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null,
+  userModelLines?: string[]
 ) {
   const lines: string[] = [];
   const timeLabel = typeof brief.timeOfDayLabel === "string" ? brief.timeOfDayLabel.trim() : "";
@@ -422,12 +426,16 @@ function buildSessionStartContext(
   const bridgeText = typeof brief.bridgeText === "string" ? brief.bridgeText.trim() : "";
   if (bridgeText) lines.push(bridgeText);
 
+  if (Array.isArray(userModelLines) && userModelLines.length > 0) {
+    lines.push(...userModelLines);
+  }
+
   const items = Array.isArray(brief.items) ? brief.items : [];
   const loops = items
     .filter((item) => (item?.kind ?? "").toLowerCase() === "loop")
     .map((item) => (typeof item?.text === "string" ? item.text.trim() : ""))
     .filter(Boolean)
-    .slice(0, 3);
+    .slice(0, 5);
   if (loops.length > 0) {
     lines.push(`Active threads: ${loops.join(" | ")}`);
   }
@@ -453,7 +461,7 @@ function buildSessionStartContext(
   const compact = lines
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(0, 6);
+    .slice(0, 10);
   return compact.length > 0 ? compact.join("\n") : null;
 }
 
@@ -638,20 +646,298 @@ function getSynapseMemoryLoops() {
   return typeof override === "function" ? override : synapseClient.memoryLoops;
 }
 
+function getSynapseUserModel() {
+  const override = (globalThis as { __synapseUserModelOverride?: typeof synapseClient.userModel })
+    .__synapseUserModelOverride;
+  return typeof override === "function" ? override : synapseClient.userModel;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toScoreValue(
+  score: Record<string, number> | null | undefined,
+  key: "relationships" | "work" | "north_star" | "health" | "spirituality" | "general"
+) {
+  const value = score?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function extractText(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const direct = value.text;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const fallbacks = ["summary", "focus", "goal", "description", "notes"];
+  for (const key of fallbacks) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return null;
+}
+
+function sourceRank(source: unknown) {
+  if (source === "user_stated") return 2;
+  if (source === "manual") return 1;
+  return 0;
+}
+
+function confidenceValue(value: unknown) {
+  if (!isRecord(value)) return 0;
+  const confidence = value.confidence;
+  return typeof confidence === "number" && Number.isFinite(confidence) ? confidence : 0;
+}
+
+type NorthStarDomain = "relationships" | "work" | "health" | "spirituality" | "general";
+
+type NorthStarEntry = {
+  domain: NorthStarDomain;
+  vision: string | null;
+  goal: string | null;
+  status: "active" | "inactive" | "unknown";
+  vision_source: string | null;
+  goal_source: string | null;
+  vision_confidence: number;
+  goal_confidence: number;
+};
+
+function normalizeNorthStarModel(value: unknown) {
+  if (!isRecord(value)) return null;
+  const domains: NorthStarDomain[] = ["relationships", "work", "health", "spirituality", "general"];
+  const entries: NorthStarEntry[] = domains
+    .map((domain) => {
+      const raw = value[domain];
+      if (!isRecord(raw)) return null;
+      const vision = typeof raw.vision === "string" && raw.vision.trim() ? raw.vision.trim() : null;
+      const goal = typeof raw.goal === "string" && raw.goal.trim() ? raw.goal.trim() : null;
+      const statusRaw = typeof raw.status === "string" ? raw.status.toLowerCase() : "unknown";
+      const status =
+        statusRaw === "active" || statusRaw === "inactive" || statusRaw === "unknown"
+          ? statusRaw
+          : "unknown";
+      const visionSource = typeof raw.vision_source === "string" ? raw.vision_source : null;
+      const goalSource = typeof raw.goal_source === "string" ? raw.goal_source : null;
+      const visionConfidence =
+        typeof raw.vision_confidence === "number" && Number.isFinite(raw.vision_confidence)
+          ? raw.vision_confidence
+          : 0;
+      const goalConfidence =
+        typeof raw.goal_confidence === "number" && Number.isFinite(raw.goal_confidence)
+          ? raw.goal_confidence
+          : 0;
+      if (!vision && !goal) return null;
+      return {
+        domain,
+        vision,
+        goal,
+        status,
+        vision_source: visionSource,
+        goal_source: goalSource,
+        vision_confidence: visionConfidence,
+        goal_confidence: goalConfidence,
+      } satisfies NorthStarEntry;
+    })
+    .filter((item): item is NorthStarEntry => Boolean(item));
+
+  // Backward compatibility: legacy payload may have north_star.text
+  if (entries.length === 0) {
+    const legacyText = typeof value.text === "string" && value.text.trim() ? value.text.trim() : null;
+    if (legacyText) {
+      entries.push({
+        domain: "general",
+        vision: null,
+        goal: legacyText,
+        status: "active",
+        vision_source: null,
+        goal_source: "inferred",
+        vision_confidence: 0,
+        goal_confidence: 0.6,
+      });
+    }
+  }
+
+  return entries.length > 0 ? entries : null;
+}
+
+function chooseNorthStarLine(params: {
+  northStar: unknown;
+  completenessScore: Record<string, number> | null | undefined;
+}) {
+  const entries = normalizeNorthStarModel(params.northStar);
+  if (!entries) return null;
+
+  const strongUnknownThreshold = 0.85;
+  const eligible = entries.filter((entry) => {
+    const domainScore = toScoreValue(params.completenessScore, entry.domain);
+    if (domainScore < 40) return false;
+    if (entry.status === "unknown") {
+      return (
+        entry.vision_confidence >= strongUnknownThreshold ||
+        entry.goal_confidence >= strongUnknownThreshold
+      );
+    }
+    return true;
+  });
+  if (eligible.length === 0) return null;
+
+  const ranked = eligible
+    .map((entry) => {
+      const hasUserStatedVision =
+        Boolean(entry.vision) && entry.vision_source === "user_stated";
+      const hasVision = Boolean(entry.vision);
+      const hasGoal = Boolean(entry.goal);
+      const sourcePriority = hasUserStatedVision ? 2 : hasVision ? 1 : 0;
+      const confidence = hasUserStatedVision
+        ? entry.vision_confidence
+        : hasVision
+          ? entry.vision_confidence
+          : entry.goal_confidence;
+      const score = toScoreValue(params.completenessScore, entry.domain);
+      return { entry, hasUserStatedVision, hasVision, hasGoal, sourcePriority, confidence, score };
+    })
+    .sort((a, b) => {
+      if (b.sourcePriority !== a.sourcePriority) return b.sourcePriority - a.sourcePriority;
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      return b.score - a.score;
+    });
+
+  const selected = ranked[0];
+  if (selected.hasUserStatedVision && selected.entry.vision) {
+    return `Long-term direction (${selected.entry.domain}): ${selected.entry.vision}`;
+  }
+  if (selected.hasVision && selected.entry.vision) {
+    return `Likely direction (${selected.entry.domain}): ${selected.entry.vision}`;
+  }
+  if (selected.hasGoal && selected.entry.goal) {
+    const source = selected.entry.goal_source ?? "inferred";
+    if (source === "user_stated" || source === "manual") {
+      return `Long-term goal (${selected.entry.domain}): ${selected.entry.goal}`;
+    }
+    return `Likely goal (${selected.entry.domain}): ${selected.entry.goal}`;
+  }
+  return null;
+}
+
+function toUserModelLines(userModel: SynapseUserModelResponse | null) {
+  if (!userModel || !userModel.exists || !isRecord(userModel.model)) return [] as string[];
+  const score = userModel.completenessScore ?? {};
+  const model = userModel.model;
+  const lines: string[] = [];
+
+  if (toScoreValue(score, "north_star") >= 40) {
+    const northStarLine = chooseNorthStarLine({
+      northStar: model.north_star,
+      completenessScore: score,
+    });
+    if (northStarLine) lines.push(northStarLine);
+  }
+
+  if (toScoreValue(score, "work") >= 40) {
+    const currentFocus = extractText(model.current_focus);
+    const workContext = extractText(model.work_context);
+    if (currentFocus && workContext) {
+      lines.push(`Current focus: ${currentFocus}. Work context: ${workContext}`);
+    } else if (currentFocus) {
+      lines.push(`Current focus: ${currentFocus}`);
+    } else if (workContext) {
+      lines.push(`Work context: ${workContext}`);
+    }
+  }
+
+  if (toScoreValue(score, "relationships") >= 40 && Array.isArray(model.key_relationships)) {
+    const topRelationships = model.key_relationships
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+      .sort((a, b) => {
+        const sourceDiff = sourceRank(b.source) - sourceRank(a.source);
+        if (sourceDiff !== 0) return sourceDiff;
+        return confidenceValue(b) - confidenceValue(a);
+      })
+      .slice(0, 2)
+      .map((item) => {
+        const name = typeof item.name === "string" ? item.name.trim() : "";
+        const who = typeof item.who === "string" ? item.who.trim() : "";
+        return name || who;
+      })
+      .filter(Boolean);
+    if (topRelationships.length > 0) {
+      lines.push(`Important relationships: ${topRelationships.join(", ")}`);
+    }
+  }
+
+  if (toScoreValue(score, "general") >= 40) {
+    const patternLine = Array.isArray(model.patterns)
+      ? model.patterns
+          .filter((item): item is Record<string, unknown> => isRecord(item))
+          .sort((a, b) => {
+            const sourceDiff = sourceRank(b.source) - sourceRank(a.source);
+            if (sourceDiff !== 0) return sourceDiff;
+            return confidenceValue(b) - confidenceValue(a);
+          })
+          .map((item) => extractText(item))
+          .filter((item): item is string => Boolean(item))
+          .at(0)
+      : null;
+    if (patternLine) {
+      lines.push(`Pattern to watch: ${patternLine}`);
+    }
+    if (isRecord(model.preferences)) {
+      const tone = typeof model.preferences.tone === "string" ? model.preferences.tone.trim() : "";
+      const avoid = Array.isArray(model.preferences.avoid)
+        ? model.preferences.avoid
+            .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+            .slice(0, 2)
+        : [];
+      if (tone || avoid.length > 0) {
+        const parts: string[] = [];
+        if (tone) parts.push(`prefers ${tone} tone`);
+        if (avoid.length > 0) parts.push(`avoid ${avoid.join(", ")}`);
+        lines.push(`Communication preference: ${parts.join("; ")}`);
+      }
+    }
+  }
+
+  if (toScoreValue(score, "health") >= 40) {
+    const health = extractText(model.health);
+    if (health) lines.push(`Health thread: ${health}`);
+  }
+
+  if (toScoreValue(score, "spirituality") >= 40) {
+    const spirituality = extractText(model.spirituality);
+    if (spirituality) lines.push(`Spiritual thread: ${spirituality}`);
+  }
+
+  return lines.map((line) => limitWords(line, 24)).slice(0, 5);
+}
+
+function getUserModelForSession(state: unknown, sessionId: string) {
+  if (!sessionId) return null;
+  const scoped = asStateRecord(state)[USER_MODEL_SESSION_KEY];
+  if (typeof scoped !== "string" || scoped !== sessionId) return null;
+  const raw = asStateRecord(state)[USER_MODEL_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw as SynapseUserModelResponse;
+}
+
+function withUserModelForSession(state: unknown, sessionId: string, model: SynapseUserModelResponse) {
+  const base = asStateRecord(state);
+  return {
+    ...base,
+    [USER_MODEL_SESSION_KEY]: sessionId,
+    [USER_MODEL_DATA_KEY]: model,
+  };
+}
+
 async function maybeFetchOverlayLoops(params: {
   userId: string;
-  personaId: string;
 }) {
   try {
     const response = await getSynapseMemoryLoops()<{
       tenantId?: string;
       userId: string;
-      personaId: string;
       limit: number;
     }, SynapseMemoryLoopsResponse>({
       tenantId: env.SYNAPSE_TENANT_ID,
       userId: params.userId,
-      personaId: params.personaId,
       limit: 5,
     });
     if (!response || !Array.isArray(response.items)) return null;
@@ -690,6 +976,8 @@ export async function buildContextFromSynapse(
   const rollingSummary = getRollingSummaryForSession(sessionState, sessionId);
   const localTrajectory = getTrajectoryStateFromSession(sessionState?.state, new Date(), "Europe/Zagreb");
   const cachedStartBrief = getStartBriefForSession(sessionState?.state, sessionId);
+  const cachedUserModel = getUserModelForSession(sessionState?.state, sessionId);
+  const userModelLines = toUserModelLines(cachedUserModel);
 
   if (cachedStartBrief) {
     const cachedItemsCount = Array.isArray(cachedStartBrief.items) ? cachedStartBrief.items.length : 0;
@@ -716,13 +1004,13 @@ export async function buildContextFromSynapse(
         console.warn("[librarian.trace] failed to log startbrief(cache)", { error });
       });
     }
-    const loopItems = isSessionStart ? await maybeFetchOverlayLoops({ userId, personaId }) : null;
+    const loopItems = isSessionStart ? await maybeFetchOverlayLoops({ userId }) : null;
     const overlayContext = loopItems
       ? getOverlayContextFromMemoryLoops(loopItems, messages, localTrajectory)
       : getOverlayContextFromStartBrief(cachedStartBrief, messages, localTrajectory);
     return {
       persona: personaPrompt,
-      situationalContext: buildSessionStartContext(cachedStartBrief, localTrajectory) ?? undefined,
+      situationalContext: buildSessionStartContext(cachedStartBrief, localTrajectory, userModelLines) ?? undefined,
       rollingSummary,
       startBrief: {
         used: true,
@@ -745,21 +1033,30 @@ export async function buildContextFromSynapse(
     const startBrief = await getSynapseStartBrief()<{
       tenantId?: string;
       userId: string;
-      personaId: string;
       sessionId: string;
       timezone?: string;
       now: string;
     }, SynapseStartBriefResponse>({
       tenantId: env.SYNAPSE_TENANT_ID,
       userId,
-      personaId,
       sessionId,
       timezone: "Europe/Zagreb",
       now: new Date().toISOString(),
     });
 
     if (startBrief) {
-      const nextState = withStartBriefForSession(sessionState?.state, sessionId, startBrief);
+      const userModel = await getSynapseUserModel()<{
+        tenantId?: string;
+        userId: string;
+      }, SynapseUserModelResponse>({
+        tenantId: env.SYNAPSE_TENANT_ID,
+        userId,
+      });
+      const nextState = withUserModelForSession(
+        withStartBriefForSession(sessionState?.state, sessionId, startBrief),
+        sessionId,
+        userModel ?? { exists: false }
+      );
       await prisma.sessionState.upsert({
         where: { userId_personaId: { userId, personaId } },
         update: { state: nextState as any, updatedAt: new Date() },
@@ -789,13 +1086,14 @@ export async function buildContextFromSynapse(
           console.warn("[librarian.trace] failed to log startbrief(fetch)", { error });
         });
       }
-      const loopItems = await maybeFetchOverlayLoops({ userId, personaId });
+      const loopItems = await maybeFetchOverlayLoops({ userId });
       const overlayContext = loopItems
         ? getOverlayContextFromMemoryLoops(loopItems, messages, localTrajectory)
         : getOverlayContextFromStartBrief(startBrief, messages, localTrajectory);
+      const fetchedUserModelLines = toUserModelLines(userModel);
       return {
         persona: personaPrompt,
-        situationalContext: buildSessionStartContext(startBrief, localTrajectory) ?? undefined,
+        situationalContext: buildSessionStartContext(startBrief, localTrajectory, fetchedUserModelLines) ?? undefined,
         rollingSummary,
         startBrief: {
           used: true,
@@ -887,7 +1185,7 @@ export async function buildContextFromSynapse(
     };
   }
 
-  const cacheKey = `${userId}:${personaId}:${sessionId}`;
+  const cacheKey = `${userId}:${sessionId}`;
   const cached = briefCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < BRIEF_CACHE_TTL_MS) {
     const situationalContext = buildSituationalContext(cached.brief);

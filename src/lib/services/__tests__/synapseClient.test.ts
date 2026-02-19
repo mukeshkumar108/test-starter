@@ -102,7 +102,7 @@ async function main() {
 
   expect(calls.length).toBe(1);
   expect(calls[0].url).toBe(
-    "https://synapse.test/session/startbrief?tenantId=tenant-test&userId=user-1&personaId=persona-1&sessionId=session-1&timezone=Europe%2FZagreb&now=2026-02-18T10%3A15%3A00Z"
+    "https://synapse.test/session/startbrief?tenantId=tenant-test&userId=user-1&sessionId=session-1&timezone=Europe%2FZagreb&now=2026-02-18T10%3A15%3A00Z"
   );
   });
 
@@ -158,10 +158,33 @@ async function main() {
 
   expect(calls.length).toBe(1);
   expect(calls[0].url).toBe(
-    "https://synapse.test/memory/loops?tenantId=tenant-test&userId=user-1&personaId=persona-1&limit=5"
+    "https://synapse.test/memory/loops?tenantId=tenant-test&userId=user-1&limit=5"
   );
   expect((result as any)?.items?.length).toBe(1);
   expect((result as any)?.items?.[0]?.text).toBe("Walk daily");
+  });
+
+  await runTest("userModel() hits correct URL", async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo, init?: RequestInit) => {
+    calls.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(JSON.stringify({ exists: true, model: {} }), { status: 200 });
+  }) as typeof fetch;
+
+  const { userModel } = await import("../synapseClient");
+  await userModel({
+    tenantId: "tenant-test",
+    userId: "user-1",
+    personaId: "persona-1",
+  });
+
+  globalThis.fetch = originalFetch;
+
+  expect(calls.length).toBe(1);
+  expect(calls[0].url).toBe(
+    "https://synapse.test/user/model?tenantId=tenant-test&userId=user-1"
+  );
   });
 
   await runTest("ingest() hits correct URL", async () => {

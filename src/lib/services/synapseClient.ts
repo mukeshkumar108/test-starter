@@ -61,6 +61,27 @@ export type SynapseMemoryLoopsResponse = {
   } | null;
 };
 
+export type SynapseUserModelResponse = {
+  tenantId?: string | null;
+  userId?: string | null;
+  model?: {
+    north_star?: unknown;
+    current_focus?: unknown;
+    key_relationships?: unknown[];
+    work_context?: unknown;
+    patterns?: unknown[];
+    preferences?: Record<string, unknown> | null;
+    health?: unknown;
+    spirituality?: unknown;
+  } | null;
+  completenessScore?: Record<string, number> | null;
+  version?: number | null;
+  exists?: boolean | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  lastSource?: string | null;
+};
+
 function toNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -272,7 +293,7 @@ export async function sessionStartBrief<TPayload = unknown, TResponse = unknown>
 ): Promise<TResponse | null> {
   const params = new URLSearchParams();
   const asRecord = (payload ?? {}) as Record<string, unknown>;
-  for (const key of ["tenantId", "userId", "personaId", "sessionId", "timezone", "now"]) {
+  for (const key of ["tenantId", "userId", "sessionId", "timezone", "now"]) {
     const value = asRecord[key];
     if (typeof value === "string" && value.length > 0) {
       params.set(key, value);
@@ -289,7 +310,7 @@ export async function memoryLoops<TPayload = unknown, TResponse = unknown>(
 ): Promise<TResponse | null> {
   const params = new URLSearchParams();
   const asRecord = (payload ?? {}) as Record<string, unknown>;
-  for (const key of ["tenantId", "userId", "personaId", "domain", "limit"]) {
+  for (const key of ["tenantId", "userId", "domain", "limit"]) {
     const value = asRecord[key];
     if (typeof value === "string" && value.length > 0) {
       params.set(key, value);
@@ -302,6 +323,23 @@ export async function memoryLoops<TPayload = unknown, TResponse = unknown>(
   const result = await requestJson<undefined, TResponse>("GET", path);
   if (!result?.ok) return null;
   return normalizeSynapseMemoryLoopsResponse(result.data) as TResponse;
+}
+
+export async function userModel<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const params = new URLSearchParams();
+  const asRecord = (payload ?? {}) as Record<string, unknown>;
+  for (const key of ["tenantId", "userId"]) {
+    const value = asRecord[key];
+    if (typeof value === "string" && value.length > 0) {
+      params.set(key, value);
+    }
+  }
+  const path = `/user/model${params.toString() ? `?${params.toString()}` : ""}`;
+  const result = await requestJson<undefined, TResponse>("GET", path);
+  if (!result?.ok) return null;
+  return result.data;
 }
 
 export async function ingest<TPayload = unknown, TResponse = unknown>(

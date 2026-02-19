@@ -86,7 +86,13 @@ async function main() {
   (prisma.sessionState.findUnique as any) = async () => null;
   (prisma.sessionState.upsert as any) = async () => ({ id: "state-1" });
 
-  (globalThis as any).__synapseStartBriefOverride = async () => ({
+  let startBriefPayload: any = null;
+  let loopsPayload: any = null;
+  let userModelPayload: any = null;
+
+  (globalThis as any).__synapseStartBriefOverride = async (payload: any) => {
+    startBriefPayload = payload;
+    return {
     timeOfDayLabel: "AFTERNOON",
     timeGapHuman: "12 minutes since last session",
     bridgeText: "Last session: you were preparing the proposal and blocked on revisions.",
@@ -97,8 +103,11 @@ async function main() {
       { kind: "loop", text: "This should be dropped after cap", type: "OPEN_LOOP" },
       { kind: "tension", text: "Pressure between speed and quality in revisions", type: "TENSION" },
     ],
-  });
-  (globalThis as any).__synapseMemoryLoopsOverride = async () => ({
+  };
+  };
+  (globalThis as any).__synapseMemoryLoopsOverride = async (payload: any) => {
+    loopsPayload = payload;
+    return {
     items: [
       {
         id: "l-1",
@@ -111,7 +120,55 @@ async function main() {
       { id: "l-2", type: "thread", text: "Complete portfolio refresh and model rollout", salience: 5 },
     ],
     metadata: { count: 2, sort: "priority_desc" },
-  });
+  };
+  };
+  (globalThis as any).__synapseUserModelOverride = async (payload: any) => {
+    userModelPayload = payload;
+    return {
+      exists: true,
+      completenessScore: {
+        relationships: 70,
+        work: 90,
+        north_star: 85,
+        health: 0,
+        spirituality: 0,
+        general: 65,
+      },
+      model: {
+        north_star: {
+          work: {
+            vision: null,
+            goal: "Ship memory reliability improvements this month",
+            status: "active",
+            goal_source: "inferred",
+            goal_confidence: 0.72,
+          },
+          general: {
+            vision: "Build a meaningful AI product that improves daily life",
+            goal: null,
+            status: "active",
+            vision_source: "user_stated",
+            vision_confidence: 0.95,
+          },
+        },
+        current_focus: {
+          text: "Stabilize memory integration",
+          source: "user_stated",
+          confidence: 0.92,
+        },
+        work_context: {
+          text: "Shipping reliability improvements this week",
+          source: "user_stated",
+          confidence: 0.9,
+        },
+        key_relationships: [
+          { name: "Ashley", who: "partner", source: "user_stated", confidence: 0.9 },
+        ],
+        patterns: [{ text: "Moves fast and then overcommits", source: "inferred", confidence: 0.7 }],
+        preferences: { tone: "direct, warm", avoid: ["therapy-style"] },
+      },
+    };
+  };
 
   const context = await buildContextFromSynapse(
     "user-1",
@@ -123,6 +180,7 @@ async function main() {
 
   delete (globalThis as any).__synapseStartBriefOverride;
   delete (globalThis as any).__synapseMemoryLoopsOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
 
   if (!context) throw new Error("Expected context, got null");
 
@@ -136,6 +194,24 @@ async function main() {
   if (!context.situationalContext.includes("Last session: you were preparing the proposal")) {
     throw new Error("Expected bridge text in situationalContext");
   }
+  if (!context.situationalContext.includes("Active threads:")) {
+    throw new Error("Expected active threads line in situationalContext");
+  }
+  if (!context.situationalContext.includes("This should be dropped after cap")) {
+    throw new Error("Expected startbrief to render up to top 5 loop items");
+  }
+  if (!context.situationalContext.includes("Long-term direction (general): Build a meaningful AI product")) {
+    throw new Error("Expected additive user model north-star direction line");
+  }
+  if (context.situationalContext.includes("Likely goal (work): Ship memory reliability improvements this month")) {
+    throw new Error("Expected user_stated vision to be preferred over inferred goal");
+  }
+  if (!context.situationalContext.includes("Current focus: Stabilize memory integration")) {
+    throw new Error("Expected additive user model current focus/work line");
+  }
+  if (!context.situationalContext.includes("Important relationships: Ashley")) {
+    throw new Error("Expected additive user model relationships line");
+  }
   const openLoops = context.overlayContext?.openLoops ?? [];
   const commitments = context.overlayContext?.commitments ?? [];
   expect(openLoops.length).toBe(2);
@@ -143,6 +219,9 @@ async function main() {
   expect(openLoops[0]).toBe("Set 6 AM alarm for walk routine");
   expect(commitments[0]).toBe("Set 6 AM alarm for walk routine");
   expect(context.overlayContext?.hasHighPriorityLoop ?? false).toBe(true);
+  expect(startBriefPayload?.personaId ?? null).toBe(null);
+  expect(loopsPayload?.personaId ?? null).toBe(null);
+  expect(userModelPayload?.personaId ?? null).toBe(null);
   for (const item of [...openLoops, ...commitments]) {
     const words = item.split(/\s+/).filter(Boolean).length;
     if (words > 12) {
@@ -150,6 +229,65 @@ async function main() {
     }
   }
   expect(context.recentMessages.length).toBe(2);
+  });
+
+  await runTest("buildContextFromSynapse supports legacy north_star.text fallback", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-legacy-north-star.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => null;
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-legacy" });
+
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
+    timeOfDayLabel: "MORNING",
+    timeGapHuman: "2 minutes",
+    bridgeText: null,
+    items: [],
+  });
+  (globalThis as any).__synapseMemoryLoopsOverride = async () => ({ items: [], metadata: { count: 0 } });
+  (globalThis as any).__synapseUserModelOverride = async () => ({
+    exists: true,
+    completenessScore: {
+      relationships: 0,
+      work: 0,
+      north_star: 70,
+      health: 0,
+      spirituality: 0,
+      general: 40,
+    },
+    model: {
+      north_star: {
+        text: "Build something durable with real user impact",
+      },
+    },
+  });
+
+  const context = await buildContextFromSynapse(
+    "user-legacy",
+    "persona-legacy",
+    "hello",
+    "session-legacy",
+    true
+  );
+
+  delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseMemoryLoopsOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
+
+  if (!context?.situationalContext?.includes("Likely goal (general): Build something durable with real user impact")) {
+    throw new Error("Expected legacy north_star.text to map to general goal fallback");
+  }
   });
 
   await runTest("buildContext falls back when brief returns null", async () => {
@@ -247,6 +385,7 @@ async function main() {
     bridgeText: "Last session: proposal drafting remained active.",
     items: [],
   });
+  (globalThis as any).__synapseUserModelOverride = async () => ({ exists: false });
 
   const context = await buildContextFromSynapse(
     "user-2",
@@ -256,6 +395,7 @@ async function main() {
     true
   );
   delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
 
   if (!context?.situationalContext?.includes("CURRENT_FOCUS:\n- Finish proposal draft")) {
     throw new Error("Expected local today focus to be included in situational context");
@@ -297,6 +437,7 @@ async function main() {
     bridgeText: null,
     items: [],
   });
+  (globalThis as any).__synapseUserModelOverride = async () => ({ exists: false });
 
   const context = await buildContextFromSynapse(
     "user-3",
@@ -306,6 +447,7 @@ async function main() {
     true
   );
   delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
 
   expect(context?.rollingSummary ?? null).toBe("same-session-summary");
   });
@@ -338,6 +480,7 @@ async function main() {
     bridgeText: null,
     items: [],
   });
+  (globalThis as any).__synapseUserModelOverride = async () => ({ exists: false });
 
   const context = await buildContextFromSynapse(
     "user-4",
@@ -347,6 +490,7 @@ async function main() {
     true
   );
   delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
 
   expect(context?.rollingSummary ?? null).toBe(null);
   });

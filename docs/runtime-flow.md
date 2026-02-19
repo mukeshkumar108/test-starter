@@ -21,6 +21,7 @@ Two paths run in parallel:
    - Persona prompt
    - Last 8 messages from the active session only
    - On session start: Synapse `/session/startbrief` (cached per session)
+   - On session start: Synapse `/user/model` (cached per session; additive context only)
    - Fallback: Synapse `/session/brief` if startbrief unavailable
    - Startbrief payload is normalized defensively:
      - `items` coerced to array
@@ -36,7 +37,8 @@ Two paths run in parallel:
    - `/memory/query` parsing accepts both `facts: string[]` and `facts: {text}[]`
 8. **Prompt assembly** (`route.ts`)
    - Persona → Style guard → CONVERSATION_POSTURE (with momentum guard when relevant) → SITUATIONAL_CONTEXT → SESSION_FACT_CORRECTIONS (optional) → CONTINUITY (optional) → OVERLAY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
-   - Overlay loop inputs are sourced from Synapse `/memory/loops` on session start (fallback to startbrief loop items)
+  - Overlay loop inputs are sourced from Synapse `/memory/loops` on session start (fallback to startbrief loop items)
+  - Loop continuity is user-scoped (not persona-partitioned)
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
@@ -73,6 +75,7 @@ Order is fixed:
 
 ## Notes
 - Synapse `/session/startbrief` is the primary session-start continuity source.
+- Startbrief loop items and `/memory/loops` are treated as user-scoped canonical loop memory.
 - `/session/brief` is a fallback path.
 - Product-kernel trajectory guidance is loaded from compiled prompt kernels (not duplicated at runtime).
 - CONTINUITY injects only when timeGapMinutes ≥ 60 and the opener is not urgent.
@@ -90,3 +93,5 @@ Order is fixed:
 - Debug headers:
   - `x-debug-context: 1` with `FEATURE_CONTEXT_DEBUG=true` adds context debug blocks.
   - `x-debug-prompt: 1` additionally includes the fully composed prompt packet (`model + messages`).
+   - User model is rendered as concise natural lines (3–5 max), filtered by completeness score (`>=40`)
+   - `north_star` is parsed per-domain (`relationships|work|health|spirituality|general`) and prefers `vision` from `user_stated`; otherwise cautious `goal` phrasing is used
