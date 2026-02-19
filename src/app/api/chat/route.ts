@@ -2430,7 +2430,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 4: Text-to-Speech
-    const ttsResult = await synthesizeSpeech(llmResponse.content, persona.ttsVoiceId);
+    const ttsResult = await synthesizeSpeech(llmResponse.content, persona.ttsVoiceId, {
+      localHour: zoned.hour,
+    });
     timings.tts_ms = ttsResult.duration_ms;
 
     // Step 5: Store message with timing metadata

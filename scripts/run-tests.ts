@@ -16,6 +16,7 @@ const tests: TestDef[] = [
   { name: "personaPromptLoader", command: [...nodeWithTsx, "src/lib/prompts/__tests__/personaPromptLoader.test.ts"] },
   { name: "dailyFocusPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/dailyFocusPolicy.test.ts"] },
   { name: "safeCompletionStrip", command: [...nodeWithTsx, "src/lib/llm/__tests__/safeCompletion.strip.test.ts"] },
+  { name: "ttsService", command: [...nodeWithTsx, "src/lib/services/voice/__tests__/ttsService.test.ts"] },
   { name: "librarian", command: [...nodeWithTsx, "src/synapse/librarian.test.ts"] },
   { name: "overlayInjection", command: [...nodeWithTsx, "src/app/api/__tests__/overlayInjection.test.ts"] },
   { name: "overlayWarmupPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/overlayWarmupPolicy.test.ts"] },

@@ -6,19 +6,61 @@ export interface TTSResult {
   duration_ms: number;
 }
 
+type TTSOptions = {
+  localHour?: number;
+};
+
+type VoiceSettings = {
+  stability: number;
+  similarity_boost: number;
+  style: number;
+  use_speaker_boost: boolean;
+};
+
 function sanitizeForVoice(text: string): string {
   return text.replace(/[*_`#\[\]]/g, "").replace(/\s{2,}/g, " ").trim();
 }
 
+function isNightVoiceWindow(localHour?: number) {
+  if (typeof localHour !== "number" || !Number.isFinite(localHour)) return false;
+  return localHour >= 23 || localHour < 5;
+}
+
+function resolveVoiceSettings(params: {
+  text: string;
+  localHour?: number;
+}): VoiceSettings {
+  const hasLaugh = /\bhaha\b/i.test(params.text);
+  if (isNightVoiceWindow(params.localHour)) {
+    return {
+      // Slightly higher stability + lower style at night to reduce rushed delivery.
+      stability: 0.56,
+      similarity_boost: 0.76,
+      style: hasLaugh ? 0.32 : 0.16,
+      use_speaker_boost: true,
+    };
+  }
+  return {
+    stability: 0.46,
+    similarity_boost: 0.78,
+    style: hasLaugh ? 0.4 : 0.24,
+    use_speaker_boost: true,
+  };
+}
+
 export async function synthesizeSpeech(
-  text: string, 
-  voiceId: string
+  text: string,
+  voiceId: string,
+  options: TTSOptions = {}
 ): Promise<TTSResult> {
   const startTime = Date.now();
   const ttsText = sanitizeForVoice(text);
+  const voiceSettings = resolveVoiceSettings({
+    text: ttsText,
+    localHour: options.localHour,
+  });
   
   try {
-    const hasLaugh = /\bhaha\b/i.test(ttsText);
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: "POST",
       headers: {
@@ -29,12 +71,7 @@ export async function synthesizeSpeech(
       body: JSON.stringify({
         text: ttsText,
         model_id: "eleven_monolingual_v1",
-        voice_settings: {
-          stability: 0.42,
-          similarity_boost: 0.78,
-          style: hasLaugh ? 0.45 : 0.28,
-          use_speaker_boost: true,
-        },
+        voice_settings: voiceSettings,
       }),
     });
 
@@ -69,3 +106,6 @@ export async function synthesizeSpeech(
     throw new Error("Speech synthesis failed");
   }
 }
+
+export const __test__isNightVoiceWindow = isNightVoiceWindow;
+export const __test__resolveVoiceSettings = resolveVoiceSettings;
