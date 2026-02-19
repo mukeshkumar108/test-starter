@@ -6,7 +6,7 @@ The prompt is intentionally small and ordered. No nested memory blocks.
 1. **Persona (Identity Anchor)**
 2. **Style guard** (single line)
 3. **CONVERSATION_POSTURE** (neutral labels; may include momentum guard hints)
-4. **SITUATIONAL_CONTEXT** (Synapse session-start brief narrative + additive user-model lines, cached per session)
+4. **SITUATIONAL_CONTEXT** (Synapse session-start brief narrative + additive user-model lines + optional compact daily-analysis lines, cached per session)
 5. **SESSION_FACT_CORRECTIONS** (optional; correction memory for current session)
 6. **CONTINUITY** (optional; gap-based)
 7. **OVERLAY** (optional)
@@ -18,6 +18,9 @@ The prompt is intentionally small and ordered. No nested memory blocks.
 ## Notes
 - On session start, context uses Synapse `/session/startbrief` and stores it in session state for reuse.
 - On session start, context also fetches Synapse `/user/model` once and renders concise additive continuity lines.
+- On session start, context fetches Synapse `/analysis/daily` once (best-effort). If startbrief bridge text is missing/short/truncated, Sophie appends compact daily steering lines.
+- Daily analysis `quality_flag=needs_review|insufficient_data` is treated as low-confidence (soft signal, not hard directive).
+- Daily analysis numeric scores and raw quality flags are retained for telemetry/analytics but are not rendered into model-facing prompt lines.
 - User-model `north_star` is domain-based; Sophie prefers explicit (`user_stated`) vision over inferred goals and avoids hard certainty for inferred content.
 - `/session/brief` is fallback-only when startbrief is unavailable.
 - SUPPLEMENTAL_CONTEXT Recall Sheet is capped (`top 3 facts`, `top 3 entities`).

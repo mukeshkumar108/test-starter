@@ -187,6 +187,43 @@ async function main() {
   );
   });
 
+  await runTest("dailyAnalysis() hits correct URL and normalizes payload", async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo, init?: RequestInit) => {
+    calls.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(
+      JSON.stringify({
+        exists: true,
+        steeringNote: "  Keep pressure low tonight  ",
+        themes: ["late-night wind-down", { text: "sleep prep" }, { theme: "ignored fallback" }],
+        scores: { curiosity: 3, warmth: 4, usefulness: 4, forward_motion: 2 },
+        metadata: { quality_flag: "needs_review" },
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  const { dailyAnalysis } = await import("../synapseClient");
+  const result = await dailyAnalysis({
+    tenantId: "tenant-test",
+    userId: "user-1",
+    date: "2026-02-19",
+  });
+
+  globalThis.fetch = originalFetch;
+
+  expect(calls.length).toBe(1);
+  expect(calls[0].url).toBe(
+    "https://synapse.test/analysis/daily?tenantId=tenant-test&userId=user-1&date=2026-02-19"
+  );
+  expect((result as any)?.exists).toBe(true);
+  expect((result as any)?.steeringNote).toBe("  Keep pressure low tonight  ");
+  expect((result as any)?.themes?.length).toBe(3);
+  expect((result as any)?.themes?.[0]).toBe("late-night wind-down");
+  expect((result as any)?.metadata?.quality_flag).toBe("needs_review");
+  });
+
   await runTest("ingest() hits correct URL", async () => {
   const calls: Array<{ url: string; body: string }> = [];
   const originalFetch = globalThis.fetch;

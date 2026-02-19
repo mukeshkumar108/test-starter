@@ -8,6 +8,10 @@
 - New session start clears summary and stamps a new `rollingSummarySessionId`
 - Session-start brief cache is stored in `SessionState.state` with
   `startBriefSessionId` + `startBriefData`
+- Session-start user model cache is stored in `SessionState.state` with
+  `userModelSessionId` + `userModelData`
+- Session-start daily analysis cache is stored in `SessionState.state` with
+  `dailyAnalysisSessionId` + `dailyAnalysisData`
 
 ## Session Model
 - A session is open until **5 minutes after the last user message** (configurable)

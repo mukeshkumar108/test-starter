@@ -82,6 +82,21 @@ export type SynapseUserModelResponse = {
   lastSource?: string | null;
 };
 
+export type SynapseDailyAnalysisResponse = {
+  exists?: boolean | null;
+  steeringNote?: string | null;
+  themes?: string[] | Array<{ text?: string | null; theme?: string | null }> | null;
+  scores?: {
+    curiosity?: number | null;
+    warmth?: number | null;
+    usefulness?: number | null;
+    forward_motion?: number | null;
+  } | null;
+  metadata?: {
+    quality_flag?: string | null;
+  } | null;
+};
+
 function toNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -165,6 +180,52 @@ function normalizeSynapseMemoryLoopsResponse(payload: unknown): SynapseMemoryLoo
       ? (value.metadata as SynapseMemoryLoopsResponse["metadata"])
       : null;
   return { items, metadata };
+}
+
+function normalizeSynapseDailyAnalysisResponse(payload: unknown): SynapseDailyAnalysisResponse {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      exists: false,
+      steeringNote: null,
+      themes: [],
+      scores: null,
+      metadata: null,
+    };
+  }
+  const value = payload as Record<string, unknown>;
+  const rawThemes = Array.isArray(value.themes) ? value.themes : [];
+  const themes = rawThemes
+    .map((theme) => {
+      if (typeof theme === "string") return theme.trim();
+      if (!theme || typeof theme !== "object" || Array.isArray(theme)) return null;
+      const row = theme as Record<string, unknown>;
+      const text = toNullableString(row.text)?.trim() ?? "";
+      if (text) return text;
+      return toNullableString(row.theme)?.trim() ?? null;
+    })
+    .filter((item): item is string => Boolean(item));
+  const scores =
+    value.scores && typeof value.scores === "object" && !Array.isArray(value.scores)
+      ? {
+          curiosity: toNullableNumber((value.scores as Record<string, unknown>).curiosity),
+          warmth: toNullableNumber((value.scores as Record<string, unknown>).warmth),
+          usefulness: toNullableNumber((value.scores as Record<string, unknown>).usefulness),
+          forward_motion: toNullableNumber((value.scores as Record<string, unknown>).forward_motion),
+        }
+      : null;
+  const metadata =
+    value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+      ? {
+          quality_flag: toNullableString((value.metadata as Record<string, unknown>).quality_flag),
+        }
+      : null;
+  return {
+    exists: typeof value.exists === "boolean" ? value.exists : null,
+    steeringNote: toNullableString(value.steeringNote),
+    themes,
+    scores,
+    metadata,
+  };
 }
 
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -340,6 +401,23 @@ export async function userModel<TPayload = unknown, TResponse = unknown>(
   const result = await requestJson<undefined, TResponse>("GET", path);
   if (!result?.ok) return null;
   return result.data;
+}
+
+export async function dailyAnalysis<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const params = new URLSearchParams();
+  const asRecord = (payload ?? {}) as Record<string, unknown>;
+  for (const key of ["tenantId", "userId", "date"]) {
+    const value = asRecord[key];
+    if (typeof value === "string" && value.length > 0) {
+      params.set(key, value);
+    }
+  }
+  const path = `/analysis/daily${params.toString() ? `?${params.toString()}` : ""}`;
+  const result = await requestJson<undefined, TResponse>("GET", path);
+  if (!result?.ok) return null;
+  return normalizeSynapseDailyAnalysisResponse(result.data) as TResponse;
 }
 
 export async function ingest<TPayload = unknown, TResponse = unknown>(

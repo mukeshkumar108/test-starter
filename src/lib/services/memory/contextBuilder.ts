@@ -3,6 +3,7 @@ import { env } from "@/env";
 import * as synapseClient from "@/lib/services/synapseClient";
 import type {
   SynapseBriefResponse,
+  SynapseDailyAnalysisResponse,
   SynapseMemoryLoopItem,
   SynapseMemoryLoopsResponse,
   SynapseStartBriefResponse,
@@ -42,6 +43,8 @@ const START_BRIEF_SESSION_KEY = "startBriefSessionId";
 const START_BRIEF_DATA_KEY = "startBriefData";
 const USER_MODEL_SESSION_KEY = "userModelSessionId";
 const USER_MODEL_DATA_KEY = "userModelData";
+const DAILY_ANALYSIS_SESSION_KEY = "dailyAnalysisSessionId";
+const DAILY_ANALYSIS_DATA_KEY = "dailyAnalysisData";
 const briefCache = new Map<
   string,
   { fetchedAt: number; brief: SynapseBriefResponse }
@@ -411,7 +414,8 @@ function buildSituationalContext(brief: SynapseBriefResponse) {
 function buildSessionStartContext(
   brief: SynapseStartBriefResponse,
   trajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null,
-  userModelLines?: string[]
+  userModelLines?: string[],
+  dailyAnalysis?: SynapseDailyAnalysisResponse | null
 ) {
   const lines: string[] = [];
   const timeLabel = typeof brief.timeOfDayLabel === "string" ? brief.timeOfDayLabel.trim() : "";
@@ -425,6 +429,11 @@ function buildSessionStartContext(
 
   const bridgeText = typeof brief.bridgeText === "string" ? brief.bridgeText.trim() : "";
   if (bridgeText) lines.push(bridgeText);
+
+  const dailyLines = buildDailyAnalysisLines(bridgeText, dailyAnalysis);
+  if (dailyLines.length > 0) {
+    lines.push(...dailyLines);
+  }
 
   if (Array.isArray(userModelLines) && userModelLines.length > 0) {
     lines.push(...userModelLines);
@@ -652,6 +661,12 @@ function getSynapseUserModel() {
   return typeof override === "function" ? override : synapseClient.userModel;
 }
 
+function getSynapseDailyAnalysis() {
+  const override = (globalThis as { __synapseDailyAnalysisOverride?: typeof synapseClient.dailyAnalysis })
+    .__synapseDailyAnalysisOverride;
+  return typeof override === "function" ? override : synapseClient.dailyAnalysis;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -686,6 +701,75 @@ function confidenceValue(value: unknown) {
   if (!isRecord(value)) return 0;
   const confidence = value.confidence;
   return typeof confidence === "number" && Number.isFinite(confidence) ? confidence : 0;
+}
+
+function asQualityFlag(value: unknown) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "needs_review") return "needs_review";
+  if (normalized === "insufficient_data") return "insufficient_data";
+  return normalized;
+}
+
+function toScore1to5(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value < 1 || value > 5) return null;
+  return Math.round(value * 10) / 10;
+}
+
+function isDailyAnalysisLowConfidence(analysis: SynapseDailyAnalysisResponse) {
+  const qualityFlag = asQualityFlag(analysis.metadata?.quality_flag);
+  return qualityFlag === "needs_review" || qualityFlag === "insufficient_data";
+}
+
+function hasTruncatedBridgeText(text: string) {
+  return text.endsWith("...") || text.length < 40;
+}
+
+function shouldInjectDailyAnalysis(bridgeText: string, analysis: SynapseDailyAnalysisResponse) {
+  const hasBridge = Boolean(bridgeText);
+  if (!hasBridge) return true;
+  if (hasTruncatedBridgeText(bridgeText)) return true;
+  return isDailyAnalysisLowConfidence(analysis);
+}
+
+function buildDailyAnalysisLines(
+  bridgeText: string,
+  analysis?: SynapseDailyAnalysisResponse | null
+) {
+  if (!analysis || analysis.exists === false) return [] as string[];
+  if (!shouldInjectDailyAnalysis(bridgeText, analysis)) return [] as string[];
+
+  const steering =
+    typeof analysis.steeringNote === "string" && analysis.steeringNote.trim()
+      ? analysis.steeringNote.trim()
+      : null;
+  const themes = Array.isArray(analysis.themes)
+    ? analysis.themes
+        .map((theme) => (typeof theme === "string" ? theme.trim() : ""))
+        .filter(Boolean)
+        .slice(0, 2)
+    : [];
+  // Keep score + quality fields parsed for telemetry, but do not surface
+  // numeric or quality labels in model-facing prompt context.
+  void toScore1to5(analysis.scores?.curiosity);
+  void toScore1to5(analysis.scores?.warmth);
+  void toScore1to5(analysis.scores?.usefulness);
+  void toScore1to5(analysis.scores?.forward_motion);
+  void asQualityFlag(analysis.metadata?.quality_flag);
+  const lowConfidence = isDailyAnalysisLowConfidence(analysis);
+
+  const lines: string[] = [];
+  if (steering) {
+    lines.push(
+      lowConfidence ? `Daily steering (low confidence): ${steering}` : `Daily steering: ${steering}`
+    );
+  }
+  if (themes.length > 0) {
+    lines.push(`Today's patterns: ${themes.join("; ")}`);
+  }
+  return lines.slice(0, 2);
 }
 
 type NorthStarDomain = "relationships" | "work" | "health" | "spirituality" | "general";
@@ -927,6 +1011,28 @@ function withUserModelForSession(state: unknown, sessionId: string, model: Synap
   };
 }
 
+function getDailyAnalysisForSession(state: unknown, sessionId: string) {
+  if (!sessionId) return null;
+  const scoped = asStateRecord(state)[DAILY_ANALYSIS_SESSION_KEY];
+  if (typeof scoped !== "string" || scoped !== sessionId) return null;
+  const raw = asStateRecord(state)[DAILY_ANALYSIS_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw as SynapseDailyAnalysisResponse;
+}
+
+function withDailyAnalysisForSession(
+  state: unknown,
+  sessionId: string,
+  analysis: SynapseDailyAnalysisResponse
+) {
+  const base = asStateRecord(state);
+  return {
+    ...base,
+    [DAILY_ANALYSIS_SESSION_KEY]: sessionId,
+    [DAILY_ANALYSIS_DATA_KEY]: analysis,
+  };
+}
+
 async function maybeFetchOverlayLoops(params: {
   userId: string;
 }) {
@@ -977,6 +1083,7 @@ export async function buildContextFromSynapse(
   const localTrajectory = getTrajectoryStateFromSession(sessionState?.state, new Date(), "Europe/Zagreb");
   const cachedStartBrief = getStartBriefForSession(sessionState?.state, sessionId);
   const cachedUserModel = getUserModelForSession(sessionState?.state, sessionId);
+  const cachedDailyAnalysis = getDailyAnalysisForSession(sessionState?.state, sessionId);
   const userModelLines = toUserModelLines(cachedUserModel);
 
   if (cachedStartBrief) {
@@ -1010,7 +1117,13 @@ export async function buildContextFromSynapse(
       : getOverlayContextFromStartBrief(cachedStartBrief, messages, localTrajectory);
     return {
       persona: personaPrompt,
-      situationalContext: buildSessionStartContext(cachedStartBrief, localTrajectory, userModelLines) ?? undefined,
+      situationalContext:
+        buildSessionStartContext(
+          cachedStartBrief,
+          localTrajectory,
+          userModelLines,
+          cachedDailyAnalysis
+        ) ?? undefined,
       rollingSummary,
       startBrief: {
         used: true,
@@ -1045,18 +1158,30 @@ export async function buildContextFromSynapse(
     });
 
     if (startBrief) {
-      const userModel = await getSynapseUserModel()<{
-        tenantId?: string;
-        userId: string;
-      }, SynapseUserModelResponse>({
-        tenantId: env.SYNAPSE_TENANT_ID,
-        userId,
-      });
-      const nextState = withUserModelForSession(
-        withStartBriefForSession(sessionState?.state, sessionId, startBrief),
-        sessionId,
-        userModel ?? { exists: false }
-      );
+      const [userModelResult, dailyAnalysisResult] = await Promise.all([
+        getSynapseUserModel()<{
+          tenantId?: string;
+          userId: string;
+        }, SynapseUserModelResponse>({
+          tenantId: env.SYNAPSE_TENANT_ID,
+          userId,
+        }).catch(() => null),
+        getSynapseDailyAnalysis()<{
+          tenantId?: string;
+          userId: string;
+        }, SynapseDailyAnalysisResponse>({
+          tenantId: env.SYNAPSE_TENANT_ID,
+          userId,
+        }).catch(() => null),
+      ]);
+      const userModel = userModelResult ?? { exists: false };
+      const dailyAnalysis =
+        dailyAnalysisResult && dailyAnalysisResult.exists !== false ? dailyAnalysisResult : null;
+      const stateWithStartBrief = withStartBriefForSession(sessionState?.state, sessionId, startBrief);
+      const stateWithUserModel = withUserModelForSession(stateWithStartBrief, sessionId, userModel);
+      const nextState = dailyAnalysis
+        ? withDailyAnalysisForSession(stateWithUserModel, sessionId, dailyAnalysis)
+        : stateWithUserModel;
       await prisma.sessionState.upsert({
         where: { userId_personaId: { userId, personaId } },
         update: { state: nextState as any, updatedAt: new Date() },
@@ -1093,7 +1218,9 @@ export async function buildContextFromSynapse(
       const fetchedUserModelLines = toUserModelLines(userModel);
       return {
         persona: personaPrompt,
-        situationalContext: buildSessionStartContext(startBrief, localTrajectory, fetchedUserModelLines) ?? undefined,
+        situationalContext:
+          buildSessionStartContext(startBrief, localTrajectory, fetchedUserModelLines, dailyAnalysis) ??
+          undefined,
         rollingSummary,
         startBrief: {
           used: true,

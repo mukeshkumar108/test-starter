@@ -22,6 +22,7 @@ Two paths run in parallel:
    - Last 8 messages from the active session only
    - On session start: Synapse `/session/startbrief` (cached per session)
    - On session start: Synapse `/user/model` (cached per session; additive context only)
+   - On session start: Synapse `/analysis/daily` (best-effort; additive context only)
    - Fallback: Synapse `/session/brief` if startbrief unavailable
    - Startbrief payload is normalized defensively:
      - `items` coerced to array
@@ -90,6 +91,11 @@ Order is fixed:
   - `startbrief_fallback`
   - `startbrief_items_count`
   - `bridgeText_chars`
+- Daily analysis behavior:
+  - If `bridgeText` is empty/short/truncated, Sophie appends a compact block from `/analysis/daily`:
+    - `Daily steering: ...`
+    - `Today's patterns: ...`
+  - `quality_flag=needs_review|insufficient_data` is treated as low-confidence and rendered as soft guidance wording on the steering line.
 - Debug headers:
   - `x-debug-context: 1` with `FEATURE_CONTEXT_DEBUG=true` adds context debug blocks.
   - `x-debug-prompt: 1` additionally includes the fully composed prompt packet (`model + messages`).

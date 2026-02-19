@@ -89,13 +89,14 @@ async function main() {
   let startBriefPayload: any = null;
   let loopsPayload: any = null;
   let userModelPayload: any = null;
+  let dailyAnalysisPayload: any = null;
 
   (globalThis as any).__synapseStartBriefOverride = async (payload: any) => {
     startBriefPayload = payload;
     return {
     timeOfDayLabel: "AFTERNOON",
     timeGapHuman: "12 minutes since last session",
-    bridgeText: "Last session: you were preparing the proposal and blocked on revisions.",
+    bridgeText: "Steering note: Stay practical and verify assumptions before nudging.",
     items: [
       { kind: "loop", text: "Reply to Jordan about security questionnaire before lunch", type: "OPEN_LOOP" },
       { kind: "loop", text: "Finish proposal draft and send to legal", type: "COMMITMENT" },
@@ -169,6 +170,16 @@ async function main() {
       },
     };
   };
+  (globalThis as any).__synapseDailyAnalysisOverride = async (payload: any) => {
+    dailyAnalysisPayload = payload;
+    return {
+      exists: true,
+      steeringNote: "Keep nudges practical and explicit.",
+      themes: ["follow-through", "clarity over assumption"],
+      scores: { curiosity: 3, warmth: 4, usefulness: 5, forward_motion: 4 },
+      metadata: { quality_flag: "ok" },
+    };
+  };
 
   const context = await buildContextFromSynapse(
     "user-1",
@@ -181,6 +192,7 @@ async function main() {
   delete (globalThis as any).__synapseStartBriefOverride;
   delete (globalThis as any).__synapseMemoryLoopsOverride;
   delete (globalThis as any).__synapseUserModelOverride;
+  delete (globalThis as any).__synapseDailyAnalysisOverride;
 
   if (!context) throw new Error("Expected context, got null");
 
@@ -191,8 +203,8 @@ async function main() {
   if (!context.situationalContext.includes("Session start context: AFTERNOON")) {
     throw new Error("Expected session start time line in situationalContext");
   }
-  if (!context.situationalContext.includes("Last session: you were preparing the proposal")) {
-    throw new Error("Expected bridge text in situationalContext");
+  if (!context.situationalContext.includes("Steering note: Stay practical and verify assumptions before nudging.")) {
+    throw new Error("Expected steering-note bridge text in situationalContext");
   }
   if (!context.situationalContext.includes("Active threads:")) {
     throw new Error("Expected active threads line in situationalContext");
@@ -222,6 +234,7 @@ async function main() {
   expect(startBriefPayload?.personaId ?? null).toBe(null);
   expect(loopsPayload?.personaId ?? null).toBe(null);
   expect(userModelPayload?.personaId ?? null).toBe(null);
+  expect(dailyAnalysisPayload?.personaId ?? null).toBe(null);
   for (const item of [...openLoops, ...commitments]) {
     const words = item.split(/\s+/).filter(Boolean).length;
     if (words > 12) {
@@ -229,6 +242,190 @@ async function main() {
     }
   }
   expect(context.recentMessages.length).toBe(2);
+  });
+
+  await runTest("buildContextFromSynapse appends daily analysis when bridge text missing", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-daily-analysis.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => null;
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-da-1" });
+
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
+    timeOfDayLabel: "MORNING",
+    timeGapHuman: "8 minutes",
+    bridgeText: null,
+    items: [],
+  });
+  (globalThis as any).__synapseMemoryLoopsOverride = async () => ({ items: [], metadata: { count: 0 } });
+  (globalThis as any).__synapseUserModelOverride = async () => ({ exists: false });
+  (globalThis as any).__synapseDailyAnalysisOverride = async () => ({
+    exists: true,
+    steeringNote: "Lead with one practical step.",
+    themes: ["clarity", "execution"],
+    scores: { curiosity: 3, warmth: 4, usefulness: 4, forward_motion: 3 },
+    metadata: { quality_flag: "ok" },
+  });
+
+  const context = await buildContextFromSynapse(
+    "user-da-1",
+    "persona-da-1",
+    "hello",
+    "session-da-1",
+    true
+  );
+
+  delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseMemoryLoopsOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
+  delete (globalThis as any).__synapseDailyAnalysisOverride;
+
+  if (!context?.situationalContext?.includes("Daily steering: Lead with one practical step.")) {
+    throw new Error("Expected daily steering line when bridge text missing");
+  }
+  if (!context?.situationalContext?.includes("Today's patterns: clarity; execution")) {
+    throw new Error("Expected compact theme line in daily analysis block");
+  }
+  if (
+    context?.situationalContext?.includes("Quality:") ||
+    context?.situationalContext?.includes("C/W/U/F:")
+  ) {
+    throw new Error("Did not expect quality/score lines in model-facing daily analysis block");
+  }
+  });
+
+  await runTest("buildContextFromSynapse down-ranks low-confidence daily analysis", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-daily-analysis-low-confidence.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => null;
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-da-2" });
+
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
+    timeOfDayLabel: "MORNING",
+    timeGapHuman: "8 minutes",
+    bridgeText: "Brief recap",
+    items: [],
+  });
+  (globalThis as any).__synapseMemoryLoopsOverride = async () => ({ items: [], metadata: { count: 0 } });
+  (globalThis as any).__synapseUserModelOverride = async () => ({ exists: false });
+  (globalThis as any).__synapseDailyAnalysisOverride = async () => ({
+    exists: true,
+    steeringNote: "Push one next step only.",
+    themes: ["consistency"],
+    metadata: { quality_flag: "needs_review" },
+  });
+
+  const context = await buildContextFromSynapse(
+    "user-da-2",
+    "persona-da-2",
+    "hello",
+    "session-da-2",
+    true
+  );
+
+  delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseMemoryLoopsOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
+  delete (globalThis as any).__synapseDailyAnalysisOverride;
+
+  if (!context?.situationalContext?.includes("Daily steering (low confidence): Push one next step only.")) {
+    throw new Error("Expected low-confidence qualifier for needs_review analysis");
+  }
+  if (
+    context?.situationalContext?.includes("Quality:") ||
+    context?.situationalContext?.includes("C/W/U/F:")
+  ) {
+    throw new Error("Did not expect quality/score lines in low-confidence daily analysis block");
+  }
+  });
+
+  await runTest("buildContextFromSynapse skips daily analysis when exists=false and on fetch errors", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-daily-analysis-fallback.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-da-3" });
+
+  (prisma.sessionState.findUnique as any) = async () => null;
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
+    timeOfDayLabel: "MORNING",
+    timeGapHuman: "8 minutes",
+    bridgeText: "Bridge stays primary.",
+    items: [],
+  });
+  (globalThis as any).__synapseMemoryLoopsOverride = async () => ({ items: [], metadata: { count: 0 } });
+  (globalThis as any).__synapseUserModelOverride = async () => ({ exists: false });
+  (globalThis as any).__synapseDailyAnalysisOverride = async () => ({ exists: false });
+
+  const contextWithNoAnalysis = await buildContextFromSynapse(
+    "user-da-3",
+    "persona-da-3",
+    "hello",
+    "session-da-3",
+    true
+  );
+
+  if (contextWithNoAnalysis?.situationalContext?.includes("Daily steering:")) {
+    throw new Error("Did not expect daily analysis lines when exists=false");
+  }
+
+  (prisma.sessionState.findUnique as any) = async () => null;
+  (globalThis as any).__synapseDailyAnalysisOverride = async () => {
+    throw new Error("daily endpoint unavailable");
+  };
+
+  const contextWithError = await buildContextFromSynapse(
+    "user-da-4",
+    "persona-da-4",
+    "hello",
+    "session-da-4",
+    true
+  );
+
+  delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseMemoryLoopsOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
+  delete (globalThis as any).__synapseDailyAnalysisOverride;
+
+  if (!contextWithError?.situationalContext?.includes("Bridge stays primary.")) {
+    throw new Error("Expected startbrief context to remain when daily analysis fails");
+  }
+  if (contextWithError?.situationalContext?.includes("Daily steering:")) {
+    throw new Error("Did not expect daily analysis lines when endpoint errors");
+  }
   });
 
   await runTest("buildContextFromSynapse supports legacy north_star.text fallback", async () => {
