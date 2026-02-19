@@ -22,12 +22,17 @@ Two paths run in parallel:
    - Last 8 messages from the active session only
    - On session start: Synapse `/session/startbrief` (cached per session)
    - Fallback: Synapse `/session/brief` if startbrief unavailable
+   - Startbrief payload is normalized defensively:
+     - `items` coerced to array
+     - malformed item rows dropped
+     - missing top-level fields become `null`
 7. **Librarian Reflex** (optional)
    - Gate decides if memory query is needed (explicit vs ambient)
    - Spec extracts entities/topics/time intent
    - Query compilation drops pronouns/ghost tokens and prefers noun-heavy tokens
    - Relevance check validates retrieval
    - If yes, call `/memory/query` and format Recall Sheet
+   - `/memory/query` parsing accepts both `facts: string[]` and `facts: {text}[]`
 8. **Prompt assembly** (`route.ts`)
    - Persona → Style guard → CONVERSATION_POSTURE → SITUATIONAL_CONTEXT → CONTINUITY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)

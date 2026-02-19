@@ -699,10 +699,30 @@ async function resolvePostureWithHysteresis(params: {
 }
 
 type MemoryQueryResponse = {
-  facts?: Array<{ text?: string; relevance?: number | null; source?: string }>;
+  facts?: Array<string | { text?: string; relevance?: number | null; source?: string }>;
   entities?: Array<{ summary?: string; type?: string; uuid?: string }>;
   metadata?: { query?: string; facts?: number; entities?: number };
 };
+
+function normalizeMemoryQueryResponse(data: MemoryQueryResponse | null | undefined) {
+  const facts = Array.isArray(data?.facts)
+    ? data!.facts
+        .map((fact) => {
+          if (typeof fact === "string") return fact.trim();
+          if (fact && typeof fact.text === "string") return fact.text.trim();
+          return "";
+        })
+        .filter(Boolean)
+    : [];
+  const entities = Array.isArray(data?.entities)
+    ? data!.entities
+        .map((entity) =>
+          typeof entity?.summary === "string" ? entity.summary.trim() : ""
+        )
+        .filter(Boolean)
+    : [];
+  return { facts, entities };
+}
 
 function buildRecallSheet(params: {
   query: string;
@@ -1258,20 +1278,7 @@ async function runLibrarianReflex(params: {
       };
     }
     const data = (await response.json()) as MemoryQueryResponse;
-    const facts = Array.isArray(data.facts)
-      ? data.facts
-          .map((fact) =>
-            typeof fact?.text === "string" ? fact.text.trim() : ""
-          )
-          .filter(Boolean)
-      : [];
-    const entities = Array.isArray(data.entities)
-      ? data.entities
-          .map((entity) =>
-            typeof entity?.summary === "string" ? entity.summary.trim() : ""
-          )
-          .filter(Boolean)
-      : [];
+    const { facts, entities } = normalizeMemoryQueryResponse(data);
 
     if (facts.length === 0 && entities.length === 0) {
       return {
@@ -2581,6 +2588,7 @@ export const __test__buildChatTrace = buildChatTrace;
 export const __test__shouldTriggerDailyFocus = shouldTriggerDailyFocus;
 export const __test__isMorningLocalWindow = isMorningLocalWindow;
 export const __test__extractTodayFocus = extractTodayFocus;
+export const __test__normalizeMemoryQueryResponse = normalizeMemoryQueryResponse;
 export const __test__extractCorrectionFactClaims = extractCorrectionFactClaims;
 export const __test__mergeCorrectionFacts = mergeCorrectionFacts;
 export const __test__nextCorrectionOverlayCooldownTurns = nextCorrectionOverlayCooldownTurns;

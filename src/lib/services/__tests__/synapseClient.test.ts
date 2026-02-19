@@ -106,6 +106,32 @@ async function main() {
   );
   });
 
+  await runTest("sessionStartBrief() normalizes malformed payload safely", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    return new Response(
+      JSON.stringify({
+        timeOfDayLabel: 7,
+        bridgeText: null,
+        items: [{ kind: "loop", text: "  Keep walking  " }, { kind: "loop", text: 1 }, null],
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  const { sessionStartBrief } = await import("../synapseClient");
+  const result = await sessionStartBrief({ tenantId: "tenant-test", userId: "user-1" });
+
+  globalThis.fetch = originalFetch;
+
+  expect((result as any)?.timeOfDayLabel).toBe(null);
+  expect((result as any)?.timeGapHuman).toBe(null);
+  expect((result as any)?.bridgeText).toBe(null);
+  expect(Array.isArray((result as any)?.items)).toBe(true);
+  expect((result as any)?.items?.length).toBe(1);
+  expect((result as any)?.items?.[0]?.text).toBe("Keep walking");
+  });
+
   await runTest("ingest() hits correct URL", async () => {
   const calls: Array<{ url: string; body: string }> = [];
   const originalFetch = globalThis.fetch;

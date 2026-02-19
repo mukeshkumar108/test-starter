@@ -34,6 +34,53 @@ export type SynapseStartBriefResponse = {
   }> | null;
 };
 
+function toNullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function toNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeSynapseStartBriefResponse(
+  payload: unknown
+): SynapseStartBriefResponse {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      timeOfDayLabel: null,
+      timeGapHuman: null,
+      bridgeText: null,
+      items: [],
+    };
+  }
+  const value = payload as Record<string, unknown>;
+  const rawItems = Array.isArray(value.items) ? value.items : [];
+  const items = rawItems
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const row = item as Record<string, unknown>;
+      const text = toNullableString(row.text)?.trim() ?? "";
+      const kind = toNullableString(row.kind);
+      if (!text || !kind) return null;
+      return {
+        kind,
+        text,
+        type: toNullableString(row.type),
+        timeHorizon: toNullableString(row.timeHorizon),
+        dueDate: toNullableString(row.dueDate),
+        salience: toNullableNumber(row.salience),
+        lastSeenAt: toNullableString(row.lastSeenAt),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  return {
+    timeOfDayLabel: toNullableString(value.timeOfDayLabel),
+    timeGapHuman: toNullableString(value.timeGapHuman),
+    bridgeText: toNullableString(value.bridgeText),
+    items,
+  };
+}
+
 const DEFAULT_TIMEOUT_MS = 3000;
 
 function resolveTimeoutMs() {
@@ -169,7 +216,7 @@ export async function sessionStartBrief<TPayload = unknown, TResponse = unknown>
   const path = `/session/startbrief${params.toString() ? `?${params.toString()}` : ""}`;
   const result = await requestJson<undefined, TResponse>("GET", path);
   if (!result?.ok) return null;
-  return result.data;
+  return normalizeSynapseStartBriefResponse(result.data) as TResponse;
 }
 
 export async function ingest<TPayload = unknown, TResponse = unknown>(
