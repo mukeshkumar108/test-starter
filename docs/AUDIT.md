@@ -15,19 +15,22 @@
 
 **Context builder**
 - `buildContext(user.id, personaId, sttResult.transcript)` → `src/lib/services/memory/contextBuilder.ts`
-- If `FEATURE_SYNAPSE_BRIEF=true`, calls Synapse `/session/brief`
+- On session start, calls Synapse `/session/startbrief` (cached per session)
+- Fallback: Synapse `/session/brief`
 
 **LLM prompt assembly (exact order)**
 Source: `src/app/api/chat/route.ts` (messages array)
 1. **Persona Prompt**
 2. **Style guard** (single line)
-3. **CONVERSATION_POSTURE** (neutral labels)
+3. **CONVERSATION_POSTURE** (neutral labels; momentum guard appended when relevant)
 4. **SITUATIONAL_CONTEXT** (Synapse brief; includes CURRENT_FOCUS when present)
-5. **CONTINUITY** (optional; gap-based)
-6. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional)
-7. **SESSION FACTS** (rolling summary, optional)
-8. **Recent messages** (last 8)
-9. **Current user message**
+5. **SESSION_FACT_CORRECTIONS** (optional)
+6. **CONTINUITY** (optional; gap-based)
+7. **OVERLAY** (optional)
+8. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional; top 3 facts/entities)
+9. **SESSION FACTS** (rolling summary, optional)
+10. **Recent messages** (last 8)
+11. **Current user message**
 
 **Write path**
 - Store user + assistant messages in Prisma
@@ -37,6 +40,6 @@ Source: `src/app/api/chat/route.ts` (messages array)
 
 ## Memory Sources (Current)
 - **Working memory**: local last 8 messages
-- **Long‑term memory**: Synapse `/session/brief`
+- **Long‑term memory**: Synapse `/session/startbrief` (fallback `/session/brief`)
 
 Legacy pipelines remain feature‑flagged but are not default.

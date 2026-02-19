@@ -19,16 +19,17 @@ Async path (never blocks response):
 ## Context Builder (Current)
 `buildContext()` now returns a minimal structure:
 - `persona` (prompt file)
-- `situationalContext` (from Synapse `/session/brief`)
+- `situationalContext` (from Synapse `/session/startbrief`, fallback `/session/brief`)
 - `rollingSummary` (rolling summary of older messages; updates every 4 turns)
 - Rolling summary is cleared on new session creation to avoid cross‑session drift
 - `recentMessages` (last 8 messages)
 
 Supplemental recall (Recall Sheet) is added in `/api/chat` after the brief if the Librarian Reflex (gate → spec → relevance) triggers a `/memory/query`.
+Recall Sheet is compact by default (top 3 facts + top 3 entities).
 
-Conversation posture (mode + pressure) is computed in the Memory Gate and injected before the persona prompt. Hysteresis is stored in `SessionState.state.postureState` and can reset after long gaps.
+Conversation posture (mode + pressure) is computed in the Memory Gate and injected after the persona prompt. Hysteresis is stored in `SessionState.state.postureState` and can reset after long gaps.
 
-User state (mood + energy + tone) is also computed in the Memory Gate and injected before the persona prompt. Hysteresis is stored in `SessionState.state.userStateState`.
+User state (mood + energy + tone) is also computed in the Memory Gate and influences runtime guidance.
 
 No Prisma‑based long‑term memory queries are used in this mode.
 

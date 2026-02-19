@@ -34,7 +34,7 @@ Two paths run in parallel:
    - If yes, call `/memory/query` and format Recall Sheet
    - `/memory/query` parsing accepts both `facts: string[]` and `facts: {text}[]`
 8. **Prompt assembly** (`route.ts`)
-   - Persona → Style guard → CONVERSATION_POSTURE → SITUATIONAL_CONTEXT → CONTINUITY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
+   - Persona → Style guard → CONVERSATION_POSTURE (with momentum guard when relevant) → SITUATIONAL_CONTEXT → SESSION_FACT_CORRECTIONS (optional) → CONTINUITY (optional) → OVERLAY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
@@ -59,17 +59,20 @@ Order is fixed:
 2. Style guard (single line)
 3. CONVERSATION_POSTURE (neutral labels)
 4. SITUATIONAL_CONTEXT (Synapse brief; includes CURRENT_FOCUS when present)
-5. CONTINUITY (optional, gap-based)
-6. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present)
-7. SESSION FACTS (rolling summary, if present)
-8. Last 8 messages
-9. Current user message
+5. SESSION_FACT_CORRECTIONS (optional)
+6. CONTINUITY (optional, gap-based)
+7. OVERLAY (optional)
+8. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present; top 3 facts/entities)
+9. SESSION FACTS (rolling summary, if present)
+10. Last 8 messages
+11. Current user message
 
 ---
 
 ## Notes
 - Synapse `/session/startbrief` is the primary session-start continuity source.
 - `/session/brief` is a fallback path.
+- Product-kernel trajectory guidance is loaded from compiled prompt kernels (not duplicated at runtime).
 - CONTINUITY injects only when timeGapMinutes ≥ 60 and the opener is not urgent.
 - Session boundaries are based on **last user message**, not assistant activity.
 - SESSION FACTS is session-scoped: it is included only when the stored

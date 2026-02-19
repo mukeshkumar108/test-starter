@@ -31,15 +31,17 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 4. `buildContext(...)` in `contextBuilder.ts`
    - Load persona prompt
    - Load last 8 messages (working memory)
-   - If `FEATURE_SYNAPSE_BRIEF=true`, call Synapse `/session/brief`
+   - On session start: call Synapse `/session/startbrief` (cached per session)
+   - Fallback: Synapse `/session/brief`
 5. Prompt assembly in `route.ts`
    - Persona (Identity Anchor)
    - Style guard (single line)
-   - CONVERSATION_POSTURE (neutral labels only)
+   - CONVERSATION_POSTURE (neutral labels + momentum guard when relevant)
    - SITUATIONAL_CONTEXT (Synapse brief)
+   - SESSION_FACT_CORRECTIONS (optional)
    - CONTINUITY (optional; gap-based)
    - OVERLAY (optional; curiosity/accountability lenses)
-   - SUPPLEMENTAL_CONTEXT (Recall Sheet, if triggered)
+   - SUPPLEMENTAL_CONTEXT (Recall Sheet, if triggered; top 3 facts/entities)
    - SESSION FACTS (rolling summary, if present)
    - Last 8 messages + current user message
 6. LLM call (OpenRouter primary → fallback, then OpenAI emergency)
@@ -51,7 +53,8 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
 
 ## Bookend Memory Model
 ### Opening Book: Synapse Brief
-- Called via `/session/brief`
+- Called via `/session/startbrief` (primary)
+- Fallback: `/session/brief`
 - Provides a compact **situational narrative** for this user+persona+session
 - Injected as a single block: `SITUATIONAL_CONTEXT` (includes CURRENT_FOCUS when present)
 
@@ -78,8 +81,8 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 - Or if **last user message > 5 minutes ago** (configurable)
 
 ### 2) When do we fetch Synapse context?
-- When `FEATURE_SYNAPSE_BRIEF=true`
-- We call `/session/brief` to build `SITUATIONAL_CONTEXT`
+- On session start, call `/session/startbrief` to build `SITUATIONAL_CONTEXT` and cache by session
+- Use `/session/brief` only as fallback
 
 ### 3) When do we fetch extra memory (Librarian Reflex)?
 - **Gate** decides if memory is needed (explicit vs ambient)
@@ -95,9 +98,10 @@ Blocks are in this order:
 - Style guard (single line)
 - CONVERSATION_POSTURE (mode + pressure; neutral)
 - SITUATIONAL_CONTEXT (Synapse brief)
+- SESSION_FACT_CORRECTIONS (optional)
 - CONTINUITY (optional; gap-based)
 - OVERLAY (optional; curiosity/accountability lenses)
-- SUPPLEMENTAL_CONTEXT (Recall Sheet)
+- SUPPLEMENTAL_CONTEXT (Recall Sheet; top 3 facts/entities)
 - SESSION FACTS (rolling summary, if any)
 - Last 8 messages
  

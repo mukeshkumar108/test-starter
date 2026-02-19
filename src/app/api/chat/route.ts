@@ -247,12 +247,6 @@ const userStateCache = new Map<string, UserStateState>();
 const overlayStateCache = new Map<string, OverlayState>();
 const userProfileCache = new Map<string, string>();
 
-const PRODUCT_KERNEL_TRAJECTORY_BLOCK = `[PRODUCT_KERNEL]
-Maintain trajectory continuity over time:
-- Ensure a North Star, weekly focus, and today focus exist and stay current.
-- Use ritual overlays for collection and refresh, not ad hoc branching in core behavior.
-- Keep rituals light: one prompt, grounded language, practical next motion.`;
-
 function buildChatTrace(params: {
   traceId: string;
   requestId: string;
@@ -733,13 +727,13 @@ function buildRecallSheet(params: {
   lines.push(`Recall Sheet (query: ${params.query})`);
   if (params.facts.length > 0) {
     lines.push("Facts:");
-    for (const fact of params.facts.slice(0, 5)) {
+    for (const fact of params.facts.slice(0, 3)) {
       lines.push(`- ${fact}`);
     }
   }
   if (params.entities.length > 0) {
     lines.push("Entities:");
-    for (const entity of params.entities.slice(0, 5)) {
+    for (const entity of params.entities.slice(0, 3)) {
       lines.push(`- ${entity}`);
     }
   }
@@ -1385,7 +1379,6 @@ async function runLibrarianReflex(params: {
 
 function buildChatMessages(params: {
   persona: string;
-  productKernelBlock?: string | null;
   userProfileBlock?: string | null;
   momentumGuardBlock?: string | null;
   situationalContext?: string;
@@ -1405,19 +1398,19 @@ function buildChatMessages(params: {
   const posture = params.posture ?? DEFAULT_POSTURE;
   const pressure = params.pressure ?? DEFAULT_PRESSURE;
   const guidance = POSTURE_GUIDANCE[posture] ?? POSTURE_GUIDANCE[DEFAULT_POSTURE];
-  const postureBlock = `[CONVERSATION_POSTURE]\nMode: ${posture} (pressure: ${pressure})\nLean: ${guidance}`;
+  const postureLines = [`[CONVERSATION_POSTURE]`, `Mode: ${posture} (pressure: ${pressure})`, `Lean: ${guidance}`];
+  if (params.momentumGuardBlock) {
+    postureLines.push("", params.momentumGuardBlock);
+  }
+  const postureBlock = postureLines.join("\n");
   const styleGuard =
     "Avoid therapeutic mirroring; don’t restate the user’s feelings unless they explicitly asked for reflection.";
   const sessionFacts = rollingSummary ? clampSessionFacts(rollingSummary) : "";
   return [
     { role: "system" as const, content: params.persona },
-    ...(params.productKernelBlock
-      ? [{ role: "system" as const, content: params.productKernelBlock }]
-      : []),
     ...(params.userProfileBlock ? [{ role: "system" as const, content: params.userProfileBlock }] : []),
     { role: "system" as const, content: styleGuard },
     { role: "system" as const, content: postureBlock },
-    ...(params.momentumGuardBlock ? [{ role: "system" as const, content: params.momentumGuardBlock }] : []),
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
       : []),
@@ -2326,7 +2319,6 @@ export async function POST(request: NextRequest) {
 
     const messages = buildChatMessages({
       persona: context.persona,
-      productKernelBlock: PRODUCT_KERNEL_TRAJECTORY_BLOCK,
       userProfileBlock: await loadUserProfileBlockIfEligible({
         user: { clerkUserId: user.clerkUserId, email: user.email },
         personaId,

@@ -29,7 +29,7 @@ The system optimizes for continuity without bloating every request.
 
 ### 4) Librarian Reflex (On‑Demand Recall)
 - Gate → Spec → Relevance (3-step) flow
-- If memory is needed, call `/memory/query` and inject a Recall Sheet
+- If memory is needed, call `/memory/query` and inject a compact Recall Sheet (top 3 facts/entities)
 
 ---
 
