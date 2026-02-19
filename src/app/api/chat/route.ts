@@ -1254,6 +1254,7 @@ async function runLibrarianReflex(params: {
         query: sanitized,
         limit: 10,
         referenceTime: now.toISOString(),
+        includeContext: false,
       }),
       signal: queryController.signal,
     });

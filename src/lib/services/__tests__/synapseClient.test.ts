@@ -132,6 +132,38 @@ async function main() {
   expect((result as any)?.items?.[0]?.text).toBe("Keep walking");
   });
 
+  await runTest("memoryLoops() hits correct URL and normalizes rows", async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo, init?: RequestInit) => {
+    calls.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(
+      JSON.stringify({
+        items: [{ id: "1", type: "commitment", text: "  Walk daily  ", salience: 5 }, { text: 1 }],
+        metadata: { count: 1, sort: "priority_desc" },
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  const { memoryLoops } = await import("../synapseClient");
+  const result = await memoryLoops({
+    tenantId: "tenant-test",
+    userId: "user-1",
+    personaId: "persona-1",
+    limit: 5,
+  });
+
+  globalThis.fetch = originalFetch;
+
+  expect(calls.length).toBe(1);
+  expect(calls[0].url).toBe(
+    "https://synapse.test/memory/loops?tenantId=tenant-test&userId=user-1&personaId=persona-1&limit=5"
+  );
+  expect((result as any)?.items?.length).toBe(1);
+  expect((result as any)?.items?.[0]?.text).toBe("Walk daily");
+  });
+
   await runTest("ingest() hits correct URL", async () => {
   const calls: Array<{ url: string; body: string }> = [];
   const originalFetch = globalThis.fetch;

@@ -19,5 +19,7 @@ The prompt is intentionally small and ordered. No nested memory blocks.
 - On session start, context uses Synapse `/session/startbrief` and stores it in session state for reuse.
 - `/session/brief` is fallback-only when startbrief is unavailable.
 - SUPPLEMENTAL_CONTEXT Recall Sheet is capped (`top 3 facts`, `top 3 entities`).
+- Overlay procedural nudges use Synapse `/memory/loops` (fallback: startbrief loop items).
+- Librarian recall uses `/memory/query` in semantic mode (`includeContext=false`).
 - Product kernel guidance comes from compiled prompt kernels (no duplicate runtime product block).
 - No local vector search, todos, or summary spine blocks are injected in this mode.

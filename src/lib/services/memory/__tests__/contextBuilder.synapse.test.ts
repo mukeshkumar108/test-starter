@@ -98,6 +98,13 @@ async function main() {
       { kind: "tension", text: "Pressure between speed and quality in revisions", type: "TENSION" },
     ],
   });
+  (globalThis as any).__synapseMemoryLoopsOverride = async () => ({
+    items: [
+      { id: "l-1", type: "commitment", text: "Set 6 AM alarm for walk routine", salience: 5 },
+      { id: "l-2", type: "thread", text: "Complete portfolio refresh and model rollout", salience: 5 },
+    ],
+    metadata: { count: 2, sort: "priority_desc" },
+  });
 
   const context = await buildContextFromSynapse(
     "user-1",
@@ -108,6 +115,7 @@ async function main() {
   );
 
   delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseMemoryLoopsOverride;
 
   if (!context) throw new Error("Expected context, got null");
 
@@ -123,9 +131,10 @@ async function main() {
   }
   const openLoops = context.overlayContext?.openLoops ?? [];
   const commitments = context.overlayContext?.commitments ?? [];
-  expect(openLoops.length).toBe(3);
+  expect(openLoops.length).toBe(2);
   expect(commitments.length).toBe(1);
-  expect(openLoops[0]).toBe("Reply to Jordan about security questionnaire before lunch");
+  expect(openLoops[0]).toBe("Set 6 AM alarm for walk routine");
+  expect(commitments[0]).toBe("Set 6 AM alarm for walk routine");
   for (const item of [...openLoops, ...commitments]) {
     const words = item.split(/\s+/).filter(Boolean).length;
     if (words > 12) {

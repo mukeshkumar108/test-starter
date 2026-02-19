@@ -1,7 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
 import * as synapseClient from "@/lib/services/synapseClient";
-import type { SynapseBriefResponse, SynapseStartBriefResponse } from "@/lib/services/synapseClient";
+import type {
+  SynapseBriefResponse,
+  SynapseMemoryLoopItem,
+  SynapseMemoryLoopsResponse,
+  SynapseStartBriefResponse,
+} from "@/lib/services/synapseClient";
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
 
@@ -479,6 +484,26 @@ function getOverlayContextFromStartBrief(
   };
 }
 
+function getOverlayContextFromMemoryLoops(
+  loops: SynapseMemoryLoopItem[],
+  recentMessages: Array<{ content: string }>,
+  trajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null
+) {
+  const openLoopItems = loops
+    .map((item) => (typeof item.text === "string" ? item.text.trim() : ""))
+    .filter(Boolean);
+  const commitmentItems = loops
+    .filter((item) => (item.type ?? "").toLowerCase() === "commitment")
+    .map((item) => (typeof item.text === "string" ? item.text.trim() : ""))
+    .filter(Boolean);
+  return {
+    openLoops: buildOverlayItems(openLoopItems, recentMessages),
+    commitments: buildOverlayItems(commitmentItems, recentMessages),
+    currentFocus: trajectory?.todayFocus ?? undefined,
+    weeklyNorthStar: trajectory?.weeklyNorthStar ?? undefined,
+  };
+}
+
 function getZonedParts(now: Date, timeZone: string) {
   const formatter = new Intl.DateTimeFormat("en-GB", {
     timeZone,
@@ -601,6 +626,35 @@ function getSynapseStartBrief() {
   return typeof override === "function" ? override : synapseClient.sessionStartBrief;
 }
 
+function getSynapseMemoryLoops() {
+  const override = (globalThis as { __synapseMemoryLoopsOverride?: typeof synapseClient.memoryLoops })
+    .__synapseMemoryLoopsOverride;
+  return typeof override === "function" ? override : synapseClient.memoryLoops;
+}
+
+async function maybeFetchOverlayLoops(params: {
+  userId: string;
+  personaId: string;
+}) {
+  try {
+    const response = await getSynapseMemoryLoops()<{
+      tenantId?: string;
+      userId: string;
+      personaId: string;
+      limit: number;
+    }, SynapseMemoryLoopsResponse>({
+      tenantId: env.SYNAPSE_TENANT_ID,
+      userId: params.userId,
+      personaId: params.personaId,
+      limit: 5,
+    });
+    if (!response || !Array.isArray(response.items)) return null;
+    return response.items;
+  } catch {
+    return null;
+  }
+}
+
 export async function buildContextFromSynapse(
   userId: string,
   personaId: string,
@@ -656,6 +710,10 @@ export async function buildContextFromSynapse(
         console.warn("[librarian.trace] failed to log startbrief(cache)", { error });
       });
     }
+    const loopItems = isSessionStart ? await maybeFetchOverlayLoops({ userId, personaId }) : null;
+    const overlayContext = loopItems
+      ? getOverlayContextFromMemoryLoops(loopItems, messages, localTrajectory)
+      : getOverlayContextFromStartBrief(cachedStartBrief, messages, localTrajectory);
     return {
       persona: personaPrompt,
       situationalContext: buildSessionStartContext(cachedStartBrief, localTrajectory) ?? undefined,
@@ -666,7 +724,7 @@ export async function buildContextFromSynapse(
         itemsCount: cachedItemsCount,
         bridgeTextChars: cachedBridgeTextChars,
       },
-      overlayContext: getOverlayContextFromStartBrief(cachedStartBrief, messages, localTrajectory),
+      overlayContext,
       recentMessages: messages
         .map((message) => ({
           ...message,
@@ -725,6 +783,10 @@ export async function buildContextFromSynapse(
           console.warn("[librarian.trace] failed to log startbrief(fetch)", { error });
         });
       }
+      const loopItems = await maybeFetchOverlayLoops({ userId, personaId });
+      const overlayContext = loopItems
+        ? getOverlayContextFromMemoryLoops(loopItems, messages, localTrajectory)
+        : getOverlayContextFromStartBrief(startBrief, messages, localTrajectory);
       return {
         persona: personaPrompt,
         situationalContext: buildSessionStartContext(startBrief, localTrajectory) ?? undefined,
@@ -735,7 +797,7 @@ export async function buildContextFromSynapse(
           itemsCount: startItemsCount,
           bridgeTextChars: startBridgeTextChars,
         },
-        overlayContext: getOverlayContextFromStartBrief(startBrief, messages, localTrajectory),
+        overlayContext,
         recentMessages: messages
           .map((message) => ({
             ...message,

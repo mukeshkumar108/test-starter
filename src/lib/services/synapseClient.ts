@@ -34,6 +34,33 @@ export type SynapseStartBriefResponse = {
   }> | null;
 };
 
+export type SynapseMemoryLoopItem = {
+  id?: string | null;
+  type?: string | null;
+  text?: string | null;
+  status?: string | null;
+  salience?: number | null;
+  timeHorizon?: string | null;
+  dueDate?: string | null;
+  lastSeenAt?: string | null;
+  domain?: string | null;
+  importance?: number | null;
+  urgency?: number | null;
+  tags?: string[] | null;
+  personaId?: string | null;
+};
+
+export type SynapseMemoryLoopsResponse = {
+  items?: SynapseMemoryLoopItem[] | null;
+  metadata?: {
+    count?: number;
+    limit?: number;
+    sort?: string | null;
+    domainFilter?: string | null;
+    personaId?: string | null;
+  } | null;
+};
+
 function toNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -79,6 +106,44 @@ function normalizeSynapseStartBriefResponse(
     bridgeText: toNullableString(value.bridgeText),
     items,
   };
+}
+
+function normalizeSynapseMemoryLoopsResponse(payload: unknown): SynapseMemoryLoopsResponse {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { items: [], metadata: null };
+  }
+  const value = payload as Record<string, unknown>;
+  const rawItems = Array.isArray(value.items) ? value.items : [];
+  const items = rawItems
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const row = item as Record<string, unknown>;
+      const text = toNullableString(row.text)?.trim() ?? "";
+      if (!text) return null;
+      return {
+        id: toNullableString(row.id),
+        type: toNullableString(row.type),
+        text,
+        status: toNullableString(row.status),
+        salience: toNullableNumber(row.salience),
+        timeHorizon: toNullableString(row.timeHorizon),
+        dueDate: toNullableString(row.dueDate),
+        lastSeenAt: toNullableString(row.lastSeenAt),
+        domain: toNullableString(row.domain),
+        importance: toNullableNumber(row.importance),
+        urgency: toNullableNumber(row.urgency),
+        tags: Array.isArray(row.tags)
+          ? row.tags.filter((tag): tag is string => typeof tag === "string")
+          : null,
+        personaId: toNullableString(row.personaId),
+      } as SynapseMemoryLoopItem;
+    })
+    .filter((item): item is SynapseMemoryLoopItem => Boolean(item));
+  const metadata =
+    value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+      ? (value.metadata as SynapseMemoryLoopsResponse["metadata"])
+      : null;
+  return { items, metadata };
 }
 
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -217,6 +282,26 @@ export async function sessionStartBrief<TPayload = unknown, TResponse = unknown>
   const result = await requestJson<undefined, TResponse>("GET", path);
   if (!result?.ok) return null;
   return normalizeSynapseStartBriefResponse(result.data) as TResponse;
+}
+
+export async function memoryLoops<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const params = new URLSearchParams();
+  const asRecord = (payload ?? {}) as Record<string, unknown>;
+  for (const key of ["tenantId", "userId", "personaId", "domain", "limit"]) {
+    const value = asRecord[key];
+    if (typeof value === "string" && value.length > 0) {
+      params.set(key, value);
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      params.set(key, String(value));
+    }
+  }
+  const path = `/memory/loops${params.toString() ? `?${params.toString()}` : ""}`;
+  const result = await requestJson<undefined, TResponse>("GET", path);
+  if (!result?.ok) return null;
+  return normalizeSynapseMemoryLoopsResponse(result.data) as TResponse;
 }
 
 export async function ingest<TPayload = unknown, TResponse = unknown>(

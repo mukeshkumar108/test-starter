@@ -31,10 +31,12 @@ Two paths run in parallel:
    - Spec extracts entities/topics/time intent
    - Query compilation drops pronouns/ghost tokens and prefers noun-heavy tokens
    - Relevance check validates retrieval
-   - If yes, call `/memory/query` and format Recall Sheet
+   - If yes, call `/memory/query` (semantic recall mode) and format Recall Sheet
+   - `/memory/query` request explicitly sets `includeContext=false`
    - `/memory/query` parsing accepts both `facts: string[]` and `facts: {text}[]`
 8. **Prompt assembly** (`route.ts`)
    - Persona → Style guard → CONVERSATION_POSTURE (with momentum guard when relevant) → SITUATIONAL_CONTEXT → SESSION_FACT_CORRECTIONS (optional) → CONTINUITY (optional) → OVERLAY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
+   - Overlay loop inputs are sourced from Synapse `/memory/loops` on session start (fallback to startbrief loop items)
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
