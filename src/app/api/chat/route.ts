@@ -22,8 +22,6 @@ import { env } from "@/env";
 import { getChatModelForGate } from "@/lib/providers/models";
 import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
-import { readFile } from "fs/promises";
-import { join } from "path";
 
 export const runtime = "nodejs";
 
@@ -245,7 +243,6 @@ type ChatTimingSpans = {
 const postureStateCache = new Map<string, PostureState>();
 const userStateCache = new Map<string, UserStateState>();
 const overlayStateCache = new Map<string, OverlayState>();
-const userProfileCache = new Map<string, string>();
 
 function buildChatTrace(params: {
   traceId: string;
@@ -1380,7 +1377,6 @@ async function runLibrarianReflex(params: {
 
 function buildChatMessages(params: {
   persona: string;
-  userProfileBlock?: string | null;
   momentumGuardBlock?: string | null;
   situationalContext?: string;
   correctionBlock?: string | null;
@@ -1407,7 +1403,6 @@ function buildChatMessages(params: {
   const sessionFacts = rollingSummary ? clampSessionFacts(rollingSummary) : "";
   return [
     { role: "system" as const, content: params.persona },
-    ...(params.userProfileBlock ? [{ role: "system" as const, content: params.userProfileBlock }] : []),
     { role: "system" as const, content: postureBlock },
     ...(situationalContext
       ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
@@ -1634,31 +1629,6 @@ function extractWeeklyCompass(transcript: string) {
     weeklyNorthStar,
     weeklyPriorities,
   };
-}
-
-function isMukeshUser(user: { clerkUserId?: string | null; email?: string | null }) {
-  const targets = [user.clerkUserId ?? "", user.email ?? ""].map((value) => value.toLowerCase());
-  return targets.some((value) => value.includes("mukesh"));
-}
-
-async function loadUserProfileBlockIfEligible(params: {
-  user: { clerkUserId?: string | null; email?: string | null };
-  personaId: string;
-  personaSlug: string;
-}) {
-  const personaLooksMukesh = params.personaId.toLowerCase().includes("mukesh");
-  if (params.personaSlug !== "creative" && !personaLooksMukesh) return null;
-  if (!personaLooksMukesh && !isMukeshUser(params.user)) return null;
-
-  const cacheKey = "mukesh.config.md";
-  const cached = userProfileCache.get(cacheKey);
-  if (cached) return cached;
-
-  const path = join(process.cwd(), "src/personas/config/mukesh.config.md");
-  const file = (await readFile(path, "utf-8")).trim();
-  const block = `[USER_PROFILE]\n${file}`;
-  userProfileCache.set(cacheKey, block);
-  return block;
 }
 
 function isUrgentOpener(text: string) {
@@ -2000,10 +1970,12 @@ export async function POST(request: NextRequest) {
       gate: { risk_level: riskLevel },
     });
     const timeGapMinutes = computeTimeGapMinutes(context.recentMessages, now);
-    const continuityBlock = buildContinuityBlock({
-      timeGapMinutes,
-      transcript: sttResult.transcript,
-    });
+    const continuityBlock = context.startBrief?.used
+      ? null
+      : buildContinuityBlock({
+          timeGapMinutes,
+          transcript: sttResult.transcript,
+        });
 
     const overlayStart = Date.now();
     const overlayState = (await readOverlayState(user.id, personaId)) ?? {};
@@ -2321,11 +2293,6 @@ export async function POST(request: NextRequest) {
 
     const messages = buildChatMessages({
       persona: context.persona,
-      userProfileBlock: await loadUserProfileBlockIfEligible({
-        user: { clerkUserId: user.clerkUserId, email: user.email },
-        personaId,
-        personaSlug: persona.slug,
-      }),
       momentumGuardBlock: buildMomentumGuardBlock({
         intent: overlayIntent,
         localHour: zoned.hour,
