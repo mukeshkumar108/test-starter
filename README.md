@@ -60,6 +60,20 @@ Overlay prompts live in `prompts/overlays/`. They are injected as temporary syst
 
 Tune triggers and cooldowns in `src/lib/services/memory/overlaySelector.ts`.
 
+## prompt stack (Sophie)
+Current `/api/chat` model-facing order:
+1. persona (compiled kernels)
+2. conversation posture
+3. overlay (optional)
+4. startbrief bridge (optional)
+5. startbrief handover (optional, verbatim)
+6. ops snippet (optional)
+7. supplemental recall sheet (optional)
+8. recent session messages
+9. current user message
+
+Session orientation now comes from startbrief-v2 only (`bridge` + `handover`).
+
 ## environment validation
 Env is validated at boot in `src/env.ts`. Add new variables there and to `.env.example`.
 

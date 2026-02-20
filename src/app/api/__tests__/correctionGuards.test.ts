@@ -76,33 +76,24 @@ async function main() {
     expect(block ?? "").toContain("Do not reintroduce corrected assumptions");
   });
 
-  await runTest("injects correction block between situational and continuity", () => {
+  await runTest("does not inject correction block into prompt stack", () => {
     const correctionBlock = __test__buildCorrectionGuardBlock([
       "If uncertain, ask one clarifying question before asserting context.",
     ]);
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
-      situationalContext: "Session start context: EVENING",
       correctionBlock,
-      continuityBlock: "[CONTINUITY]\nResume naturally",
       overlayBlock: null,
       supplementalContext: null,
-      rollingSummary: "",
       recentMessages: [],
       transcript: "Sophie are you there",
     });
 
     const contents = messages.map((message) => message.content);
-    const situationalIndex = contents.findIndex((value) =>
-      value.startsWith("SITUATIONAL_CONTEXT:")
-    );
     const correctionIndex = contents.findIndex((value) =>
       value.startsWith("[SESSION_FACT_CORRECTIONS]")
     );
-    const continuityIndex = contents.findIndex((value) => value.startsWith("[CONTINUITY]"));
-
-    expect(correctionIndex).toBeGreaterThan(situationalIndex);
-    expect(continuityIndex).toBeGreaterThan(correctionIndex);
+    expect(correctionIndex).toBe(-1);
   });
 
   const failed = results.filter((result) => !result.passed);

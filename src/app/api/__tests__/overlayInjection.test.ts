@@ -33,29 +33,31 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
-  await runTest("overlay injected after situational + continuity", () => {
+  await runTest("overlay injected before bridge/handover/ops/supplemental", () => {
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
-      situationalContext: "FACTS:\n- item",
-      continuityBlock: "[CONTINUITY]\nResume",
       overlayBlock: "[OVERLAY]\nOverlay text",
+      bridgeBlock: "BRIDGE",
+      handoverBlock: "HANDOVER",
+      opsSnippetBlock: "OPS",
       supplementalContext: "SUPP",
-      rollingSummary: "summary",
       recentMessages: [{ role: "assistant", content: "ok" }],
       transcript: "hi",
     });
 
     const contents = messages.map((message) => message.content);
     const indexPersona = contents.indexOf("PERSONA");
-    const indexSituational = contents.findIndex((value) => value.startsWith("SITUATIONAL_CONTEXT"));
-    const indexContinuity = contents.findIndex((value) => value.startsWith("[CONTINUITY]"));
     const indexOverlay = contents.findIndex((value) => value.startsWith("[OVERLAY]"));
+    const indexBridge = contents.indexOf("BRIDGE");
+    const indexHandover = contents.indexOf("HANDOVER");
+    const indexOps = contents.indexOf("OPS");
     const indexSupplemental = contents.findIndex((value) => value.startsWith("[SUPPLEMENTAL_CONTEXT]"));
 
     expect(indexPersona).toBe(0);
-    expect(indexSituational).toBeGreaterThan(indexPersona);
-    expect(indexContinuity).toBeGreaterThan(indexSituational);
-    expect(indexOverlay).toBeGreaterThan(indexContinuity);
+    expect(indexOverlay).toBeGreaterThan(indexPersona);
+    expect(indexBridge).toBeGreaterThan(indexOverlay);
+    expect(indexHandover).toBeGreaterThan(indexBridge);
+    expect(indexOps).toBeGreaterThan(indexHandover);
     expect(indexSupplemental).toBeGreaterThan(indexOverlay);
   });
 

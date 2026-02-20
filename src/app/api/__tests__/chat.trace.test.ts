@@ -59,6 +59,17 @@ async function main() {
         items_count: 3,
         bridgeText_chars: 128,
       },
+      startbriefRuntime: {
+        session_id: "session-1",
+        userTurnsSeen: 1,
+        handover_injected: true,
+        bridge_injected: true,
+        ops_injected: false,
+        ops_source: null,
+        startbrief_fetch: "miss",
+        reinjection_used: false,
+      },
+      systemBlocks: ["persona", "posture", "overlay", "bridge", "handover"],
       counts: {
         recentMessages: 2,
         situationalContext: 1,
@@ -84,6 +95,9 @@ async function main() {
     expect(trace.overlaySkipReason).toBe(null);
     expect(trace.startbrief_used).toBe(true);
     expect(trace.startbrief_items_count).toBe(3);
+    expect(trace.startbrief_runtime.session_id).toBe("session-1");
+    expect(trace.startbrief_runtime.handover_injected).toBe(true);
+    expect(trace.system_blocks[0]).toBe("persona");
   });
 
   const failed = results.filter((result) => !result.passed);

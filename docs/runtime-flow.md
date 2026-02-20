@@ -20,7 +20,7 @@ Two paths run in parallel:
 6. **Context build** (`contextBuilder.ts`)
    - Persona prompt
    - Last 8 messages from the active session only
-   - On session start: Synapse `/session/startbrief` (cached per session)
+   - On session start: Synapse `/session/startbrief` (cached per session, used as startbrief-v2 packet)
    - On session start: Synapse `/user/model` (cached per session; stored as deferred profile context)
    - On session start: Synapse `/analysis/daily` (best-effort; used only for high-confidence steering)
    - Fallback: Synapse `/session/brief` if startbrief unavailable
@@ -37,14 +37,15 @@ Two paths run in parallel:
    - `/memory/query` request explicitly sets `includeContext=false`
    - `/memory/query` parsing accepts both `facts: string[]` and `facts: {text}[]`
 8. **Prompt assembly** (`route.ts`)
-  - Persona → Style guard → CONVERSATION_POSTURE (with momentum guard when relevant) → SITUATIONAL_CONTEXT → SESSION_FACT_CORRECTIONS (optional) → CONTINUITY (optional) → OVERLAY (optional) → SUPPLEMENTAL_CONTEXT → SESSION FACTS → Last 8 messages → User msg
+  - Persona → CONVERSATION_POSTURE → OVERLAY (optional) → bridge (optional) → handover (optional) → ops snippet (optional) → SUPPLEMENTAL_CONTEXT (optional) → Last 8 messages → User msg
+  - Startbrief-v2 is now the only orientation path. Legacy orientation blocks are removed from prompt injection.
   - Overlay loop inputs are sourced from Synapse `/memory/loops` on session start (fallback to startbrief loop items)
   - Loop continuity is user-scoped (not persona-partitioned)
-  - Session-open SITUATIONAL_CONTEXT is capped to a 3-part handoff:
-    - natural opener sentence (time + gap + one key thing)
-    - optional high-confidence steering note (one sentence)
-    - optional active threads (max 2) only when intent/direct-request indicates immediate task relevance
-  - Deferred profile context (relationships/patterns/work/long-term/prefs) is suppressed on session open and injected mid-conversation only under deterministic triggers.
+  - startbrief-v2 injection policy:
+    - Turn 1: bridge (only when `resume.use_bridge=true`) + handover (verbatim)
+    - Turn 2: handover only if depth is `yesterday|multi_day`, or `gap_minutes>=120`, or first user message is low-signal
+    - Turn 3+: no handover/bridge, except one semantic reinjection path
+  - Ops snippet is suppressed when SUPPLEMENTAL_CONTEXT exists (mutual exclusion to prevent duplication).
 9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
@@ -65,18 +66,15 @@ Optional legacy path (feature‑flagged):
 
 ## Prompt Assembly (Current)
 Order is fixed:
-1. Persona (Identity Anchor)
-2. Style guard (single line)
-3. CONVERSATION_POSTURE (neutral labels)
-4. SITUATIONAL_CONTEXT (Synapse brief; includes CURRENT_FOCUS when present)
-4. SITUATIONAL_CONTEXT (minimal handoff at session-open; deterministic mid-turn augmentation only)
-5. SESSION_FACT_CORRECTIONS (optional)
-6. CONTINUITY (optional, gap-based)
-7. OVERLAY (optional)
-8. SUPPLEMENTAL_CONTEXT (Recall Sheet, if present; top 3 facts/entities)
-9. SESSION FACTS (rolling summary, if present)
-10. Last 8 messages
-11. Current user message
+1. Persona (compiled kernel)
+2. CONVERSATION_POSTURE (with momentum guard when applicable)
+3. OVERLAY (optional)
+4. bridge block (optional, turn-1 only when `resume.use_bridge=true`)
+5. handover block (optional, startbrief-v2 rules; verbatim text)
+6. ops snippet block (optional, deterministic gating)
+7. SUPPLEMENTAL_CONTEXT (optional Recall Sheet)
+8. Last 8 messages (session-scoped)
+9. Current user message
 
 ---
 
@@ -85,11 +83,9 @@ Order is fixed:
 - Startbrief loop items and `/memory/loops` are treated as user-scoped canonical loop memory.
 - `/session/brief` is a fallback path.
 - Product-kernel trajectory guidance is loaded from compiled prompt kernels (not duplicated at runtime).
-- CONTINUITY injects only when timeGapMinutes ≥ 60 and the opener is not urgent.
 - Session boundaries are based on **last user message**, not assistant activity.
-- SESSION FACTS is session-scoped: it is included only when the stored
-  `rollingSummarySessionId` equals the active `sessionId`.
 - Recent messages are session-scoped: no carryover from previous session.
+- Orientation context is no longer injected via `SITUATIONAL_CONTEXT`, `CONTINUITY`, or `SESSION FACTS`.
 
 ## Debug & Trace
 - `[chat.trace]` includes:
@@ -97,9 +93,19 @@ Order is fixed:
   - `startbrief_fallback`
   - `startbrief_items_count`
   - `bridgeText_chars`
+  - `startbrief_runtime`:
+    - `session_id`
+    - `userTurnsSeen`
+    - `handover_injected`
+    - `bridge_injected`
+    - `ops_injected`
+    - `ops_source`
+    - `startbrief_fetch`
+    - `reinjection_used`
+  - `system_blocks` (final system block order for that turn)
 - Daily analysis behavior:
   - Steering from `/analysis/daily` is included only when confidence is high.
-  - Low-confidence daily analysis (`needs_review` / `insufficient_data`) is not surfaced in model-facing `SITUATIONAL_CONTEXT`.
+  - Low-confidence daily analysis (`needs_review` / `insufficient_data`) is not surfaced in model-facing orientation text.
 - Mid-conversation deferred profile triggers:
   - `relationships` only when `posture=RELATIONSHIP` or user names a tracked person.
   - `patterns` only when bouncer/gate signals avoidance or drift.

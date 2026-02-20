@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { __test__buildChatMessages } from "@/app/api/chat/route";
+import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -32,6 +33,13 @@ type ScenarioResult = {
   results: PlaybackResult[];
 };
 
+type PlaybackPromptMode = "compiled" | "no_system";
+
+function getPromptMode(): PlaybackPromptMode {
+  const raw = String(process.env.PLAYBACK_PROMPT_MODE ?? "compiled").trim().toLowerCase();
+  return raw === "no_system" ? "no_system" : "compiled";
+}
+
 function getModels(fixture: Fixture): string[] {
   const envModels = process.env.MODELS?.split(",").map((m) => m.trim()).filter(Boolean);
   if (envModels && envModels.length > 0) return envModels;
@@ -39,7 +47,11 @@ function getModels(fixture: Fixture): string[] {
 }
 
 function getPersonaPrompt(): Promise<string> {
-  return readFile(join(process.cwd(), "prompts", "persona-creative.md"), "utf8");
+  return loadPersonaPrompt({
+    slug: "creative",
+    promptPath: "/prompts/persona-creative.md",
+    rootDir: process.cwd(),
+  });
 }
 
 async function callOpenRouter(
@@ -83,7 +95,8 @@ async function callOpenRouter(
 async function run() {
   const fixtureRaw = await readFile(join(process.cwd(), "fixtures", "prompt-playback.json"), "utf8");
   const fixture = JSON.parse(fixtureRaw) as Fixture;
-  const persona = await getPersonaPrompt();
+  const promptMode = getPromptMode();
+  const persona = promptMode === "compiled" ? await getPersonaPrompt() : "";
   const models = getModels(fixture);
 
   const scenarioResults: ScenarioResult[] = [];
@@ -100,16 +113,19 @@ async function run() {
           continue;
         }
 
-        const messages = __test__buildChatMessages({
-          persona,
-          situationalContext: scenario.situationalContext,
-          supplementalContext: scenario.supplementalContext,
-          rollingSummary: scenario.sessionFacts ?? "",
-          recentMessages: history,
-          transcript: turn.content,
-          posture: scenario.posture,
-          pressure: scenario.pressure,
-        });
+        const messages =
+          promptMode === "no_system"
+            ? [...history, { role: "user" as const, content: turn.content }]
+            : __test__buildChatMessages({
+                persona,
+                situationalContext: scenario.situationalContext,
+                supplementalContext: scenario.supplementalContext,
+                rollingSummary: scenario.sessionFacts ?? "",
+                recentMessages: history,
+                transcript: turn.content,
+                posture: scenario.posture,
+                pressure: scenario.pressure,
+              });
 
         const response = await callOpenRouter(model, messages);
         history.push({ role: "user", content: turn.content });
@@ -117,16 +133,19 @@ async function run() {
         turns.push({ user: turn.content, assistant: response });
       }
 
-      const finalMessages = __test__buildChatMessages({
-        persona,
-        situationalContext: scenario.situationalContext,
-        supplementalContext: scenario.supplementalContext,
-        rollingSummary: scenario.sessionFacts ?? "",
-        recentMessages: history,
-        transcript: "",
-        posture: scenario.posture,
-        pressure: scenario.pressure,
-      });
+      const finalMessages =
+        promptMode === "no_system"
+          ? [...history]
+          : __test__buildChatMessages({
+              persona,
+              situationalContext: scenario.situationalContext,
+              supplementalContext: scenario.supplementalContext,
+              rollingSummary: scenario.sessionFacts ?? "",
+              recentMessages: history,
+              transcript: "",
+              posture: scenario.posture,
+              pressure: scenario.pressure,
+            });
 
       results.push({ model, turns, messages: finalMessages });
 
@@ -144,6 +163,7 @@ async function run() {
   const outputPath = join(process.cwd(), "outputs", `prompt-playback-${stamp}.json`);
   await writeFile(outputPath, JSON.stringify({
     runAt: new Date().toISOString(),
+    promptMode,
     models,
     scenarios: scenarioResults,
   }, null, 2));

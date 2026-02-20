@@ -66,17 +66,14 @@ async function main() {
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
       momentumGuardBlock: block,
-      situationalContext: "SITUATIONAL",
       recentMessages: [],
       transcript: "hello",
     });
     const contents = messages.map((message) => message.content);
     const postureIndex = contents.findIndex((value) => value.startsWith("[CONVERSATION_POSTURE]"));
     const guardIndex = contents.findIndex((value) => value.includes("[MOMENTUM_GUARD]"));
-    const situationalIndex = contents.findIndex((value) => value.startsWith("SITUATIONAL_CONTEXT:"));
     expect(postureIndex >= 0).toBeTrue();
     expect(guardIndex).toBe(postureIndex);
-    expect(situationalIndex > postureIndex).toBeTrue();
   });
 
   const failed = results.filter((result) => !result.passed);

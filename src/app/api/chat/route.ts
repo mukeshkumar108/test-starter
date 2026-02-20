@@ -26,6 +26,7 @@ import { env } from "@/env";
 import { getChatModelForGate } from "@/lib/providers/models";
 import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
+import type { SynapseStartBriefResponse } from "@/lib/services/synapseClient";
 
 export const runtime = "nodejs";
 
@@ -72,17 +73,6 @@ function getUserStateResetGapMinutes() {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_USER_STATE_RESET_GAP_MINUTES;
   return parsed;
-}
-
-function clampSessionFacts(value: string) {
-  const lines = value
-    .split(/\r?\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 2);
-  if (lines.length === 0) return "";
-  const joined = lines.join(" | ");
-  return joined.slice(0, 240).trim();
 }
 
 function getSessionContext(sessionState?: any) {
@@ -230,6 +220,11 @@ type OverlayState = {
   pendingDailyReviewCapture?: boolean;
   pendingWeeklyCompassCapture?: boolean;
   correctionOverlayCooldownTurns?: number;
+  startbriefV2UserTurnsSeen?: number;
+  startbriefV2ReinjectedOnce?: boolean;
+  startbriefV2FirstUserLowSignal?: boolean;
+  loopsCache?: { fetchedAt?: string | null; items?: string[] };
+  queryCache?: { fetchedAt?: string | null; facts?: string[] };
   user?: OverlayUserState;
 };
 
@@ -265,6 +260,17 @@ function buildChatTrace(params: {
     items_count: number;
     bridgeText_chars: number;
   };
+  startbriefRuntime: {
+    session_id: string;
+    userTurnsSeen: number;
+    handover_injected: boolean;
+    bridge_injected: boolean;
+    ops_injected: boolean;
+    ops_source: "startbrief_ops" | "loops" | "query" | null;
+    startbrief_fetch: "hit" | "miss";
+    reinjection_used: boolean;
+  };
+  systemBlocks: string[];
   counts: {
     recentMessages: number;
     situationalContext: number;
@@ -288,6 +294,8 @@ function buildChatTrace(params: {
     startbrief_fallback: params.startbrief.fallback,
     startbrief_items_count: params.startbrief.items_count,
     bridgeText_chars: params.startbrief.bridgeText_chars,
+    startbrief_runtime: params.startbriefRuntime,
+    system_blocks: params.systemBlocks,
     token_usage: null,
     counts: params.counts,
     timings: params.timings,
@@ -446,6 +454,42 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
       typeof raw.pendingDailyReviewCapture === "boolean" ? raw.pendingDailyReviewCapture : false,
     pendingWeeklyCompassCapture:
       typeof raw.pendingWeeklyCompassCapture === "boolean" ? raw.pendingWeeklyCompassCapture : false,
+    startbriefV2UserTurnsSeen:
+      typeof raw.startbriefV2UserTurnsSeen === "number" ? raw.startbriefV2UserTurnsSeen : 0,
+    startbriefV2ReinjectedOnce:
+      typeof raw.startbriefV2ReinjectedOnce === "boolean" ? raw.startbriefV2ReinjectedOnce : false,
+    startbriefV2FirstUserLowSignal:
+      typeof raw.startbriefV2FirstUserLowSignal === "boolean"
+        ? raw.startbriefV2FirstUserLowSignal
+        : false,
+    loopsCache:
+      typeof raw.loopsCache === "object" && raw.loopsCache && !Array.isArray(raw.loopsCache)
+        ? {
+            fetchedAt:
+              typeof (raw.loopsCache as Record<string, unknown>).fetchedAt === "string"
+                ? ((raw.loopsCache as Record<string, unknown>).fetchedAt as string)
+                : null,
+            items: Array.isArray((raw.loopsCache as Record<string, unknown>).items)
+              ? ((raw.loopsCache as Record<string, unknown>).items as unknown[])
+                  .filter((entry): entry is string => typeof entry === "string")
+                  .slice(0, 3)
+              : [],
+          }
+        : undefined,
+    queryCache:
+      typeof raw.queryCache === "object" && raw.queryCache && !Array.isArray(raw.queryCache)
+        ? {
+            fetchedAt:
+              typeof (raw.queryCache as Record<string, unknown>).fetchedAt === "string"
+                ? ((raw.queryCache as Record<string, unknown>).fetchedAt as string)
+                : null,
+            facts: Array.isArray((raw.queryCache as Record<string, unknown>).facts)
+              ? ((raw.queryCache as Record<string, unknown>).facts as unknown[])
+                  .filter((entry): entry is string => typeof entry === "string")
+                  .slice(0, 3)
+              : [],
+          }
+        : undefined,
     user: typeof raw.user === "object" && raw.user && !Array.isArray(raw.user)
       ? {
           ...(raw.user as OverlayUserState),
@@ -1061,6 +1105,11 @@ async function runLibrarianReflex(params: {
   isUrgent: boolean;
   isDirectRequest: boolean;
   avoidanceOrDrift: boolean;
+  gateAction: "memory_query" | "none";
+  gateConfidence: number;
+  gateExplicit: boolean;
+  gateExplicitTopicShift: boolean;
+  postureConfidence: number;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -1079,6 +1128,11 @@ async function runLibrarianReflex(params: {
     isUrgent: false,
     isDirectRequest: false,
     avoidanceOrDrift: false,
+    gateAction: "none" as const,
+    gateConfidence: 0,
+    gateExplicit: false,
+    gateExplicitTopicShift: false,
+    postureConfidence: 0,
   };
   if (remaining() <= 0) {
     return {
@@ -1110,6 +1164,12 @@ async function runLibrarianReflex(params: {
     isUrgent: Boolean(gateResult.is_urgent),
     isDirectRequest: Boolean(gateResult.is_direct_request),
     avoidanceOrDrift: detectAvoidanceOrDrift(gateResult),
+    gateAction: gateResult.action,
+    gateConfidence: gateResult.confidence,
+    gateExplicit: Boolean(gateResult.explicit),
+    gateExplicitTopicShift: Boolean(gateResult.explicit_topic_shift),
+    postureConfidence:
+      typeof gateResult.posture_confidence === "number" ? gateResult.posture_confidence : 0,
   };
 
   const postureSuggestion = normalizePosture(gateResult.posture);
@@ -1396,20 +1456,17 @@ async function runLibrarianReflex(params: {
 function buildChatMessages(params: {
   persona: string;
   momentumGuardBlock?: string | null;
-  situationalContext?: string;
-  correctionBlock?: string | null;
-  continuityBlock?: string | null;
   overlayBlock?: string | null;
+  bridgeBlock?: string | null;
+  handoverBlock?: string | null;
+  opsSnippetBlock?: string | null;
   supplementalContext?: string | null;
-  rollingSummary?: string;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
   transcript: string;
   posture?: ConversationPosture;
   pressure?: ConversationPressure;
   userState?: { mood: UserMood; energy: UserEnergy; tone: UserTone } | null;
 }) {
-  const situationalContext = params.situationalContext ?? "";
-  const rollingSummary = params.rollingSummary ?? "";
   const posture = params.posture ?? DEFAULT_POSTURE;
   const pressure = params.pressure ?? DEFAULT_PRESSURE;
   const guidance = POSTURE_GUIDANCE[posture] ?? POSTURE_GUIDANCE[DEFAULT_POSTURE];
@@ -1418,18 +1475,13 @@ function buildChatMessages(params: {
     postureLines.push("", params.momentumGuardBlock);
   }
   const postureBlock = postureLines.join("\n");
-  const sessionFacts = rollingSummary ? clampSessionFacts(rollingSummary) : "";
   return [
     { role: "system" as const, content: params.persona },
     { role: "system" as const, content: postureBlock },
-    ...(situationalContext
-      ? [{ role: "system" as const, content: `SITUATIONAL_CONTEXT:\n${situationalContext}` }]
-      : []),
-    ...(params.correctionBlock ? [{ role: "system" as const, content: params.correctionBlock }] : []),
-    ...(params.continuityBlock
-      ? [{ role: "system" as const, content: params.continuityBlock }]
-      : []),
     ...(params.overlayBlock ? [{ role: "system" as const, content: params.overlayBlock }] : []),
+    ...(params.bridgeBlock ? [{ role: "system" as const, content: params.bridgeBlock }] : []),
+    ...(params.handoverBlock ? [{ role: "system" as const, content: params.handoverBlock }] : []),
+    ...(params.opsSnippetBlock ? [{ role: "system" as const, content: params.opsSnippetBlock }] : []),
     ...(params.supplementalContext
       ? [
           {
@@ -1437,9 +1489,6 @@ function buildChatMessages(params: {
             content: `[SUPPLEMENTAL_CONTEXT]\n${params.supplementalContext}`,
           },
         ]
-      : []),
-    ...(sessionFacts
-      ? [{ role: "system" as const, content: `SESSION FACTS: ${sessionFacts}` }]
       : []),
     ...params.recentMessages,
     { role: "user" as const, content: params.transcript },
@@ -1927,6 +1976,195 @@ function buildDeferredProfileContextLines(params: {
   return Array.from(new Set(lines)).slice(0, 2);
 }
 
+function isLowSignalFirstUserMessage(transcript: string) {
+  const normalized = normalizeWhitespace(transcript).toLowerCase();
+  if (!normalized) return true;
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length <= 3) return true;
+  const lowSignalPatterns = [
+    "hey",
+    "hi",
+    "hello",
+    "are you there",
+    "you there",
+    "yo",
+    "sup",
+  ];
+  return lowSignalPatterns.some((pattern) => normalized.includes(pattern));
+}
+
+function shouldInjectTurn2Handover(params: {
+  packet: SynapseStartBriefResponse;
+  firstUserMsgLowSignal: boolean;
+}) {
+  const depth = params.packet.handover_depth ?? null;
+  const gap = params.packet.time_context?.gap_minutes ?? null;
+  if (depth === "yesterday" || depth === "multi_day") return true;
+  if (typeof gap === "number" && Number.isFinite(gap) && gap >= 120) return true;
+  return params.firstUserMsgLowSignal;
+}
+
+function shouldAllowHandoverReinjection(params: {
+  gateAction: "memory_query" | "none";
+  gateConfidence: number;
+  gateExplicit: boolean;
+  gateExplicitTopicShift: boolean;
+  isDirectRequest: boolean;
+  reinjectedOnce: boolean;
+}) {
+  if (params.reinjectedOnce) return false;
+  if (params.gateAction !== "memory_query") return false;
+  if (params.gateConfidence < 0.75) return false;
+  if (!params.isDirectRequest) return false;
+  if (!params.gateExplicit) return false;
+  if (params.gateExplicitTopicShift) return false;
+  return true;
+}
+
+function buildStartbriefInjection(params: {
+  packet?: SynapseStartBriefResponse;
+  userTurnsSeen: number;
+  firstUserMsgLowSignal: boolean;
+  allowSemanticReinjection: boolean;
+}) {
+  const packet = params.packet;
+  if (!packet) {
+    return {
+      bridgeBlock: null as string | null,
+      handoverBlock: null as string | null,
+      bridgeInjected: false,
+      handoverInjected: false,
+      reinjectionUsed: false,
+    };
+  }
+  const handover =
+    typeof packet.handover_text === "string" ? packet.handover_text.trim() : "";
+  if (!handover) {
+    return {
+      bridgeBlock: null as string | null,
+      handoverBlock: null as string | null,
+      bridgeInjected: false,
+      handoverInjected: false,
+      reinjectionUsed: false,
+    };
+  }
+  const bridgeText =
+    packet.resume?.use_bridge && typeof packet.resume.bridge_text === "string"
+      ? packet.resume.bridge_text.trim()
+      : "";
+
+  if (params.userTurnsSeen === 0) {
+    return {
+      bridgeBlock: bridgeText || null,
+      handoverBlock: handover,
+      bridgeInjected: Boolean(bridgeText),
+      handoverInjected: true,
+      reinjectionUsed: false,
+    };
+  }
+  if (params.userTurnsSeen === 1) {
+    const include = shouldInjectTurn2Handover({
+      packet,
+      firstUserMsgLowSignal: params.firstUserMsgLowSignal,
+    });
+    return {
+      bridgeBlock: null as string | null,
+      handoverBlock: include ? handover : null,
+      bridgeInjected: false,
+      handoverInjected: include,
+      reinjectionUsed: false,
+    };
+  }
+  if (params.allowSemanticReinjection) {
+    return {
+      bridgeBlock: null as string | null,
+      handoverBlock: handover,
+      bridgeInjected: false,
+      handoverInjected: true,
+      reinjectionUsed: true,
+    };
+  }
+  return {
+    bridgeBlock: null as string | null,
+    handoverBlock: null as string | null,
+    bridgeInjected: false,
+    handoverInjected: false,
+    reinjectionUsed: false,
+  };
+}
+
+function shouldInjectOpsSnippet(params: {
+  riskLevel: RiskLevel;
+  posture: ConversationPosture;
+  pressure: ConversationPressure;
+  intent: OverlayIntent;
+  gateAction: "memory_query" | "none";
+  gateConfidence: number;
+  isDirectRequest: boolean;
+  isUrgent: boolean;
+  postureConfidence: number;
+}) {
+  if (params.riskLevel === "CRISIS") return false;
+  const momentumPath =
+    (params.intent === "momentum" || params.intent === "output_task" || params.posture === "MOMENTUM" || params.posture === "PRACTICAL") &&
+    params.gateAction === "memory_query" &&
+    params.gateConfidence >= 0.65;
+  const pressurePath =
+    (params.pressure === "HIGH" || params.isDirectRequest || params.isUrgent) &&
+    params.postureConfidence >= 0.7;
+  return momentumPath || pressurePath;
+}
+
+function validateOpsSnippet(input: string | null) {
+  if (!input) return null;
+  if (input.includes(":") || input.includes(";")) return null;
+  const oneLine = input.replace(/\s+/g, " ").trim();
+  if (!oneLine) return null;
+  const firstSentence = oneLine.split(/(?<=[.!?])\s+/)[0]?.trim() ?? oneLine;
+  const words = firstSentence.split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 22) return null;
+  const sentence = words.join(" ").replace(/[!?]+$/, ".");
+  return /[.]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
+function buildOpsSnippetFromLoops(loopTexts: string[]) {
+  const top = loopTexts.filter(Boolean).slice(0, 2);
+  if (top.length === 0) return null;
+  if (top.length === 1) {
+    return validateOpsSnippet(`A useful thread to anchor on is ${top[0]}`);
+  }
+  return validateOpsSnippet(`Useful threads to anchor on are ${top[0]} and ${top[1]}`);
+}
+
+function applyOpsSupplementalMutualExclusion(
+  opsSnippetBlock: string | null,
+  supplementalContext: string | null
+) {
+  if (supplementalContext) return null;
+  return opsSnippetBlock;
+}
+
+function topLoopTextsFromPacket(packet?: SynapseStartBriefResponse) {
+  const items = Array.isArray(packet?.ops_context?.top_loops_today)
+    ? packet?.ops_context?.top_loops_today
+    : [];
+  return items
+    .map((item) => (typeof item?.text === "string" ? item.text.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 2);
+}
+
+function extractFactsFromSupplementalContext(supplemental: string | null) {
+  if (!supplemental) return [] as string[];
+  const lines = supplemental
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.replace(/^- /, "").trim())
+    .filter(Boolean);
+  return lines.slice(0, 2);
+}
+
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   const traceId = request.headers.get("x-trace-id") || crypto.randomUUID();
@@ -2061,7 +2299,6 @@ export async function POST(request: NextRequest) {
 
     // Step 3: Generate LLM response
     const rollingSummary = context.rollingSummary ?? "";
-    let situationalContext = context.situationalContext ?? "";
     const shouldTraceLibrarian =
       env.FEATURE_LIBRARIAN_TRACE === "true" ||
       request.headers.get("x-debug-librarian") === "1";
@@ -2085,26 +2322,11 @@ export async function POST(request: NextRequest) {
     const overlayIntent = librarianResult?.intent ?? DEFAULT_GATE_INTENT;
     const overlayIsUrgent = librarianResult?.isUrgent ?? false;
     const overlayIsDirectRequest = librarianResult?.isDirectRequest ?? false;
-    const avoidanceOrDrift = librarianResult?.avoidanceOrDrift ?? false;
-    if (context.isSessionStart && context.sessionStartHandoff) {
-      situationalContext = buildSessionStartSituationalContext({
-        handoff: context.sessionStartHandoff,
-        intent: overlayIntent,
-        isDirectRequest: overlayIsDirectRequest,
-      });
-    }
-    const deferredProfileLines = buildDeferredProfileContextLines({
-      isSessionStart: context.isSessionStart,
-      profile: context.deferredProfileContext,
-      posture,
-      intent: overlayIntent,
-      isDirectRequest: overlayIsDirectRequest,
-      transcript: sttResult.transcript,
-      avoidanceOrDrift,
-    });
-    if (deferredProfileLines.length > 0) {
-      situationalContext = [situationalContext, ...deferredProfileLines].filter(Boolean).join("\n");
-    }
+    const gateAction = librarianResult?.gateAction ?? "none";
+    const gateConfidence = librarianResult?.gateConfidence ?? 0;
+    const gateExplicit = librarianResult?.gateExplicit ?? false;
+    const gateExplicitTopicShift = librarianResult?.gateExplicitTopicShift ?? false;
+    const postureConfidence = librarianResult?.postureConfidence ?? 0;
     const correctionSignal = isExplicitAssistantCorrection(sttResult.transcript);
     const frictionSignal = hasCorrectionFrictionSignal(sttResult.transcript);
     if (frictionSignal) {
@@ -2114,7 +2336,6 @@ export async function POST(request: NextRequest) {
       }
     }
     if (correctionSignal && context.startBrief?.used) {
-      situationalContext = "";
       void clearStartBriefForSession(user.id, personaId, session.id).catch((error) => {
         console.warn("[startbrief.invalidate.err]", { userId: user.id, personaId, sessionId: session.id, error });
       });
@@ -2123,14 +2344,6 @@ export async function POST(request: NextRequest) {
       personaId: persona.slug,
       gate: { risk_level: riskLevel },
     });
-    const timeGapMinutes = computeTimeGapMinutes(context.recentMessages, now);
-    const continuityBlock = context.startBrief?.used
-      ? null
-      : buildContinuityBlock({
-          timeGapMinutes,
-          transcript: sttResult.transcript,
-        });
-
     const overlayStart = Date.now();
     const overlayState = (await readOverlayState(user.id, personaId)) ?? {};
     let overlayUsed: OverlayUsed = overlayState.overlayUsed ?? {};
@@ -2143,6 +2356,11 @@ export async function POST(request: NextRequest) {
     let pendingDailyReviewCapture = overlayState.pendingDailyReviewCapture ?? false;
     let pendingWeeklyCompassCapture = overlayState.pendingWeeklyCompassCapture ?? false;
     let correctionOverlayCooldownTurns = overlayState.correctionOverlayCooldownTurns ?? 0;
+    let startbriefV2UserTurnsSeen = overlayState.startbriefV2UserTurnsSeen ?? 0;
+    let startbriefV2ReinjectedOnce = overlayState.startbriefV2ReinjectedOnce ?? false;
+    let startbriefV2FirstUserLowSignal = overlayState.startbriefV2FirstUserLowSignal ?? false;
+    let loopsCache = overlayState.loopsCache ?? { fetchedAt: null, items: [] as string[] };
+    let queryCache = overlayState.queryCache ?? { fetchedAt: null, facts: [] as string[] };
     const overlayUser = overlayState.user ?? {};
     // Trajectory rituals are day/week scoped to the user's configured local zone.
     const timeZone = "Europe/Zagreb";
@@ -2161,6 +2379,119 @@ export async function POST(request: NextRequest) {
       pendingDailyReviewCapture = false;
       pendingWeeklyCompassCapture = false;
       correctionOverlayCooldownTurns = 0;
+      startbriefV2UserTurnsSeen = 0;
+      startbriefV2ReinjectedOnce = false;
+      startbriefV2FirstUserLowSignal = false;
+      loopsCache = { fetchedAt: null, items: [] };
+      queryCache = { fetchedAt: null, facts: [] };
+    }
+    if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
+      startbriefV2FirstUserLowSignal = isLowSignalFirstUserMessage(sttResult.transcript);
+    }
+
+    const allowSemanticReinjection = shouldAllowHandoverReinjection({
+      gateAction,
+      gateConfidence,
+      gateExplicit,
+      gateExplicitTopicShift,
+      isDirectRequest: overlayIsDirectRequest,
+      reinjectedOnce: startbriefV2ReinjectedOnce,
+    });
+    const startbriefInjection = buildStartbriefInjection({
+      packet: context.startbriefPacket,
+      userTurnsSeen: startbriefV2UserTurnsSeen,
+      firstUserMsgLowSignal: startbriefV2FirstUserLowSignal,
+      allowSemanticReinjection,
+    });
+    const bridgeBlock = startbriefInjection.bridgeBlock;
+    const handoverBlock = startbriefInjection.handoverBlock;
+    const bridgeInjected = startbriefInjection.bridgeInjected;
+    const handoverInjected = startbriefInjection.handoverInjected;
+    const reinjectionUsed = startbriefInjection.reinjectionUsed;
+    if (reinjectionUsed) {
+      startbriefV2ReinjectedOnce = true;
+    }
+
+    let opsSnippetBlock: string | null = null;
+    let opsInjected = false;
+    let opsSource: "startbrief_ops" | "loops" | "query" | null = null;
+    if (
+      shouldInjectOpsSnippet({
+        riskLevel,
+        posture,
+        pressure,
+        intent: overlayIntent,
+        gateAction,
+        gateConfidence,
+        isDirectRequest: overlayIsDirectRequest,
+        isUrgent: overlayIsUrgent,
+        postureConfidence,
+      })
+    ) {
+      const startbriefLoopTexts = topLoopTextsFromPacket(context.startbriefPacket);
+      let snippet = buildOpsSnippetFromLoops(startbriefLoopTexts);
+      if (snippet) {
+        opsSnippetBlock = snippet;
+        opsInjected = true;
+        opsSource = "startbrief_ops";
+      } else {
+        const nowMs = now.getTime();
+        const loopsFetchedAtMs = loopsCache.fetchedAt
+          ? new Date(loopsCache.fetchedAt).getTime()
+          : 0;
+        const loopsCacheFresh =
+          Number.isFinite(loopsFetchedAtMs) && nowMs - loopsFetchedAtMs <= 10 * 60 * 1000;
+        let loopTexts = loopsCacheFresh ? loopsCache.items ?? [] : [];
+        if (!loopsCacheFresh && env.SYNAPSE_BASE_URL && env.SYNAPSE_TENANT_ID) {
+          const loopsResponse = await synapseClient.memoryLoops<{
+            tenantId: string;
+            userId: string;
+            limit: number;
+          }, { items?: Array<{ text?: string | null }> | null }>({
+            tenantId: env.SYNAPSE_TENANT_ID,
+            userId: user.id,
+            limit: 2,
+          });
+          loopTexts = Array.isArray(loopsResponse?.items)
+            ? loopsResponse.items
+                .map((item) => (typeof item?.text === "string" ? item.text.trim() : ""))
+                .filter(Boolean)
+                .slice(0, 2)
+            : [];
+          loopsCache = {
+            fetchedAt: now.toISOString(),
+            items: loopTexts,
+          };
+        }
+        snippet = buildOpsSnippetFromLoops(loopTexts);
+        if (snippet) {
+          opsSnippetBlock = snippet;
+          opsInjected = true;
+          opsSource = "loops";
+        } else {
+          const facts = extractFactsFromSupplementalContext(supplementalContext);
+          const queryFetchedAtMs = queryCache.fetchedAt
+            ? new Date(queryCache.fetchedAt).getTime()
+            : 0;
+          const queryCacheFresh =
+            Number.isFinite(queryFetchedAtMs) && nowMs - queryFetchedAtMs <= 15 * 60 * 1000;
+          const queryFacts = facts.length > 0 ? facts : queryCacheFresh ? queryCache.facts ?? [] : [];
+          if (facts.length > 0) {
+            queryCache = { fetchedAt: now.toISOString(), facts: facts.slice(0, 2) };
+          }
+          const querySnippet = buildOpsSnippetFromLoops(queryFacts.slice(0, 2));
+          if (querySnippet) {
+            opsSnippetBlock = querySnippet;
+            opsInjected = true;
+            opsSource = "query";
+          }
+        }
+      }
+    }
+    opsSnippetBlock = applyOpsSupplementalMutualExclusion(opsSnippetBlock, supplementalContext);
+    if (!opsSnippetBlock) {
+      opsInjected = false;
+      opsSource = null;
     }
 
     let overlayType: OverlayType | "none" = "none";
@@ -2419,6 +2750,11 @@ export async function POST(request: NextRequest) {
       pendingDailyReviewCapture,
       pendingWeeklyCompassCapture,
       correctionOverlayCooldownTurns,
+      startbriefV2UserTurnsSeen: startbriefV2UserTurnsSeen + 1,
+      startbriefV2ReinjectedOnce,
+      startbriefV2FirstUserLowSignal,
+      loopsCache,
+      queryCache,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -2451,12 +2787,11 @@ export async function POST(request: NextRequest) {
         intent: overlayIntent,
         localHour: zoned.hour,
       }),
-      situationalContext,
-      correctionBlock: buildCorrectionGuardBlock(overlayUser.sessionFactCorrections),
-      continuityBlock,
       overlayBlock,
+      bridgeBlock,
+      handoverBlock,
+      opsSnippetBlock,
       supplementalContext,
-      rollingSummary,
       recentMessages: context.recentMessages,
       transcript: sttResult.transcript,
       posture,
@@ -2476,7 +2811,7 @@ export async function POST(request: NextRequest) {
           messageCount: messages.length,
           counts: {
             recentMessages: context.recentMessages.length,
-            situationalContext: situationalContext ? 1 : 0,
+            situationalContext: 0,
             supplementalContext: supplementalContext ? 1 : 0,
             rollingSummary: rollingSummary ? 1 : 0,
           },
@@ -2504,7 +2839,7 @@ export async function POST(request: NextRequest) {
       debugPayload = {
         contextBlocks: {
           persona: context.persona,
-          situationalContext,
+          situationalContext: null,
           supplementalContext,
           rollingSummary,
         },
@@ -2517,6 +2852,16 @@ export async function POST(request: NextRequest) {
           : undefined,
       };
     }
+
+    const systemBlockOrder = [
+      "persona",
+      "posture",
+      ...(overlayBlock ? ["overlay"] : []),
+      ...(bridgeBlock ? ["bridge"] : []),
+      ...(handoverBlock ? ["handover"] : []),
+      ...(opsSnippetBlock ? ["ops"] : []),
+      ...(supplementalContext ? ["supplemental"] : []),
+    ];
 
     const llmResponse = await generateResponse(messages, persona.slug, model);
     timings.llm_ms = llmResponse.duration_ms;
@@ -2536,6 +2881,7 @@ export async function POST(request: NextRequest) {
             intent: overlayIntent,
             overlaySelected: overlayType,
             overlaySkipReason,
+            system_blocks: systemBlockOrder,
             startbrief_used: Boolean(context.startBrief?.used),
             startbrief_fallback: context.startBrief?.fallback ?? null,
             startbrief_items_count: context.startBrief?.itemsCount ?? 0,
@@ -2651,14 +2997,29 @@ export async function POST(request: NextRequest) {
         items_count: context.startBrief?.itemsCount ?? 0,
         bridgeText_chars: context.startBrief?.bridgeTextChars ?? 0,
       },
+      startbriefRuntime: {
+        session_id: session.id,
+        userTurnsSeen: startbriefV2UserTurnsSeen,
+        handover_injected: handoverInjected,
+        bridge_injected: bridgeInjected,
+        ops_injected: opsInjected,
+        ops_source: opsSource,
+        startbrief_fetch: context.startbriefFetch === "hit" ? "hit" : "miss",
+        reinjection_used: reinjectionUsed,
+      },
+      systemBlocks: systemBlockOrder,
       counts: {
         recentMessages: context.recentMessages.length,
-        situationalContext: situationalContext ? 1 : 0,
+        situationalContext: 0,
         supplementalContext: supplementalContext ? 1 : 0,
         rollingSummary: rollingSummary ? 1 : 0,
       },
       timings,
     });
+    console.log(
+      "[chat.startbrief.trace]",
+      JSON.stringify(tracePayload.startbrief_runtime)
+    );
     console.log("[chat.trace]", JSON.stringify(tracePayload));
 
     // Return fast response
@@ -2798,6 +3159,9 @@ export const __test__shouldHoldOverlayUntilRunway = shouldHoldOverlayUntilRunway
 export const __test__buildCorrectionGuardBlock = buildCorrectionGuardBlock;
 export const __test__buildSessionStartSituationalContext = buildSessionStartSituationalContext;
 export const __test__buildDeferredProfileContextLines = buildDeferredProfileContextLines;
+export const __test__buildStartbriefInjection = buildStartbriefInjection;
+export const __test__shouldInjectOpsSnippet = shouldInjectOpsSnippet;
+export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalMutualExclusion;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
 };

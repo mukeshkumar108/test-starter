@@ -21,16 +21,14 @@
 **LLM prompt assembly (exact order)**
 Source: `src/app/api/chat/route.ts` (messages array)
 1. **Persona Prompt**
-2. **Style guard** (single line)
-3. **CONVERSATION_POSTURE** (neutral labels; momentum guard appended when relevant)
-4. **SITUATIONAL_CONTEXT** (Synapse brief; includes CURRENT_FOCUS when present)
-5. **SESSION_FACT_CORRECTIONS** (optional)
-6. **CONTINUITY** (optional; gap-based)
-7. **OVERLAY** (optional)
-8. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional; top 3 facts/entities)
-9. **SESSION FACTS** (rolling summary, optional)
-10. **Recent messages** (last 8)
-11. **Current user message**
+2. **CONVERSATION_POSTURE** (neutral labels; momentum guard appended when relevant)
+3. **OVERLAY** (optional)
+4. **bridgeBlock** (optional; turn-1 when startbrief `resume.use_bridge=true`)
+5. **handoverBlock** (optional; startbrief-v2 policy, verbatim)
+6. **opsSnippetBlock** (optional; deterministic, one sentence)
+7. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional; top 3 facts/entities)
+8. **Recent messages** (last 8)
+9. **Current user message**
 
 **Write path**
 - Store user + assistant messages in Prisma
@@ -41,5 +39,6 @@ Source: `src/app/api/chat/route.ts` (messages array)
 ## Memory Sources (Current)
 - **Working memory**: local last 8 messages
 - **Long‑term memory**: Synapse `/session/startbrief` (fallback `/session/brief`)
+- **Orientation in prompt**: startbrief-v2 bridge + handover only
 
 Legacy pipelines remain feature‑flagged but are not default.

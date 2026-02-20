@@ -33,6 +33,8 @@ export interface ConversationContext {
   situationalContext?: string;
   sessionStartHandoff?: SessionStartHandoff;
   deferredProfileContext?: DeferredProfileContext;
+  startbriefPacket?: SynapseStartBriefResponse;
+  startbriefFetch?: "hit" | "miss" | null;
   rollingSummary?: string;
   startBrief?: {
     used: boolean;
@@ -1160,6 +1162,8 @@ export async function buildContextFromSynapse(
         : undefined,
       sessionStartHandoff: isSessionStart ? startHandoff : undefined,
       deferredProfileContext,
+      startbriefPacket: cachedStartBrief,
+      startbriefFetch: "hit",
       rollingSummary,
       startBrief: {
         used: true,
@@ -1263,6 +1267,8 @@ export async function buildContextFromSynapse(
           .join("\n"),
         sessionStartHandoff: startHandoff,
         deferredProfileContext: fetchedDeferredProfileContext,
+        startbriefPacket: startBrief,
+        startbriefFetch: "miss",
         rollingSummary,
         startBrief: {
           used: true,
@@ -1331,6 +1337,8 @@ export async function buildContextFromSynapse(
       persona: personaPrompt,
       situationalContext: undefined,
       deferredProfileContext,
+      startbriefPacket: undefined,
+      startbriefFetch: null,
       rollingSummary,
       startBrief: {
         used: false,
@@ -1401,6 +1409,8 @@ export async function buildContextFromSynapse(
     return {
       persona: personaPrompt,
       situationalContext: situationalWithTrajectory ?? undefined,
+      startbriefPacket: undefined,
+      startbriefFetch: null,
       rollingSummary,
       startBrief: {
         used: false,
@@ -1495,6 +1505,8 @@ export async function buildContextFromSynapse(
   return {
     persona: personaPrompt,
     situationalContext: situationalWithTrajectory ?? undefined,
+    startbriefPacket: undefined,
+    startbriefFetch: null,
     rollingSummary,
     startBrief: {
       used: false,
@@ -1547,6 +1559,8 @@ async function buildContextLocal(
     return {
       persona: personaPrompt,
       situationalContext: undefined,
+      startbriefPacket: undefined,
+      startbriefFetch: null,
       rollingSummary,
       startBrief: {
         used: false,

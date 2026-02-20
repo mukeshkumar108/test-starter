@@ -22,6 +22,7 @@ The system optimizes for continuity without bloating every request.
 - On close, we send the full transcript to Synapse `/session/ingest`
 - On start, we pull Synapse `/session/startbrief` (cached per session)
 - `/session/brief` is fallback-only
+- Startbrief-v2 (`bridge` + `handover`) is the only orientation path for prompt assembly
 
 ### 3) Long‑Term Memory (Synapse / Graphiti)
 - Episodic + semantic memory built from entire sessions
@@ -30,8 +31,25 @@ The system optimizes for continuity without bloating every request.
 ### 4) Librarian Reflex (On‑Demand Recall)
 - Gate → Spec → Relevance (3-step) flow
 - If memory is needed, call `/memory/query` and inject a compact Recall Sheet (top 3 facts/entities)
+- If Recall Sheet is injected, ops snippet is suppressed for that turn
 
 ---
+
+## Prompt Stack (Current)
+1. Persona
+2. CONVERSATION_POSTURE
+3. OVERLAY (optional)
+4. bridgeBlock (optional)
+5. handoverBlock (optional, verbatim)
+6. opsSnippetBlock (optional)
+7. SUPPLEMENTAL_CONTEXT (optional)
+8. Recent messages (session-scoped)
+9. Current user message
+
+Removed from model-facing prompt assembly:
+- `SITUATIONAL_CONTEXT`
+- `[CONTINUITY]`
+- `SESSION FACTS`
 
 ## What Makes This Different
 | Generic Chatbot | This System |

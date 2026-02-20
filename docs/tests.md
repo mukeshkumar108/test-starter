@@ -19,6 +19,7 @@ Runs `scripts/run-tests.ts`, which executes the core unit/integration checks.
 - `src/lib/llm/__tests__/safeCompletion.strip.test.ts`
 - `src/synapse/librarian.test.ts`
 - `src/app/api/__tests__/overlayInjection.test.ts`
+- `src/app/api/__tests__/promptStackV2.test.ts`
 - `src/app/api/__tests__/memoryQueryNormalization.test.ts`
 - `src/app/api/__tests__/correctionGuards.test.ts`
 
@@ -42,3 +43,14 @@ pnpm run check:synapse-contract -- --tenantId=<tenant> --userId=<user> --persona
 This validates required keys and basic types for:
 - `GET /session/startbrief`
 - `POST /memory/query`
+
+## Prompt stack assertions
+`src/app/api/__tests__/promptStackV2.test.ts` locks:
+- final message order
+- no `SITUATIONAL_CONTEXT`
+- no `[CONTINUITY]`
+- no `SESSION FACTS`
+- startbrief handover verbatim behavior
+- bridge turn-1-only rule
+- turn-2/turn-3 handover rules
+- ops vs supplemental mutual exclusion

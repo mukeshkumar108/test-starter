@@ -20,6 +20,41 @@ export type SynapseBriefResponse = {
 };
 
 export type SynapseStartBriefResponse = {
+  handover_text?: string | null;
+  handover_depth?: "continuation" | "today" | "yesterday" | "multi_day" | null;
+  time_context?: {
+    local_time?: string | null;
+    time_of_day?: string | null;
+    gap_minutes?: number | null;
+    sessions_today?: number | null;
+    first_session_today?: boolean | null;
+  } | null;
+  resume?: {
+    use_bridge?: boolean | null;
+    bridge_text?: string | null;
+  } | null;
+  ops_context?: {
+    top_loops_today?: Array<{
+      text?: string | null;
+      type?: string | null;
+      time_horizon?: string | null;
+      salience?: number | null;
+    }> | null;
+    waiting_on?: Array<{ text?: string | null }> | null;
+    user_model_hints?: Array<{ text?: string | null } | string> | null;
+    yesterday_themes?: Array<{ text?: string | null } | string> | null;
+    steering_note?: string | null;
+  } | null;
+  evidence?: {
+    session_summary_ids_used?: string[] | null;
+    session_summary_ids_fetched?: string[] | null;
+    summary_fetch_count?: number | null;
+    summary_used_count?: number | null;
+    summary_content_quality?: "ok" | "empty_after_normalization" | "none_fetched" | null;
+    fallback_used?: boolean | null;
+    fallback_success?: boolean | null;
+    daily_analysis_date_used?: string | null;
+  } | null;
   timeOfDayLabel?: string | null;
   timeGapHuman?: string | null;
   bridgeText?: string | null;
@@ -117,8 +152,42 @@ function normalizeSynapseStartBriefResponse(
     };
   }
   const value = payload as Record<string, unknown>;
+  const timeContext =
+    value.time_context && typeof value.time_context === "object" && !Array.isArray(value.time_context)
+      ? (value.time_context as Record<string, unknown>)
+      : null;
+  const resume =
+    value.resume && typeof value.resume === "object" && !Array.isArray(value.resume)
+      ? (value.resume as Record<string, unknown>)
+      : null;
+  const ops =
+    value.ops_context && typeof value.ops_context === "object" && !Array.isArray(value.ops_context)
+      ? (value.ops_context as Record<string, unknown>)
+      : null;
+  const evidence =
+    value.evidence && typeof value.evidence === "object" && !Array.isArray(value.evidence)
+      ? (value.evidence as Record<string, unknown>)
+      : null;
+  const topLoops = Array.isArray(ops?.top_loops_today) ? ops?.top_loops_today : [];
   const rawItems = Array.isArray(value.items) ? value.items : [];
-  const items = rawItems
+  const mappedTopLoops = topLoops
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const row = item as Record<string, unknown>;
+      const text = toNullableString(row.text)?.trim() ?? "";
+      if (!text) return null;
+      return {
+        kind: "loop",
+        text,
+        type: toNullableString(row.type),
+        timeHorizon: toNullableString(row.time_horizon),
+        dueDate: null,
+        salience: toNullableNumber(row.salience),
+        lastSeenAt: null,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const items = (rawItems.length > 0 ? rawItems : mappedTopLoops)
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const row = item as Record<string, unknown>;
@@ -137,9 +206,84 @@ function normalizeSynapseStartBriefResponse(
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
   return {
-    timeOfDayLabel: toNullableString(value.timeOfDayLabel),
-    timeGapHuman: toNullableString(value.timeGapHuman),
-    bridgeText: toNullableString(value.bridgeText),
+    handover_text: toNullableString(value.handover_text),
+    handover_depth:
+      value.handover_depth === "continuation" ||
+      value.handover_depth === "today" ||
+      value.handover_depth === "yesterday" ||
+      value.handover_depth === "multi_day"
+        ? value.handover_depth
+        : null,
+    time_context: {
+      local_time: toNullableString(timeContext?.local_time),
+      time_of_day: toNullableString(timeContext?.time_of_day),
+      gap_minutes: toNullableNumber(timeContext?.gap_minutes),
+      sessions_today: toNullableNumber(timeContext?.sessions_today),
+      first_session_today:
+        typeof timeContext?.first_session_today === "boolean"
+          ? timeContext.first_session_today
+          : null,
+    },
+    resume: {
+      use_bridge: typeof resume?.use_bridge === "boolean" ? resume.use_bridge : null,
+      bridge_text: toNullableString(resume?.bridge_text),
+    },
+    ops_context: {
+      top_loops_today: mappedTopLoops.map((loop) => ({
+        text: loop.text,
+        type: loop.type ?? null,
+        time_horizon: loop.timeHorizon ?? null,
+        salience: loop.salience ?? null,
+      })),
+      waiting_on: Array.isArray(ops?.waiting_on)
+        ? ops.waiting_on
+            .map((item) => {
+              if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+              const text = toNullableString((item as Record<string, unknown>).text);
+              return text ? { text } : null;
+            })
+            .filter((item): item is { text: string } => Boolean(item))
+        : [],
+      user_model_hints: Array.isArray(ops?.user_model_hints) ? (ops.user_model_hints as any[]) : [],
+      yesterday_themes: Array.isArray(ops?.yesterday_themes) ? (ops.yesterday_themes as any[]) : [],
+      steering_note: toNullableString(ops?.steering_note),
+    },
+    evidence: {
+      session_summary_ids_used: Array.isArray(evidence?.session_summary_ids_used)
+        ? (evidence.session_summary_ids_used as unknown[]).filter(
+            (item): item is string => typeof item === "string"
+          )
+        : [],
+      session_summary_ids_fetched: Array.isArray(evidence?.session_summary_ids_fetched)
+        ? (evidence.session_summary_ids_fetched as unknown[]).filter(
+            (item): item is string => typeof item === "string"
+          )
+        : [],
+      summary_fetch_count: toNullableNumber(evidence?.summary_fetch_count),
+      summary_used_count: toNullableNumber(evidence?.summary_used_count),
+      summary_content_quality:
+        evidence?.summary_content_quality === "ok" ||
+        evidence?.summary_content_quality === "empty_after_normalization" ||
+        evidence?.summary_content_quality === "none_fetched"
+          ? evidence.summary_content_quality
+          : null,
+      fallback_used:
+        typeof evidence?.fallback_used === "boolean" ? evidence.fallback_used : null,
+      fallback_success:
+        typeof evidence?.fallback_success === "boolean" ? evidence.fallback_success : null,
+      daily_analysis_date_used: toNullableString(evidence?.daily_analysis_date_used),
+    },
+    timeOfDayLabel:
+      toNullableString(value.timeOfDayLabel) ??
+      toNullableString(timeContext?.time_of_day),
+    timeGapHuman:
+      toNullableString(value.timeGapHuman) ??
+      (toNullableNumber(timeContext?.gap_minutes) !== null
+        ? `${toNullableNumber(timeContext?.gap_minutes)} minutes since last spoke`
+        : null),
+    bridgeText:
+      toNullableString(value.bridgeText) ??
+      toNullableString(resume?.bridge_text),
     items,
   };
 }
