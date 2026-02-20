@@ -2062,33 +2062,11 @@ function buildStartbriefInjection(params: {
       reinjectionUsed: false,
     };
   }
-  if (params.userTurnsSeen === 1) {
-    const include = shouldInjectTurn2Handover({
-      packet,
-      firstUserMsgLowSignal: params.firstUserMsgLowSignal,
-    });
-    return {
-      bridgeBlock: null as string | null,
-      handoverBlock: include ? handover : null,
-      bridgeInjected: false,
-      handoverInjected: include,
-      reinjectionUsed: false,
-    };
-  }
-  if (params.allowSemanticReinjection) {
-    return {
-      bridgeBlock: null as string | null,
-      handoverBlock: handover,
-      bridgeInjected: false,
-      handoverInjected: true,
-      reinjectionUsed: true,
-    };
-  }
   return {
     bridgeBlock: null as string | null,
-    handoverBlock: null as string | null,
+    handoverBlock: handover,
     bridgeInjected: false,
-    handoverInjected: false,
+    handoverInjected: true,
     reinjectionUsed: false,
   };
 }

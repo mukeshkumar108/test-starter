@@ -117,21 +117,15 @@ async function main() {
     expect(turn2.bridgeBlock).toBe(null);
   });
 
-  await runTest("turn2 handover conditional and no handover on turn3+", () => {
+  await runTest("handover persists beyond turn1 across the session", () => {
     const packet = {
       handover_text: "handover",
       handover_depth: "today" as const,
       resume: { use_bridge: false, bridge_text: null },
       time_context: { gap_minutes: 30 },
     };
-    const turn2No = __test__buildStartbriefInjection({
+    const turn2 = __test__buildStartbriefInjection({
       packet,
-      userTurnsSeen: 1,
-      firstUserMsgLowSignal: false,
-      allowSemanticReinjection: false,
-    });
-    const turn2Yes = __test__buildStartbriefInjection({
-      packet: { ...packet, time_context: { gap_minutes: 180 } },
       userTurnsSeen: 1,
       firstUserMsgLowSignal: false,
       allowSemanticReinjection: false,
@@ -142,9 +136,8 @@ async function main() {
       firstUserMsgLowSignal: false,
       allowSemanticReinjection: false,
     });
-    expect(turn2No.handoverBlock).toBe(null);
-    expect(turn2Yes.handoverBlock).toBe("handover");
-    expect(turn3.handoverBlock).toBe(null);
+    expect(turn2.handoverBlock).toBe("handover");
+    expect(turn3.handoverBlock).toBe("handover");
   });
 
   await runTest("supplemental context suppresses ops snippet", () => {
