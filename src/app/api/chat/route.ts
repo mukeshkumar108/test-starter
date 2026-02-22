@@ -88,6 +88,148 @@ function extractLocalTurnSignalLine(transcript: string) {
   return `Local (now): ${signals.slice(0, 3).join(", ")}.`;
 }
 
+type UserContextCandidate = {
+  line: string;
+  key: string;
+};
+
+function extractLocalTurnSignalKey(transcript: string) {
+  const lowered = normalizeWhitespace(transcript).toLowerCase();
+  if (!lowered) return null;
+  if (/\b(stress|stressed|overwhelm|anxious|panic|burnt out|burned out)\b/i.test(lowered)) {
+    return "local:emotion_stress";
+  }
+  if (/\b(frustrated|angry|irritated)\b/i.test(lowered)) {
+    return "local:emotion_frustrated";
+  }
+  if (/\b(tired|exhausted|drained)\b/i.test(lowered)) {
+    return "local:energy_low";
+  }
+  if (/\b(go(?:ing)?\s+for\s+a\s+walk|walk(?:ing)?)\b/i.test(lowered)) {
+    return "local:activity_walk";
+  }
+  if (/\b(just\s+)?shipp(?:ed|ing)\b/i.test(lowered) || /\b(push|deploy|release|pr)\b/i.test(lowered)) {
+    return "local:activity_ship";
+  }
+  if (/\b(need help|help me|what should i|can you help)\b/i.test(lowered)) {
+    return "local:intent_guidance";
+  }
+  return "local:now";
+}
+
+function extractMagicMomentLine(transcript: string) {
+  const lowered = normalizeWhitespace(transcript).toLowerCase();
+  if (!lowered) return null;
+  if (/\b(just\s+)?shipp(?:ed|ing)\b/i.test(lowered) || /\b(finished|wrapped up|got it done)\b/i.test(lowered)) {
+    return {
+      key: "moment:win",
+      line: "Moment (salient): user just landed a meaningful win.",
+    };
+  }
+  if (/\b(stress|stressed|overwhelm|overwhelmed|rough day|burnt out|burned out)\b/i.test(lowered)) {
+    return {
+      key: "moment:strain",
+      line: "Moment (salient): user is under strain and needs lower-pressure support.",
+    };
+  }
+  if (/\b(argued|argument|fallout|fight|upset with|rupture)\b/i.test(lowered)) {
+    return {
+      key: "moment:relationship_rupture",
+      line: "Moment (salient): a relationship rupture is active right now.",
+    };
+  }
+  if (/\b(back on track|trying again|restart|comeback)\b/i.test(lowered)) {
+    return {
+      key: "moment:comeback",
+      line: "Moment (salient): user is making a comeback attempt.",
+    };
+  }
+  return null;
+}
+
+function keyFromDeferredProfileLine(line: string) {
+  const lowered = line.toLowerCase();
+  if (lowered.startsWith("daily anchors:")) return "synapse:daily_anchors";
+  if (lowered.startsWith("recent signals:")) return "synapse:recent_signals";
+  if (lowered.startsWith("long-term direction")) return "synapse:goal";
+  if (lowered.startsWith("people currently in focus")) return "synapse:relationship";
+  if (lowered.startsWith("current work")) return "synapse:work";
+  if (lowered.startsWith("pattern to watch")) return "synapse:pattern";
+  if (lowered.startsWith("communication preference")) return "synapse:preferences";
+  return "synapse:profile";
+}
+
+function transcriptReMentionsKey(transcript: string, key: string) {
+  const lowered = normalizeWhitespace(transcript).toLowerCase();
+  if (!lowered) return false;
+  if (key === "synapse:daily_anchors") {
+    return /\b(steps|sleep|wake|bed|hydration|goal)\b/i.test(lowered);
+  }
+  if (key === "synapse:recent_signals") {
+    return /\b(recent|lately|trend)\b/i.test(lowered);
+  }
+  if (key === "synapse:goal" || key === "synapse:work") {
+    return /\b(goal|plan|ship|work|project|focus)\b/i.test(lowered);
+  }
+  if (key === "synapse:relationship" || key === "moment:relationship_rupture") {
+    return /\b(partner|girlfriend|boyfriend|wife|husband|friend|mom|mum|dad|argued|fight)\b/i.test(lowered);
+  }
+  if (key.startsWith("local:emotion") || key === "moment:strain") {
+    return /\b(stress|stressed|anxious|overwhelm|frustrated|angry|tired)\b/i.test(lowered);
+  }
+  if (key.startsWith("local:activity") || key === "moment:win" || key === "moment:comeback") {
+    return /\b(walk|shipp|push|deploy|release|finished|again|restart)\b/i.test(lowered);
+  }
+  return false;
+}
+
+function selectUserContextCandidates(params: {
+  transcript: string;
+  deferredProfileLines: string[];
+  recentInjectedContextKeys: string[];
+}) {
+  const candidates: UserContextCandidate[] = [];
+  const magic = extractMagicMomentLine(params.transcript);
+  if (magic) {
+    candidates.push({ line: magic.line, key: magic.key });
+  }
+  const localLine = extractLocalTurnSignalLine(params.transcript);
+  if (localLine) {
+    candidates.push({
+      line: localLine,
+      key: extractLocalTurnSignalKey(params.transcript) ?? "local:now",
+    });
+  }
+  for (const line of params.deferredProfileLines) {
+    candidates.push({
+      line: `Synapse (recent): ${line}`,
+      key: keyFromDeferredProfileLine(line),
+    });
+  }
+
+  const selected: UserContextCandidate[] = [];
+  const recentSet = new Set(params.recentInjectedContextKeys);
+  for (const candidate of candidates) {
+    if (selected.length >= 3) break;
+    const repeated = recentSet.has(candidate.key);
+    const allowRepeat = transcriptReMentionsKey(params.transcript, candidate.key);
+    if (repeated && !allowRepeat) continue;
+    if (selected.some((entry) => entry.key === candidate.key)) continue;
+    selected.push(candidate);
+  }
+  return selected;
+}
+
+function updateRecentInjectedContextKeys(previous: string[], injected: string[]) {
+  const next = [...previous];
+  for (const key of injected) {
+    const idx = next.indexOf(key);
+    if (idx >= 0) next.splice(idx, 1);
+    next.push(key);
+  }
+  return next.slice(-6);
+}
+
 function getLibrarianTimeoutMs() {
   const raw = env.LIBRARIAN_TIMEOUT_MS;
   if (!raw) return DEFAULT_LIBRARIAN_TIMEOUT_MS;
@@ -269,6 +411,7 @@ type OverlayState = {
   startbriefV2FirstUserLowSignal?: boolean;
   loopsCache?: { fetchedAt?: string | null; items?: string[] };
   queryCache?: { fetchedAt?: string | null; facts?: string[] };
+  recentInjectedContextKeys?: string[];
   user?: OverlayUserState;
 };
 
@@ -534,6 +677,11 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
               : [],
           }
         : undefined,
+    recentInjectedContextKeys: Array.isArray(raw.recentInjectedContextKeys)
+      ? (raw.recentInjectedContextKeys as unknown[])
+          .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          .slice(-6)
+      : [],
     user: typeof raw.user === "object" && raw.user && !Array.isArray(raw.user)
       ? {
           ...(raw.user as OverlayUserState),
@@ -2398,6 +2546,7 @@ export async function POST(request: NextRequest) {
     let startbriefV2FirstUserLowSignal = overlayState.startbriefV2FirstUserLowSignal ?? false;
     let loopsCache = overlayState.loopsCache ?? { fetchedAt: null, items: [] as string[] };
     let queryCache = overlayState.queryCache ?? { fetchedAt: null, facts: [] as string[] };
+    let recentInjectedContextKeys = overlayState.recentInjectedContextKeys ?? [];
     const overlayUser = overlayState.user ?? {};
     // Trajectory rituals are day/week scoped to the user's configured local zone.
     const timeZone = "Europe/Zagreb";
@@ -2421,6 +2570,7 @@ export async function POST(request: NextRequest) {
       startbriefV2FirstUserLowSignal = false;
       loopsCache = { fetchedAt: null, items: [] };
       queryCache = { fetchedAt: null, facts: [] };
+      recentInjectedContextKeys = [];
     }
     if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
       startbriefV2FirstUserLowSignal = isLowSignalFirstUserMessage(sttResult.transcript);
@@ -2777,6 +2927,30 @@ export async function POST(request: NextRequest) {
       overlayBlock = `[OVERLAY]\n${overlayText}`;
     }
 
+    const deferredProfileLines = buildDeferredProfileContextLines({
+      isSessionStart: context.isSessionStart,
+      profile: context.deferredProfileContext,
+      posture,
+      intent: overlayIntent,
+      isDirectRequest: overlayIsDirectRequest,
+      transcript: sttResult.transcript,
+      avoidanceOrDrift,
+    });
+    const selectedUserContext = selectUserContextCandidates({
+      transcript: sttResult.transcript,
+      deferredProfileLines,
+      recentInjectedContextKeys,
+    });
+    const userContextLines = selectedUserContext.map((item) => item.line);
+    recentInjectedContextKeys = updateRecentInjectedContextKeys(
+      recentInjectedContextKeys,
+      selectedUserContext.map((item) => item.key)
+    );
+    const userContextBlock =
+      userContextLines.length > 0
+        ? `[USER_CONTEXT]\n${userContextLines.map((line) => `- ${line}`).join("\n")}`
+        : null;
+
     await writeOverlayState(user.id, personaId, {
       overlayUsed,
       overlayTypeActive,
@@ -2793,6 +2967,7 @@ export async function POST(request: NextRequest) {
       startbriefV2FirstUserLowSignal,
       loopsCache,
       queryCache,
+      recentInjectedContextKeys,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -2818,25 +2993,6 @@ export async function POST(request: NextRequest) {
       });
     }
     timings.overlay_ms = Date.now() - overlayStart;
-
-    const deferredProfileLines = buildDeferredProfileContextLines({
-      isSessionStart: context.isSessionStart,
-      profile: context.deferredProfileContext,
-      posture,
-      intent: overlayIntent,
-      isDirectRequest: overlayIsDirectRequest,
-      transcript: sttResult.transcript,
-      avoidanceOrDrift,
-    });
-    const localTurnSignalLine = extractLocalTurnSignalLine(sttResult.transcript);
-    const userContextLines = [
-      ...(localTurnSignalLine ? [localTurnSignalLine] : []),
-      ...deferredProfileLines.map((line) => `Synapse (recent): ${line}`),
-    ];
-    const userContextBlock =
-      userContextLines.length > 0
-        ? `[USER_CONTEXT]\n${userContextLines.map((line) => `- ${line}`).join("\n")}`
-        : null;
 
     const messages = buildChatMessages({
       persona: context.persona,
@@ -3219,6 +3375,8 @@ export const __test__buildCorrectionGuardBlock = buildCorrectionGuardBlock;
 export const __test__buildSessionStartSituationalContext = buildSessionStartSituationalContext;
 export const __test__buildDeferredProfileContextLines = buildDeferredProfileContextLines;
 export const __test__extractLocalTurnSignalLine = extractLocalTurnSignalLine;
+export const __test__selectUserContextCandidates = selectUserContextCandidates;
+export const __test__updateRecentInjectedContextKeys = updateRecentInjectedContextKeys;
 export const __test__buildStartbriefInjection = buildStartbriefInjection;
 export const __test__shouldInjectOpsSnippet = shouldInjectOpsSnippet;
 export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalMutualExclusion;

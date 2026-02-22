@@ -7,6 +7,8 @@ import {
   __test__applyOpsSupplementalMutualExclusion,
   __test__buildChatMessages,
   __test__extractLocalTurnSignalLine,
+  __test__selectUserContextCandidates,
+  __test__updateRecentInjectedContextKeys,
   __test__buildStartbriefInjection,
 } from "../chat/route";
 
@@ -99,6 +101,43 @@ async function main() {
     const contents = messages.map((message) => message.content);
     expect(contents[2]).toContain("Local (now): stressed lately");
     expect(contents[2]).toContain("Synapse (recent): Daily anchors");
+  });
+
+  await runTest("magic moment is prioritized in selected user context candidates", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "I've been stressed lately and just shipped a push.",
+      deferredProfileLines: ["Daily anchors: steps goal 10,000."],
+      recentInjectedContextKeys: [],
+    });
+    expect(selected[0]?.line ?? "").toContain("Moment (salient):");
+  });
+
+  await runTest("repetition suppression drops repeated key without re-mention", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "quick check-in",
+      deferredProfileLines: ["Daily anchors: steps goal 10,000."],
+      recentInjectedContextKeys: ["synapse:daily_anchors"],
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).notToContain("Daily anchors");
+  });
+
+  await runTest("repetition suppression allows re-mention override", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "can we revisit my steps goal today",
+      deferredProfileLines: ["Daily anchors: steps goal 10,000."],
+      recentInjectedContextKeys: ["synapse:daily_anchors"],
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).toContain("Daily anchors");
+  });
+
+  await runTest("recent context key buffer remains session-local and bounded", () => {
+    const updated = __test__updateRecentInjectedContextKeys(
+      ["a", "b", "c", "d", "e", "f"],
+      ["g", "h"]
+    );
+    expect(updated.join(",")).toBe("c,d,e,f,g,h");
   });
 
   await runTest("handover is injected verbatim", () => {
