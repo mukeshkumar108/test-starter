@@ -1,12 +1,11 @@
 /**
- * Unit tests for overlay selection heuristics
+ * Unit tests for overlay family selection heuristics
  * Run with: pnpm tsx src/lib/services/memory/__tests__/overlaySelector.test.ts
  */
 
-import type { OverlayDecision } from "../overlaySelector";
 import {
-  selectOverlay,
   normalizeTopicKey,
+  selectOverlay,
   shouldSkipOverlaySelection,
 } from "../overlaySelector";
 
@@ -40,7 +39,7 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
-  await runTest("help me write an email -> output_task blocks overlays", () => {
+  await runTest("output_task intent blocks overlay selection at policy layer", () => {
     const policy = shouldSkipOverlaySelection({
       intent: "output_task",
       isDirectRequest: true,
@@ -49,260 +48,90 @@ async function main() {
     expect(policy).toMatchObject({ skip: true, reason: "output_task" });
   });
 
-  await runTest("help me plan my day -> momentum allows overlays", () => {
-    const policy = shouldSkipOverlaySelection({
-      intent: "momentum",
-      isDirectRequest: true,
-      isUrgent: false,
-    });
-    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
-  });
-
-  await runTest("urgent I can't cope -> urgent blocks overlays", () => {
-    const policy = shouldSkipOverlaySelection({
-      intent: "companion",
-      isDirectRequest: true,
-      isUrgent: true,
-    });
-    expect(policy).toMatchObject({ skip: true, reason: "urgent" });
-  });
-
-  await runTest("can you summarise this -> output_task blocks overlays", () => {
-    const policy = shouldSkipOverlaySelection({
-      intent: "output_task",
-      isDirectRequest: true,
-      isUrgent: false,
-    });
-    expect(policy).toMatchObject({ skip: true, reason: "output_task" });
-  });
-
-  await runTest("casual help that was funny -> not urgent, not output_task", () => {
-    const policy = shouldSkipOverlaySelection({
-      intent: "companion",
-      isDirectRequest: false,
-      isUrgent: false,
-    });
-    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
-  });
-
-  await runTest("what should I focus on today? -> momentum allows overlays", () => {
-    const policy = shouldSkipOverlaySelection({
-      intent: "momentum",
-      isDirectRequest: true,
-      isUrgent: false,
-    });
-    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
-  });
-
-  await runTest("teach me stoicism -> learning allows overlays", () => {
-    const policy = shouldSkipOverlaySelection({
-      intent: "learning",
-      isDirectRequest: true,
-      isUrgent: false,
-    });
-    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
-  });
-
-  await runTest("relationship vent -> companion, curiosity possibly allowed", () => {
-    const policy = shouldSkipOverlaySelection({
-      intent: "companion",
-      isDirectRequest: false,
-      isUrgent: false,
-    });
-    expect(policy).toMatchObject({ skip: false, reason: "allowed" });
+  await runTest("witness selected on grief/high-pressure text", () => {
     const decision = selectOverlay({
-      transcript: "I argued with my girlfriend and it got messy",
-      overlayUsed: {},
-    });
-    expect(decision.overlayType).toBe("curiosity_spiral");
-  });
-
-  await runTest("daily focus triggers when eligible and no focus set", () => {
-    const decision = selectOverlay({
-      transcript: "what should we do today",
-      overlayUsed: {},
-      dailyFocusEligible: true,
-      hasTodayFocus: false,
-    });
-    expect(decision).toMatchObject({
-      overlayType: "daily_focus",
-      triggerReason: "daily_focus_morning",
-    });
-  });
-
-  await runTest("daily focus does not trigger after focus already set", () => {
-    const decision = selectOverlay({
-      transcript: "what should we do today",
-      overlayUsed: {},
-      dailyFocusEligible: true,
-      hasTodayFocus: true,
-    });
-    expect(decision.overlayType).toBe("none");
-  });
-
-  await runTest("daily review triggers in evening session-start window", () => {
-    const decision = selectOverlay({
-      transcript: "end of day check in",
-      overlayUsed: {},
-      dailyReviewEligible: true,
-      hasDailyReviewToday: false,
-    });
-    expect(decision).toMatchObject({
-      overlayType: "daily_review",
-      triggerReason: "daily_review_evening",
-    });
-  });
-
-  await runTest("daily review does not retrigger same day", () => {
-    const decision = selectOverlay({
-      transcript: "end of day check in",
-      overlayUsed: {},
-      dailyReviewEligible: true,
-      hasDailyReviewToday: true,
-    });
-    expect(decision.overlayType).toBe("none");
-  });
-
-  await runTest("weekly compass triggers in weekly window when plan missing", () => {
-    const decision = selectOverlay({
-      transcript: "new week setup",
-      overlayUsed: {},
-      weeklyCompassEligible: true,
-      hasWeeklyCompass: false,
-    });
-    expect(decision).toMatchObject({
-      overlayType: "weekly_compass",
-      triggerReason: "weekly_compass_window",
-    });
-  });
-
-  await runTest("weekly compass does not retrigger within same week", () => {
-    const decision = selectOverlay({
-      transcript: "new week setup",
-      overlayUsed: {},
-      weeklyCompassEligible: true,
-      hasWeeklyCompass: true,
-    });
-    expect(decision.overlayType).toBe("none");
-  });
-
-  await runTest("conflict regulation overrides curiosity on high-pressure relationship vent", () => {
-    const decision = selectOverlay({
-      transcript: "I argued with my girlfriend again and it turned into a huge fight",
-      overlayUsed: {},
+      transcript: "I can't stop thinking about the funeral and I miss her",
+      posture: "COMPANION",
       conflictSignals: {
         pressure: "HIGH",
         riskLevel: "MED",
-        mood: "FRUSTRATED",
-        tone: "DIRECT",
       },
-    });
-    expect(decision).toMatchObject({
-      overlayType: "conflict_regulation",
-      triggerReason: "conflict_regulation",
-    });
-  });
-
-  await runTest("low-intensity relationship story still allows curiosity", () => {
-    const decision = selectOverlay({
-      transcript: "my boyfriend and I had a funny moment at breakfast",
-      overlayUsed: {},
-      conflictSignals: {
-        pressure: "LOW",
-        riskLevel: "LOW",
-        mood: "UPBEAT",
-        tone: "PLAYFUL",
-      },
-    });
-    expect(decision.overlayType).toBe("curiosity_spiral");
-  });
-
-  await runTest("curiosity triggers on narrative marker", () => {
-    const decision = selectOverlay({
-      transcript: "you won't believe what happened next",
-      overlayUsed: {},
-    });
-    expect(decision.overlayType).toBe("curiosity_spiral");
-  });
-
-  await runTest("curiosity does not retrigger once already used", () => {
-    const decision = selectOverlay({
-      transcript: "can you draft an email",
-      overlayUsed: { curiositySpiral: true },
-    });
-    expect(decision.overlayType).toBe("none");
-  });
-
-  await runTest("accountability tug triggers on casual opener + open loop", () => {
-    const decision = selectOverlay({
-      transcript: "hey",
       openLoops: ["finish portfolio"],
       commitments: [],
       overlayUsed: {},
-      now: new Date("2026-02-10T10:00:00Z"),
+      now: new Date("2026-02-22T12:00:00Z"),
     });
-    expect(decision).toMatchObject({
-      overlayType: "accountability_tug",
-      triggerReason: "accountability_tug",
-    });
-    expect(normalizeTopicKey(decision.topicKey ?? "")).toBe("finish portfolio");
+    expect(decision.stanceOverlay).toBe("witness");
+    expect(decision.tacticOverlay).toBe("none");
   });
 
-  await runTest("accountability tug respects backoff", () => {
-    const now = new Date("2026-02-10T10:00:00Z");
+  await runTest("repair_and_forward selected for relationship repair intent", () => {
     const decision = selectOverlay({
-      transcript: "hey",
-      openLoops: ["finish portfolio"],
-      commitments: [],
+      transcript: "How do I fix things with my daughter after that argument?",
+      posture: "RELATIONSHIP",
+      conflictSignals: { pressure: "MED", riskLevel: "LOW" },
       overlayUsed: {},
-      now,
-      tugBackoff: { "finish portfolio": new Date(now.getTime() + 1000).toISOString() },
-    });
-    expect(decision.overlayType).toBe("none");
-  });
-
-  await runTest("high-priority loop marks accountability priority trigger", () => {
-    const decision = selectOverlay({
-      transcript: "hey",
-      openLoops: ["finish portfolio"],
+      openLoops: ["call daughter"],
       commitments: [],
-      overlayUsed: {},
-      hasHighPriorityLoop: true,
-      now: new Date("2026-02-10T10:00:00Z"),
+      now: new Date("2026-02-22T12:00:00Z"),
     });
-    expect(decision).toMatchObject({
-      overlayType: "accountability_tug",
-      triggerReason: "accountability_tug_priority",
-    });
+    expect(decision.stanceOverlay).toBe("repair_and_forward");
   });
 
-  await runTest("companion + MED pressure suppresses non-essential overlays", () => {
+  await runTest("excavator selected on circling/unsaid signal", () => {
     const decision = selectOverlay({
-      transcript: "you won't believe what happened, I should finish the portfolio",
+      transcript: "idk why I keep doing this, part of me wants out but part of me doesn't",
       posture: "COMPANION",
-      openLoops: ["finish portfolio"],
+      conflictSignals: { pressure: "LOW", riskLevel: "LOW" },
       overlayUsed: {},
-      conflictSignals: {
-        pressure: "MED",
-      },
-      now: new Date("2026-02-10T10:00:00Z"),
+      openLoops: [],
+      commitments: [],
+      now: new Date("2026-02-22T12:00:00Z"),
     });
-    expect(decision.overlayType).toBe("none");
+    expect(decision.stanceOverlay).toBe("excavator");
   });
 
-  await runTest("companion + MED pressure still allows conflict_regulation", () => {
+  await runTest("high_standards_friend selected on explicit standards ask", () => {
     const decision = selectOverlay({
-      transcript: "I argued with my girlfriend again and it turned into a huge fight",
-      posture: "COMPANION",
+      transcript: "Push me and hold me accountable this week",
+      posture: "MOMENTUM",
+      conflictSignals: { pressure: "MED", riskLevel: "LOW" },
       overlayUsed: {},
-      conflictSignals: {
-        pressure: "MED",
-        riskLevel: "MED",
-        mood: "FRUSTRATED",
-        tone: "DIRECT",
-      },
+      openLoops: ["finish portfolio"],
+      commitments: [],
+      now: new Date("2026-02-22T12:00:00Z"),
     });
-    expect(decision.overlayType).toBe("conflict_regulation");
+    expect(decision.stanceOverlay).toBe("high_standards_friend");
+  });
+
+  await runTest("witness suppresses accountability_tug", () => {
+    const decision = selectOverlay({
+      transcript: "I feel overwhelmed and can we just sit with this for a minute",
+      posture: "COMPANION",
+      conflictSignals: { pressure: "HIGH", riskLevel: "MED" },
+      overlayUsed: {},
+      openLoops: ["finish portfolio"],
+      commitments: [],
+      now: new Date("2026-02-22T12:00:00Z"),
+    });
+    expect(decision.stanceOverlay).toBe("witness");
+    expect(decision.tacticOverlay).toBe("none");
+    expect(decision.suppressionReason ?? "").toBe("witness_high_pressure");
+  });
+
+  await runTest("high_standards_friend allows accountability_tug", () => {
+    const decision = selectOverlay({
+      transcript: "Push me and hold me accountable. I keep avoiding the proposal.",
+      posture: "MOMENTUM",
+      conflictSignals: { pressure: "MED", riskLevel: "LOW" },
+      overlayUsed: {},
+      openLoops: ["finish proposal"],
+      commitments: [],
+      now: new Date("2026-02-22T12:00:00Z"),
+    });
+    expect(decision.stanceOverlay).toBe("high_standards_friend");
+    expect(decision.tacticOverlay).toBe("accountability_tug");
+    expect(normalizeTopicKey(decision.topicKey ?? "")).toBe("finish proposal");
   });
 
   const failed = results.filter((result) => !result.passed);

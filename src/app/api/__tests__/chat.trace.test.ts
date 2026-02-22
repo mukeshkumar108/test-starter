@@ -51,6 +51,9 @@ async function main() {
       chosenModel: "model-x",
       riskLevel: "LOW",
       intent: "companion",
+      stanceSelected: "none",
+      tacticSelected: "none",
+      suppressionReason: null,
       overlaySelected: "none",
       overlaySkipReason: null,
       startbrief: {
@@ -92,6 +95,9 @@ async function main() {
     expect(trace.timings.stt_ms).toBe(100);
     expect(trace.timings.context_ms).toBe(50);
     expect(trace.request_id).toBe("req-1");
+    expect(trace.stanceSelected).toBe("none");
+    expect(trace.tacticSelected).toBe("none");
+    expect(trace.suppressionReason).toBe(null);
     expect(trace.overlaySkipReason).toBe(null);
     expect(trace.startbrief_used).toBe(true);
     expect(trace.startbrief_items_count).toBe(3);

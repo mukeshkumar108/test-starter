@@ -9,7 +9,12 @@ import {
   type DeferredProfileContext,
   type SessionStartHandoff,
 } from "@/lib/services/memory/contextBuilder";
-import { loadOverlay, type OverlayType } from "@/lib/services/memory/overlayLoader";
+import {
+  loadOverlay,
+  type OverlayType,
+  type StanceOverlayType,
+  type TacticOverlayType,
+} from "@/lib/services/memory/overlayLoader";
 import {
   isDismissal,
   isShortReply,
@@ -476,10 +481,10 @@ type OverlayUserState = {
 
 type OverlayState = {
   overlayUsed?: OverlayUsed;
-  overlayTypeActive?: OverlayType | null;
+  overlayTypeActive?: TacticOverlayType | null;
   overlayTurnCount?: number;
   lastSessionId?: string | null;
-  pendingDismissType?: OverlayType | null;
+  pendingDismissType?: TacticOverlayType | null;
   pendingTopicKey?: string | null;
   shortReplyStreak?: number;
   pendingFocusCapture?: boolean;
@@ -492,6 +497,7 @@ type OverlayState = {
   loopsCache?: { fetchedAt?: string | null; items?: string[] };
   queryCache?: { fetchedAt?: string | null; facts?: string[] };
   recentInjectedContextKeys?: string[];
+  recentOverlayKeys?: string[];
   user?: OverlayUserState;
 };
 
@@ -519,6 +525,9 @@ function buildChatTrace(params: {
   chosenModel: string;
   riskLevel: RiskLevel;
   intent: OverlayIntent;
+  stanceSelected: StanceOverlayType | "none";
+  tacticSelected: TacticOverlayType | "none";
+  suppressionReason: string | null;
   overlaySelected: OverlayType | "none";
   overlaySkipReason: string | null;
   startbrief: {
@@ -555,6 +564,9 @@ function buildChatTrace(params: {
     chosenModel: params.chosenModel,
     risk_level: params.riskLevel,
     intent: params.intent,
+    stanceSelected: params.stanceSelected,
+    tacticSelected: params.tacticSelected,
+    suppressionReason: params.suppressionReason,
     overlaySelected: params.overlaySelected,
     overlaySkipReason: params.overlaySkipReason,
     startbrief_used: params.startbrief.used,
@@ -710,10 +722,12 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
     overlayUsed: typeof raw.overlayUsed === "object" && raw.overlayUsed && !Array.isArray(raw.overlayUsed)
       ? (raw.overlayUsed as OverlayUsed)
       : undefined,
-    overlayTypeActive: typeof raw.overlayTypeActive === "string" ? (raw.overlayTypeActive as OverlayType) : null,
+    overlayTypeActive:
+      typeof raw.overlayTypeActive === "string" ? (raw.overlayTypeActive as TacticOverlayType) : null,
     overlayTurnCount: typeof raw.overlayTurnCount === "number" ? raw.overlayTurnCount : 0,
     lastSessionId: typeof raw.lastSessionId === "string" ? raw.lastSessionId : null,
-    pendingDismissType: typeof raw.pendingDismissType === "string" ? (raw.pendingDismissType as OverlayType) : null,
+    pendingDismissType:
+      typeof raw.pendingDismissType === "string" ? (raw.pendingDismissType as TacticOverlayType) : null,
     pendingTopicKey: typeof raw.pendingTopicKey === "string" ? raw.pendingTopicKey : null,
     shortReplyStreak: typeof raw.shortReplyStreak === "number" ? raw.shortReplyStreak : 0,
     pendingFocusCapture: typeof raw.pendingFocusCapture === "boolean" ? raw.pendingFocusCapture : false,
@@ -759,6 +773,11 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
         : undefined,
     recentInjectedContextKeys: Array.isArray(raw.recentInjectedContextKeys)
       ? (raw.recentInjectedContextKeys as unknown[])
+          .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          .slice(-6)
+      : [],
+    recentOverlayKeys: Array.isArray(raw.recentOverlayKeys)
+      ? (raw.recentOverlayKeys as unknown[])
           .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
           .slice(-6)
       : [],
@@ -1729,6 +1748,8 @@ function buildChatMessages(params: {
   persona: string;
   momentumGuardBlock?: string | null;
   userContextBlock?: string | null;
+  stanceOverlayBlock?: string | null;
+  tacticOverlayBlock?: string | null;
   overlayBlock?: string | null;
   bridgeBlock?: string | null;
   handoverBlock?: string | null;
@@ -1752,6 +1773,8 @@ function buildChatMessages(params: {
     { role: "system" as const, content: params.persona },
     { role: "system" as const, content: postureBlock },
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
+    ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
+    ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
     ...(params.overlayBlock ? [{ role: "system" as const, content: params.overlayBlock }] : []),
     ...(params.bridgeBlock ? [{ role: "system" as const, content: params.bridgeBlock }] : []),
     ...(params.handoverBlock ? [{ role: "system" as const, content: params.handoverBlock }] : []),
@@ -2379,6 +2402,31 @@ function shouldInjectOpsSnippet(params: {
   return momentumPath || pressurePath;
 }
 
+function updateRecentOverlayKeys(previous: string[], nextKeys: string[]) {
+  const next = [...previous];
+  for (const key of nextKeys) {
+    const idx = next.indexOf(key);
+    if (idx >= 0) next.splice(idx, 1);
+    next.push(key);
+  }
+  return next.slice(-6);
+}
+
+function shouldSuppressByOverlayRepetition(params: {
+  key: string;
+  recentOverlayKeys: string[];
+  explicitTopicShift: boolean;
+  pressure: ConversationPressure;
+  riskLevel: RiskLevel;
+}) {
+  if (params.explicitTopicShift) return false;
+  if (!params.recentOverlayKeys.includes(params.key)) return false;
+  if (params.key === "stance:witness") {
+    return !(params.pressure === "HIGH" || params.riskLevel === "HIGH" || params.riskLevel === "CRISIS");
+  }
+  return true;
+}
+
 function validateOpsSnippet(input: string | null) {
   if (!input) return null;
   if (input.includes(":") || input.includes(";")) return null;
@@ -2627,6 +2675,7 @@ export async function POST(request: NextRequest) {
     let loopsCache = overlayState.loopsCache ?? { fetchedAt: null, items: [] as string[] };
     let queryCache = overlayState.queryCache ?? { fetchedAt: null, facts: [] as string[] };
     let recentInjectedContextKeys = overlayState.recentInjectedContextKeys ?? [];
+    let recentOverlayKeys = overlayState.recentOverlayKeys ?? [];
     const overlayUser = overlayState.user ?? {};
     // Trajectory rituals are day/week scoped to the user's configured local zone.
     const timeZone = "Europe/Zagreb";
@@ -2651,6 +2700,7 @@ export async function POST(request: NextRequest) {
       loopsCache = { fetchedAt: null, items: [] };
       queryCache = { fetchedAt: null, facts: [] };
       recentInjectedContextKeys = [];
+      recentOverlayKeys = [];
     }
     if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
       startbriefV2FirstUserLowSignal = isLowSignalFirstUserMessage(sttResult.transcript);
@@ -2761,8 +2811,10 @@ export async function POST(request: NextRequest) {
       opsSource = null;
     }
 
-    let overlayType: OverlayType | "none" = "none";
+    let stanceOverlayType: StanceOverlayType | "none" = "none";
+    let tacticOverlayType: TacticOverlayType | "none" = "none";
     let overlayTriggerReason = "none";
+    let overlaySuppressionReason: string | null = null;
     let overlayExitReason: "cap" | "dismiss" | "topicShift" | "helpRequest" | "lowEnergy" | "policy" | "none" =
       "none";
     let overlayTopicKey: string | undefined;
@@ -2880,7 +2932,16 @@ export async function POST(request: NextRequest) {
       shortReplyStreak = 0;
     }
 
-    if (overlayPolicy.skip) {
+    const safetyRiskOverride = riskLevel === "HIGH" || riskLevel === "CRISIS";
+    if (safetyRiskOverride) {
+      stanceOverlayType = "witness";
+      tacticOverlayType = "none";
+      overlayTriggerReason = "safety_risk_override";
+      overlaySuppressionReason = "safety_risk_override";
+      overlayTypeActive = null;
+      overlayTurnCount = 0;
+      shortReplyStreak = 0;
+    } else if (overlayPolicy.skip) {
       overlayTriggerReason = `policy_skip_${overlayPolicy.reason}`;
       if (overlayTypeActive) {
         overlayExitReason = "policy";
@@ -2921,7 +2982,7 @@ export async function POST(request: NextRequest) {
 
     if (!overlayPolicy.skip && overlayTypeActive === "curiosity_spiral") {
       if (overlayTurnCount < 4) {
-        overlayType = "curiosity_spiral";
+        tacticOverlayType = "curiosity_spiral";
         overlayTriggerReason = "curiosity_active";
         overlayTurnCount += 1;
         if (overlayTurnCount >= 4) {
@@ -2936,8 +2997,15 @@ export async function POST(request: NextRequest) {
       const decision = selectOverlay({
         transcript: sttResult.transcript,
         posture,
+        intent: overlayIntent,
+        explicitTopicShift: gateExplicitTopicShift,
+        avoidanceOrDrift,
         openLoops: context.overlayContext?.openLoops,
         commitments: context.overlayContext?.commitments,
+        recentUserMessages: context.recentMessages
+          .filter((entry) => entry.role === "user")
+          .map((entry) => entry.content)
+          .slice(-3),
         hasHighPriorityLoop: context.overlayContext?.hasHighPriorityLoop,
         overlayUsed,
         dailyFocusEligible,
@@ -2956,29 +3024,63 @@ export async function POST(request: NextRequest) {
         tugBackoff: overlayUser.tugBackoff,
         now,
       });
-      overlayType = decision.overlayType;
+      stanceOverlayType = decision.stanceOverlay;
+      tacticOverlayType = decision.tacticOverlay;
       overlayTriggerReason = decision.triggerReason;
+      overlaySuppressionReason = decision.suppressionReason ?? null;
       overlayTopicKey = decision.topicKey;
+
+      const stanceKey = stanceOverlayType === "none" ? null : `stance:${stanceOverlayType}`;
+      if (
+        stanceKey &&
+        shouldSuppressByOverlayRepetition({
+          key: stanceKey,
+          recentOverlayKeys,
+          explicitTopicShift: gateExplicitTopicShift,
+          pressure,
+          riskLevel,
+        })
+      ) {
+        stanceOverlayType = "none";
+        overlaySuppressionReason = overlaySuppressionReason ?? "repetition_suppressed";
+      }
+
+      const tacticKey = tacticOverlayType === "none" ? null : `tactic:${tacticOverlayType}`;
+      if (
+        tacticKey &&
+        shouldSuppressByOverlayRepetition({
+          key: tacticKey,
+          recentOverlayKeys,
+          explicitTopicShift: gateExplicitTopicShift,
+          pressure,
+          riskLevel,
+        })
+      ) {
+        tacticOverlayType = "none";
+        overlaySuppressionReason = overlaySuppressionReason ?? "repetition_suppressed";
+        overlayTopicKey = undefined;
+      }
 
       if (
         shouldHoldOverlayUntilRunway({
-          overlayType,
+          overlayType: tacticOverlayType,
           recentMessageCount: context.recentMessages.length,
           hasHighPriorityLoop: context.overlayContext?.hasHighPriorityLoop,
         })
       ) {
-        overlayType = "none";
+        tacticOverlayType = "none";
         overlayTriggerReason = "policy_skip_conversation_runway";
+        overlaySuppressionReason = "conversation_runway";
         overlayTopicKey = undefined;
       }
 
-      if (overlayType === "curiosity_spiral") {
+      if (tacticOverlayType === "curiosity_spiral") {
         overlayTypeActive = "curiosity_spiral";
         overlayTurnCount = 1;
         shortReplyStreak = 0;
         overlayUsed = { ...overlayUsed, curiositySpiral: true };
       }
-      if (overlayType === "accountability_tug" && overlayTopicKey) {
+      if (tacticOverlayType === "accountability_tug" && overlayTopicKey) {
         const normalized = normalizeTopicKey(overlayTopicKey);
         overlayTopicKey = normalized;
         overlayUsed = { ...overlayUsed, accountabilityTug: true };
@@ -2986,25 +3088,36 @@ export async function POST(request: NextRequest) {
         pendingDismissType = "accountability_tug";
         pendingTopicKey = normalized;
       }
-      if (overlayType === "daily_focus") {
+      if (tacticOverlayType === "daily_focus") {
         overlayUsed = { ...overlayUsed, dailyFocus: true };
         pendingFocusCapture = true;
         overlayUser.lastDailyFocusAt = now.toISOString();
       }
-      if (overlayType === "daily_review") {
+      if (tacticOverlayType === "daily_review") {
         overlayUsed = { ...overlayUsed, dailyReview: true };
         pendingDailyReviewCapture = true;
       }
-      if (overlayType === "weekly_compass") {
+      if (tacticOverlayType === "weekly_compass") {
         overlayUsed = { ...overlayUsed, weeklyCompass: true };
         pendingWeeklyCompassCapture = true;
       }
     }
 
-    let overlayBlock: string | null = null;
-    if (overlayType !== "none") {
-      const overlayText = await loadOverlay(overlayType);
-      overlayBlock = `[OVERLAY]\n${overlayText}`;
+    recentOverlayKeys = updateRecentOverlayKeys(recentOverlayKeys, [
+      ...(stanceOverlayType !== "none" ? [`stance:${stanceOverlayType}`] : []),
+      ...(tacticOverlayType !== "none" ? [`tactic:${tacticOverlayType}`] : []),
+    ]);
+
+    let stanceOverlayBlock: string | null = null;
+    if (stanceOverlayType !== "none") {
+      const overlayText = await loadOverlay(stanceOverlayType);
+      stanceOverlayBlock = `[STANCE_OVERLAY]\n${overlayText}`;
+    }
+
+    let tacticOverlayBlock: string | null = null;
+    if (tacticOverlayType !== "none") {
+      const overlayText = await loadOverlay(tacticOverlayType);
+      tacticOverlayBlock = `[OVERLAY]\n${overlayText}`;
     }
 
     const deferredProfileLines = buildDeferredProfileContextLines({
@@ -3057,6 +3170,7 @@ export async function POST(request: NextRequest) {
       loopsCache,
       queryCache,
       recentInjectedContextKeys,
+      recentOverlayKeys,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -3070,8 +3184,10 @@ export async function POST(request: NextRequest) {
           kind: "overlay",
           transcript: sttResult.transcript,
           memoryQuery: {
-            overlayTriggered: overlayType,
+            stanceSelected: stanceOverlayType,
+            tacticSelected: tacticOverlayType,
             triggerReason: overlayTriggerReason,
+            suppressionReason: overlaySuppressionReason,
             overlayTurnCount,
             overlayExitReason,
             topicKey: overlayTopicKey ?? null,
@@ -3090,7 +3206,8 @@ export async function POST(request: NextRequest) {
         localHour: zoned.hour,
       }),
       userContextBlock,
-      overlayBlock,
+      stanceOverlayBlock,
+      tacticOverlayBlock,
       bridgeBlock,
       handoverBlock,
       opsSnippetBlock,
@@ -3121,8 +3238,11 @@ export async function POST(request: NextRequest) {
           chosenModel: model,
           risk_level: riskLevel,
           intent: overlayIntent,
-          overlaySelected: overlayType,
+          stanceSelected: stanceOverlayType,
+          tacticSelected: tacticOverlayType,
+          overlaySelected: tacticOverlayType,
           overlaySkipReason,
+          suppressionReason: overlaySuppressionReason,
         })
       );
     }
@@ -3160,7 +3280,8 @@ export async function POST(request: NextRequest) {
       "persona",
       "posture",
       ...(userContextBlock ? ["user_context"] : []),
-      ...(overlayBlock ? ["overlay"] : []),
+      ...(stanceOverlayBlock ? ["stance_overlay"] : []),
+      ...(tacticOverlayBlock ? ["overlay"] : []),
       ...(bridgeBlock ? ["bridge"] : []),
       ...(handoverBlock ? ["handover"] : []),
       ...(opsSnippetBlock ? ["ops"] : []),
@@ -3183,8 +3304,11 @@ export async function POST(request: NextRequest) {
             chosenModel: model,
             risk_level: riskLevel,
             intent: overlayIntent,
-            overlaySelected: overlayType,
+            stanceSelected: stanceOverlayType,
+            tacticSelected: tacticOverlayType,
+            overlaySelected: tacticOverlayType,
             overlaySkipReason,
+            suppressionReason: overlaySuppressionReason,
             system_blocks: systemBlockOrder,
             startbrief_used: Boolean(context.startBrief?.used),
             startbrief_fallback: context.startBrief?.fallback ?? null,
@@ -3293,7 +3417,10 @@ export async function POST(request: NextRequest) {
       chosenModel: model,
       riskLevel,
       intent: overlayIntent,
-      overlaySelected: overlayType,
+      stanceSelected: stanceOverlayType,
+      tacticSelected: tacticOverlayType,
+      suppressionReason: overlaySuppressionReason,
+      overlaySelected: tacticOverlayType,
       overlaySkipReason,
       startbrief: {
         used: Boolean(context.startBrief?.used),

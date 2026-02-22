@@ -37,6 +37,8 @@ async function main() {
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
       userContextBlock: "[USER_CONTEXT]\n- Daily anchors: steps goal 10,000.",
+      stanceOverlayBlock: "[STANCE_OVERLAY]\nWitness stance",
+      tacticOverlayBlock: "[OVERLAY]\nTactic text",
       overlayBlock: "[OVERLAY]\nOverlay text",
       bridgeBlock: "BRIDGE",
       handoverBlock: "HANDOVER",
@@ -49,6 +51,8 @@ async function main() {
     const contents = messages.map((message) => message.content);
     const indexPersona = contents.indexOf("PERSONA");
     const indexUserContext = contents.findIndex((value) => value.startsWith("[USER_CONTEXT]"));
+    const indexStance = contents.findIndex((value) => value.startsWith("[STANCE_OVERLAY]"));
+    const indexTactic = contents.findIndex((value) => value === "[OVERLAY]\nTactic text");
     const indexOverlay = contents.findIndex((value) => value.startsWith("[OVERLAY]"));
     const indexBridge = contents.indexOf("BRIDGE");
     const indexHandover = contents.indexOf("HANDOVER");
@@ -57,6 +61,8 @@ async function main() {
 
     expect(indexPersona).toBe(0);
     expect(indexUserContext).toBeGreaterThan(indexPersona);
+    expect(indexStance).toBeGreaterThan(indexUserContext);
+    expect(indexTactic).toBeGreaterThan(indexStance);
     expect(indexOverlay).toBeGreaterThan(indexUserContext);
     expect(indexOverlay).toBeGreaterThan(indexPersona);
     expect(indexBridge).toBeGreaterThan(indexOverlay);
