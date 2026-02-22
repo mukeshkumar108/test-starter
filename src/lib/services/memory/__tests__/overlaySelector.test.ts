@@ -276,6 +276,35 @@ async function main() {
     });
   });
 
+  await runTest("companion + MED pressure suppresses non-essential overlays", () => {
+    const decision = selectOverlay({
+      transcript: "you won't believe what happened, I should finish the portfolio",
+      posture: "COMPANION",
+      openLoops: ["finish portfolio"],
+      overlayUsed: {},
+      conflictSignals: {
+        pressure: "MED",
+      },
+      now: new Date("2026-02-10T10:00:00Z"),
+    });
+    expect(decision.overlayType).toBe("none");
+  });
+
+  await runTest("companion + MED pressure still allows conflict_regulation", () => {
+    const decision = selectOverlay({
+      transcript: "I argued with my girlfriend again and it turned into a huge fight",
+      posture: "COMPANION",
+      overlayUsed: {},
+      conflictSignals: {
+        pressure: "MED",
+        riskLevel: "MED",
+        mood: "FRUSTRATED",
+        tone: "DIRECT",
+      },
+    });
+    expect(decision.overlayType).toBe("conflict_regulation");
+  });
+
   const failed = results.filter((result) => !result.passed);
   if (failed.length > 0) {
     console.error("\nOverlay selector tests failed:");

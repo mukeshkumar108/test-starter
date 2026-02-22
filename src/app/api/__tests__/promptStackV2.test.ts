@@ -6,6 +6,7 @@
 import {
   __test__applyOpsSupplementalMutualExclusion,
   __test__buildChatMessages,
+  __test__extractLocalTurnSignalLine,
   __test__buildStartbriefInjection,
 } from "../chat/route";
 
@@ -78,6 +79,26 @@ async function main() {
     expect(joined).notToContain("SITUATIONAL_CONTEXT:");
     expect(joined).notToContain("[CONTINUITY]");
     expect(joined).notToContain("SESSION FACTS:");
+  });
+
+  await runTest("local turn signal extraction captures stress, walk, and shipped push", () => {
+    const line = __test__extractLocalTurnSignalLine(
+      "I've been stressed lately, going for a walk, and just shipped a push."
+    );
+    expect(line ?? "").toBe("Local (now): stressed lately, going for a walk, just shipped a push.");
+  });
+
+  await runTest("user context block supports local + synapse line ordering", () => {
+    const messages = __test__buildChatMessages({
+      persona: "PERSONA",
+      userContextBlock:
+        "[USER_CONTEXT]\n- Local (now): stressed lately, going for a walk, just shipped a push.\n- Synapse (recent): Daily anchors: steps goal 10,000; minimum 5,000.",
+      recentMessages: [],
+      transcript: "current user turn",
+    });
+    const contents = messages.map((message) => message.content);
+    expect(contents[2]).toContain("Local (now): stressed lately");
+    expect(contents[2]).toContain("Synapse (recent): Daily anchors");
   });
 
   await runTest("handover is injected verbatim", () => {

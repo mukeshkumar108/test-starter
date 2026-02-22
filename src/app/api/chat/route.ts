@@ -44,6 +44,50 @@ function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function extractLocalTurnSignalLine(transcript: string) {
+  const normalized = normalizeWhitespace(transcript);
+  if (!normalized) return null;
+  const lowered = normalized.toLowerCase();
+  const signals: string[] = [];
+  const pushSignal = (value: string) => {
+    if (signals.includes(value)) return;
+    signals.push(value);
+  };
+
+  if (/\b(stress|stressed|overwhelm|anxious|panic|burnt out|burned out)\b/i.test(lowered)) {
+    pushSignal("stressed lately");
+  } else if (/\b(frustrated|angry|irritated)\b/i.test(lowered)) {
+    pushSignal("feeling frustrated");
+  } else if (/\b(tired|exhausted|drained)\b/i.test(lowered)) {
+    pushSignal("running low on energy");
+  }
+
+  if (/\b(go(?:ing)?\s+for\s+a\s+walk|walk(?:ing)?)\b/i.test(lowered)) {
+    pushSignal("going for a walk");
+  }
+  if (/\b(just\s+)?shipp(?:ed|ing)\b/i.test(lowered) || /\b(push|deploy|release|pr)\b/i.test(lowered)) {
+    pushSignal("just shipped a push");
+  }
+  if (/\b(gym|work(?:ing)?\s*out|run(?:ning)?)\b/i.test(lowered)) {
+    pushSignal("moving the body");
+  }
+
+  if (/\b(need help|help me|what should i|can you help)\b/i.test(lowered)) {
+    pushSignal("asking for guidance");
+  } else if (/\b(check[- ]?in|catch[- ]?up)\b/i.test(lowered)) {
+    pushSignal("checking in");
+  }
+
+  if (signals.length === 0) {
+    const firstClause = normalized.split(/[.!?;]+/).at(0) ?? normalized;
+    const fallback = firstClause.split(/\s+/).slice(0, 10).join(" ");
+    if (!fallback) return null;
+    pushSignal(fallback.toLowerCase());
+  }
+
+  return `Local (now): ${signals.slice(0, 3).join(", ")}.`;
+}
+
 function getLibrarianTimeoutMs() {
   const raw = env.LIBRARIAN_TIMEOUT_MS;
   if (!raw) return DEFAULT_LIBRARIAN_TIMEOUT_MS;
@@ -2661,6 +2705,7 @@ export async function POST(request: NextRequest) {
     } else if (!overlayPolicy.skip) {
       const decision = selectOverlay({
         transcript: sttResult.transcript,
+        posture,
         openLoops: context.overlayContext?.openLoops,
         commitments: context.overlayContext?.commitments,
         hasHighPriorityLoop: context.overlayContext?.hasHighPriorityLoop,
@@ -2783,9 +2828,14 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
       avoidanceOrDrift,
     });
+    const localTurnSignalLine = extractLocalTurnSignalLine(sttResult.transcript);
+    const userContextLines = [
+      ...(localTurnSignalLine ? [localTurnSignalLine] : []),
+      ...deferredProfileLines.map((line) => `Synapse (recent): ${line}`),
+    ];
     const userContextBlock =
-      deferredProfileLines.length > 0
-        ? `[USER_CONTEXT]\n${deferredProfileLines.map((line) => `- ${line}`).join("\n")}`
+      userContextLines.length > 0
+        ? `[USER_CONTEXT]\n${userContextLines.map((line) => `- ${line}`).join("\n")}`
         : null;
 
     const messages = buildChatMessages({
@@ -3168,6 +3218,7 @@ export const __test__shouldHoldOverlayUntilRunway = shouldHoldOverlayUntilRunway
 export const __test__buildCorrectionGuardBlock = buildCorrectionGuardBlock;
 export const __test__buildSessionStartSituationalContext = buildSessionStartSituationalContext;
 export const __test__buildDeferredProfileContextLines = buildDeferredProfileContextLines;
+export const __test__extractLocalTurnSignalLine = extractLocalTurnSignalLine;
 export const __test__buildStartbriefInjection = buildStartbriefInjection;
 export const __test__shouldInjectOpsSnippet = shouldInjectOpsSnippet;
 export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalMutualExclusion;

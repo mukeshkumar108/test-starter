@@ -122,6 +122,7 @@ function isWithinOneDay(lastTugAt?: string | null, now?: Date) {
 
 export function selectOverlay(params: {
   transcript: string;
+  posture?: "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
   openLoops?: string[];
   commitments?: string[];
   overlayUsed?: {
@@ -150,6 +151,7 @@ export function selectOverlay(params: {
 }): OverlayDecision {
   const {
     transcript,
+    posture,
     openLoops,
     commitments,
     overlayUsed,
@@ -168,15 +170,19 @@ export function selectOverlay(params: {
     params;
   if (!transcript.trim()) return { overlayType: "none", triggerReason: "empty" };
 
+  const suppressNonEssentialOverlays =
+    posture === "COMPANION" &&
+    (conflictSignals?.pressure === "MED" || conflictSignals?.pressure === "HIGH");
+
   // Daily focus has first pass in morning start-of-day windows, before other overlays.
   // Ritual precedence: daily/weekly trajectory overlays run before conversational overlays.
-  if (dailyFocusEligible && !hasTodayFocus && !overlayUsed?.dailyFocus) {
+  if (!suppressNonEssentialOverlays && dailyFocusEligible && !hasTodayFocus && !overlayUsed?.dailyFocus) {
     return { overlayType: "daily_focus", triggerReason: "daily_focus_morning" };
   }
-  if (dailyReviewEligible && !hasDailyReviewToday && !overlayUsed?.dailyReview) {
+  if (!suppressNonEssentialOverlays && dailyReviewEligible && !hasDailyReviewToday && !overlayUsed?.dailyReview) {
     return { overlayType: "daily_review", triggerReason: "daily_review_evening" };
   }
-  if (weeklyCompassEligible && !hasWeeklyCompass && !overlayUsed?.weeklyCompass) {
+  if (!suppressNonEssentialOverlays && weeklyCompassEligible && !hasWeeklyCompass && !overlayUsed?.weeklyCompass) {
     return { overlayType: "weekly_compass", triggerReason: "weekly_compass_window" };
   }
 
@@ -198,14 +204,14 @@ export function selectOverlay(params: {
     return { overlayType: "conflict_regulation", triggerReason: "conflict_regulation" };
   }
 
-  if (!overlayUsed?.curiositySpiral) {
+  if (!suppressNonEssentialOverlays && !overlayUsed?.curiositySpiral) {
     const curiosityEligible = hasCuriosityTrigger(transcript);
     if (curiosityEligible) {
       return { overlayType: "curiosity_spiral", triggerReason: "curiosity_trigger" };
     }
   }
 
-  if (!overlayUsed?.accountabilityTug) {
+  if (!suppressNonEssentialOverlays && !overlayUsed?.accountabilityTug) {
     const topicKey = resolveAccountabilityTopic(openLoops, commitments);
     const eligible =
       Boolean(topicKey) &&
