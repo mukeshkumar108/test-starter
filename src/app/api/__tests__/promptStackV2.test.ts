@@ -132,6 +132,82 @@ async function main() {
     expect(joined).toContain("Daily anchors");
   });
 
+  await runTest("trajectory candidate is added when 2+ components exist", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "quick check-in",
+      deferredProfileLines: [],
+      recentInjectedContextKeys: [],
+      trajectory: {
+        longTermDirectionLine: "Long-term direction is ship a reliable memory system.",
+        workContextLine: "Current work focus is prompt reliability.",
+        dailyAnchorsLine: "Daily anchors: steps goal 10,000.",
+        currentFocus: null,
+        topLoopText: null,
+        topLoopFetchedAt: null,
+        now: new Date("2026-02-22T12:00:00Z"),
+      },
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).toContain("Trajectory: ship a reliable memory system -> prompt reliability -> steps goal 10,000.");
+  });
+
+  await runTest("trajectory is suppressed by repetition key unless re-anchored", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "quick check-in",
+      deferredProfileLines: [],
+      recentInjectedContextKeys: ["synapse:trajectory"],
+      trajectory: {
+        longTermDirectionLine: "Long-term direction is ship a reliable memory system.",
+        workContextLine: "Current work focus is prompt reliability.",
+        dailyAnchorsLine: null,
+        currentFocus: null,
+        topLoopText: "close parser bug",
+        topLoopFetchedAt: "2026-02-22T11:00:00Z",
+        now: new Date("2026-02-22T12:00:00Z"),
+      },
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).notToContain("Trajectory:");
+  });
+
+  await runTest("trajectory repetition allows explicit re-anchoring", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "can we refocus on my goal and plan for today",
+      deferredProfileLines: [],
+      recentInjectedContextKeys: ["synapse:trajectory"],
+      trajectory: {
+        longTermDirectionLine: "Long-term direction is ship a reliable memory system.",
+        workContextLine: "Current work focus is prompt reliability.",
+        dailyAnchorsLine: "Daily anchors: steps goal 10,000.",
+        currentFocus: null,
+        topLoopText: null,
+        topLoopFetchedAt: null,
+        now: new Date("2026-02-22T12:00:00Z"),
+      },
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).toContain("Trajectory:");
+  });
+
+  await runTest("trajectory is skipped when loop anchor is stale and no daily anchors", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "quick check-in",
+      deferredProfileLines: [],
+      recentInjectedContextKeys: [],
+      trajectory: {
+        longTermDirectionLine: "Long-term direction is ship a reliable memory system.",
+        workContextLine: "Current work focus is prompt reliability.",
+        dailyAnchorsLine: null,
+        currentFocus: null,
+        topLoopText: "close parser bug",
+        topLoopFetchedAt: "2026-02-20T11:00:00Z",
+        now: new Date("2026-02-22T12:00:00Z"),
+      },
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).notToContain("Trajectory:");
+  });
+
   await runTest("recent context key buffer remains session-local and bounded", () => {
     const updated = __test__updateRecentInjectedContextKeys(
       ["a", "b", "c", "d", "e", "f"],

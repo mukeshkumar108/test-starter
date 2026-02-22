@@ -93,6 +93,78 @@ type UserContextCandidate = {
   key: string;
 };
 
+type TrajectoryCandidateInput = {
+  longTermDirectionLine?: string;
+  workContextLine?: string;
+  dailyAnchorsLine?: string;
+  currentFocus?: string | null;
+  topLoopText?: string | null;
+  topLoopFetchedAt?: string | null;
+  now: Date;
+};
+
+function stripSentenceEnding(value: string) {
+  return value.trim().replace(/[.!?]+$/, "").trim();
+}
+
+function parseLongTermDirection(line?: string) {
+  if (!line) return null;
+  const match = line.match(/^Long-term direction is\s+(.+?)\.?$/i);
+  if (!match) return null;
+  const value = stripSentenceEnding(match[1] ?? "");
+  return value || null;
+}
+
+function parseWorkFocus(line?: string) {
+  if (!line) return null;
+  const match = line.match(/^Current work focus is\s+(.+?)(?:, and work context is .+)?\.?$/i);
+  if (!match) return null;
+  const value = stripSentenceEnding(match[1] ?? "");
+  return value || null;
+}
+
+function parseDailyAnchors(line?: string) {
+  if (!line) return null;
+  const match = line.match(/^Daily anchors:\s+(.+?)\.?$/i);
+  if (!match) return null;
+  const value = stripSentenceEnding(match[1] ?? "");
+  return value || null;
+}
+
+function isLowConfidenceText(value: string) {
+  return /\b(likely|maybe|might|possibly|inferred)\b/i.test(value);
+}
+
+function isStaleTimestamp(value: string | null | undefined, now: Date, maxHours: number) {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return true;
+  return now.getTime() - parsed > maxHours * 60 * 60 * 1000;
+}
+
+function buildTrajectoryCandidate(input?: TrajectoryCandidateInput | null): UserContextCandidate | null {
+  if (!input) return null;
+  const vision = parseLongTermDirection(input.longTermDirectionLine);
+  const focus = stripSentenceEnding(input.currentFocus ?? "") || parseWorkFocus(input.workContextLine);
+  const dailyAnchor = parseDailyAnchors(input.dailyAnchorsLine);
+  const topLoop = stripSentenceEnding(input.topLoopText ?? "");
+  const topLoopStale = isStaleTimestamp(input.topLoopFetchedAt, input.now, 24);
+  const anchor = dailyAnchor || (!topLoopStale ? topLoop : null);
+
+  const components = [
+    { label: "vision", value: vision },
+    { label: "focus", value: focus },
+    { label: "anchor", value: anchor },
+  ].filter((entry) => Boolean(entry.value));
+
+  if (components.length < 2) return null;
+  if (components.some((entry) => isLowConfidenceText(entry.value ?? ""))) return null;
+  if (!dailyAnchor && topLoop && topLoopStale) return null;
+
+  const line = `Trajectory: ${components.map((entry) => entry.value).join(" -> ")}.`;
+  return { key: "synapse:trajectory", line };
+}
+
 function extractLocalTurnSignalKey(transcript: string) {
   const lowered = normalizeWhitespace(transcript).toLowerCase();
   if (!lowered) return null;
@@ -171,6 +243,9 @@ function transcriptReMentionsKey(transcript: string, key: string) {
   if (key === "synapse:goal" || key === "synapse:work") {
     return /\b(goal|plan|ship|work|project|focus)\b/i.test(lowered);
   }
+  if (key === "synapse:trajectory") {
+    return /\b(goal|plan|focus|today|next|steps|loop|track|trajectory)\b/i.test(lowered);
+  }
   if (key === "synapse:relationship" || key === "moment:relationship_rupture") {
     return /\b(partner|girlfriend|boyfriend|wife|husband|friend|mom|mum|dad|argued|fight)\b/i.test(lowered);
   }
@@ -187,6 +262,7 @@ function selectUserContextCandidates(params: {
   transcript: string;
   deferredProfileLines: string[];
   recentInjectedContextKeys: string[];
+  trajectory?: TrajectoryCandidateInput | null;
 }) {
   const candidates: UserContextCandidate[] = [];
   const magic = extractMagicMomentLine(params.transcript);
@@ -199,6 +275,10 @@ function selectUserContextCandidates(params: {
       line: localLine,
       key: extractLocalTurnSignalKey(params.transcript) ?? "local:now",
     });
+  }
+  const trajectory = buildTrajectoryCandidate(params.trajectory);
+  if (trajectory) {
+    candidates.push(trajectory);
   }
   for (const line of params.deferredProfileLines) {
     candidates.push({
@@ -2940,6 +3020,15 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
       deferredProfileLines,
       recentInjectedContextKeys,
+      trajectory: {
+        longTermDirectionLine: context.deferredProfileContext?.longTermDirectionLine,
+        workContextLine: context.deferredProfileContext?.workContextLine,
+        dailyAnchorsLine: context.deferredProfileContext?.dailyAnchorsLine,
+        currentFocus: context.overlayContext?.currentFocus ?? null,
+        topLoopText: context.overlayContext?.openLoops?.[0] ?? null,
+        topLoopFetchedAt: loopsCache.fetchedAt ?? null,
+        now,
+      },
     });
     const userContextLines = selectedUserContext.map((item) => item.line);
     recentInjectedContextKeys = updateRecentInjectedContextKeys(
