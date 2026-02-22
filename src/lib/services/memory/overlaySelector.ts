@@ -62,6 +62,24 @@ const emotionalMarkers = [
   "heartbroken",
 ];
 const angerMarkers = ["argued", "argument", "fight", "furious", "angry", "rage", "blame"];
+const griefMarkers = [
+  "miss her",
+  "i miss",
+  "grief",
+  "guilt",
+  "shame",
+  "estranged",
+  "falling out",
+  "made me cry",
+  "i cried",
+  "tears",
+  "broke down",
+  "dad died",
+  "funeral",
+  "cancer",
+  "lost my",
+];
+const repairMarkers = ["repair", "fix this", "how do i fix", "olive branch", "what do i say", "reconcile", "apology"];
 
 const dismissMarkers = ["not now", "later", "stop", "leave it", "anyway"];
 
@@ -141,9 +159,12 @@ function isWithinOneDay(lastTugAt?: string | null, now?: Date) {
 function detectDepthSignals(text: string, recentUserMessages: string[]) {
   const lowered = text.toLowerCase();
   const griefWeight =
-    /\b(death|estranged|regret|cancer|funeral|miss her|miss him|i can'?t)\b/i.test(lowered);
+    griefMarkers.some((marker) => lowered.includes(marker)) ||
+    /\b(death|regret|miss him|i can'?t)\b/i.test(lowered);
   const repairIntent =
-    /\b(how do i fix|what do i say|reconcile|apolog(?:y|ize|ise)|make it right|repair)\b/i.test(lowered);
+    repairMarkers.some((marker) => lowered.includes(marker)) ||
+    /\b(apolog(?:y|ize|ise)|make it right)\b/i.test(lowered);
+  const cried = /\b(made me cry|i cried|tears|broke down)\b/i.test(lowered);
   const circlingOrUnsaid =
     /\b(idk|i don't know|part of me|on one hand|but also|again and again)\b/i.test(lowered) ||
     recentUserMessages
@@ -160,15 +181,25 @@ function detectDepthSignals(text: string, recentUserMessages: string[]) {
   const relationshipContext = relationshipCues.some((marker) => lowered.includes(marker));
   const pickedNextStep =
     /\b(i will|i'll|next step is|i can do now|i'll do|i will do|i'll text|i will text)\b/i.test(lowered);
+  const relationshipStakes = relationshipContext || /\b(daughter|father|mother|family)\b/i.test(lowered);
+
+  let depthScore = 0;
+  if (griefWeight) depthScore += 2;
+  if (repairIntent) depthScore += 2;
+  if (cried) depthScore += 2;
+  if (relationshipStakes) depthScore += 1;
+  if (circlingOrUnsaid) depthScore += 1;
 
   return {
     griefWeight,
     repairIntent,
+    cried,
     circlingOrUnsaid,
     standardsAsk,
     momentumTask,
-    relationshipContext,
+    relationshipContext: relationshipStakes,
     pickedNextStep,
+    depthScore,
   };
 }
 
@@ -188,6 +219,13 @@ function selectStance(params: {
   // Safety/risk always wins.
   if (params.riskLevel === "CRISIS" || params.riskLevel === "HIGH") {
     return { stanceOverlay: "witness" as const, reason: "safety_risk_override" as const };
+  }
+
+  if (
+    params.posture === "COMPANION" &&
+    signals.depthScore >= 3
+  ) {
+    return { stanceOverlay: "witness" as const, reason: "companion_emotional_depth" as const };
   }
 
   if (signals.griefWeight || params.pressure === "HIGH") {
@@ -375,6 +413,18 @@ export function selectOverlay(params: {
   const baseTactic = selectBaseTactic(params);
 
   if (stanceDecision.stanceOverlay === "witness") {
+    const ruptureOrRisk =
+      baseTactic.tacticOverlay === "conflict_regulation" ||
+      params.conflictSignals?.riskLevel === "HIGH" ||
+      params.conflictSignals?.riskLevel === "CRISIS";
+    if (ruptureOrRisk) {
+      return {
+        stanceOverlay: "witness",
+        tacticOverlay: baseTactic.tacticOverlay === "conflict_regulation" ? "conflict_regulation" : "none",
+        triggerReason: `${stanceDecision.reason}:rupture_or_risk`,
+        suppressionReason: baseTactic.tacticOverlay === "conflict_regulation" ? undefined : "witness_high_pressure",
+      };
+    }
     if (params.posture === "COMPANION" && params.conflictSignals?.pressure === "HIGH") {
       return {
         stanceOverlay: "witness",
@@ -439,7 +489,7 @@ export function selectOverlay(params: {
   }
 
   if (stanceDecision.stanceOverlay === "high_standards_friend") {
-    if (baseTactic.tacticOverlay === "accountability_tug") {
+    if (baseTactic.tacticOverlay === "accountability_tug" && params.conflictSignals?.pressure !== "HIGH") {
       return {
         stanceOverlay: "high_standards_friend",
         tacticOverlay: "accountability_tug",

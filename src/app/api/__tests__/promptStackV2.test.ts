@@ -5,7 +5,10 @@
 
 import {
   __test__applyOpsSupplementalMutualExclusion,
+  __test__buildStyleGuardBlock,
   __test__buildChatMessages,
+  __test__nextEndearmentCooldownTurns,
+  __test__resolvePolicySkipSelection,
   __test__extractLocalTurnSignalLine,
   __test__selectUserContextCandidates,
   __test__updateRecentInjectedContextKeys,
@@ -214,6 +217,95 @@ async function main() {
       ["g", "h"]
     );
     expect(updated.join(",")).toBe("c,d,e,f,g,h");
+  });
+
+  await runTest("warmup grief forces witness stance", () => {
+    const resolved = __test__resolvePolicySkipSelection({
+      skipReason: "session_warmup",
+      transcript: "I saw her face again and it made me cry",
+      posture: "COMPANION",
+      intent: "companion",
+      explicitTopicShift: false,
+      avoidanceOrDrift: false,
+      openLoops: ["finish proposal"],
+      commitments: [],
+      recentUserMessages: ["I keep thinking about this"],
+      overlayUsed: {},
+      dailyFocusEligible: false,
+      dailyReviewEligible: false,
+      weeklyCompassEligible: false,
+      hasTodayFocus: false,
+      hasDailyReviewToday: false,
+      hasWeeklyCompass: false,
+      pressure: "MED",
+      riskLevel: "LOW",
+      mood: "LOW",
+      tone: "SERIOUS",
+      userLastTugAt: null,
+      tugBackoff: {},
+      now: new Date("2026-02-22T12:00:00Z"),
+    });
+    expect(resolved.stanceSelected).toBe("witness");
+    expect(resolved.triggerReason).toBe("witness_force_during_policy_skip");
+  });
+
+  await runTest("user context rejects stopword garbage lines", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "quick check in",
+      deferredProfileLines: ["People currently in focus include got and was."],
+      recentInjectedContextKeys: [],
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).notToContain("got and was");
+  });
+
+  await runTest("user context rejects echo local lines", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "Sophie are you still with me",
+      deferredProfileLines: [],
+      recentInjectedContextKeys: [],
+    });
+    const joined = selected.map((item) => item.line).join("\n").toLowerCase();
+    expect(joined).notToContain("are you still with me");
+  });
+
+  await runTest("trajectory candidate drops duplicate segments", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "quick check-in with real signal text here",
+      deferredProfileLines: [],
+      recentInjectedContextKeys: [],
+      trajectory: {
+        longTermDirectionLine: "Long-term direction is Walk daily.",
+        workContextLine: "Current work focus is Walk daily.",
+        dailyAnchorsLine: null,
+        currentFocus: null,
+        topLoopText: "Walk daily",
+        topLoopFetchedAt: "2026-02-22T11:00:00Z",
+        now: new Date("2026-02-22T12:00:00Z"),
+      },
+    });
+    const joined = selected.map((item) => item.line).join("\n");
+    expect(joined).notToContain("Trajectory:");
+  });
+
+  await runTest("witness style guard includes banned phrase list", () => {
+    const block = __test__buildStyleGuardBlock({
+      stance: "witness",
+      endearmentCooldownTurns: 3,
+    });
+    expect(block).toContain("must feel");
+    expect(block).toContain("No endearments");
+  });
+
+  await runTest("endearment throttle enforces one allowance per 8 turns", () => {
+    let cooldown = 0;
+    const sequence: number[] = [];
+    for (let i = 0; i < 9; i += 1) {
+      cooldown = __test__nextEndearmentCooldownTurns(cooldown, "none");
+      sequence.push(cooldown);
+    }
+    expect(sequence[0]).toBe(8);
+    expect(sequence[8]).toBe(0);
   });
 
   await runTest("handover is injected verbatim", () => {

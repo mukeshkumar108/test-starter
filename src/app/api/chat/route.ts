@@ -19,6 +19,7 @@ import {
   isDismissal,
   isShortReply,
   isTopicShift,
+  type OverlayPolicyDecision,
   type OverlayIntent,
   normalizeTopicKey,
   selectOverlay,
@@ -98,6 +99,82 @@ type UserContextCandidate = {
   key: string;
 };
 
+const CONTEXT_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "for", "from", "got",
+  "had", "has", "have", "he", "her", "here", "him", "his", "i", "if", "in", "into", "is",
+  "it", "its", "me", "my", "of", "on", "or", "our", "she", "so", "that", "the", "their",
+  "them", "there", "they", "this", "to", "too", "us", "was", "we", "were", "with", "you", "your",
+]);
+
+const BANNED_CONTEXT_SUBSTRINGS = [
+  " got and was",
+  "include got",
+  "include was",
+  "people currently in focus include got",
+  "people currently in focus include was",
+];
+
+const BANNED_TRAILING_PATTERNS = [" and.", " and", " or.", " but.", " with."];
+
+function tokenizeForQuality(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function jaccardOverlap(a: string[], b: string[]) {
+  if (a.length === 0 || b.length === 0) return 0;
+  const aSet = new Set(a);
+  const bSet = new Set(b);
+  const intersection = [...aSet].filter((token) => bSet.has(token)).length;
+  const union = new Set([...aSet, ...bSet]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+function hasDuplicateTrajectorySegments(line: string) {
+  if (!line.toLowerCase().startsWith("trajectory:")) return false;
+  const payload = line.split(":").slice(1).join(":");
+  const segments = payload
+    .split("->")
+    .map((segment) => stripSentenceEnding(segment).toLowerCase())
+    .filter(Boolean);
+  for (let i = 1; i < segments.length; i += 1) {
+    if (segments[i] === segments[i - 1]) return true;
+  }
+  return false;
+}
+
+function isGoodContextLine(params: { line: string; userText: string; key: string }) {
+  const line = params.line.trim();
+  if (line.length < 18) return { ok: false as const, reason: "too_short" };
+  const lowered = line.toLowerCase();
+  if (BANNED_CONTEXT_SUBSTRINGS.some((part) => lowered.includes(part))) {
+    return { ok: false as const, reason: "banned_substring" };
+  }
+  if (BANNED_TRAILING_PATTERNS.some((suffix) => lowered.endsWith(suffix))) {
+    return { ok: false as const, reason: "truncated_suffix" };
+  }
+  if (/\b(maybe|likely|might)\b/i.test(lowered) && params.key.startsWith("synapse:")) {
+    return { ok: false as const, reason: "hedged_fact" };
+  }
+  if (hasDuplicateTrajectorySegments(line)) {
+    return { ok: false as const, reason: "duplicate_trajectory" };
+  }
+
+  const lineTokens = tokenizeForQuality(line);
+  const userTokens = tokenizeForQuality(params.userText);
+  const nonStopwords = lineTokens.filter((token) => !CONTEXT_STOPWORDS.has(token));
+  if (nonStopwords.length < 4) return { ok: false as const, reason: "low_content_words" };
+  const stopwordRatio = lineTokens.length === 0 ? 1 : (lineTokens.length - nonStopwords.length) / lineTokens.length;
+  if (stopwordRatio >= 0.55) return { ok: false as const, reason: "high_stopword_ratio" };
+  const overlap = jaccardOverlap(lineTokens, userTokens);
+  if (overlap >= 0.6) return { ok: false as const, reason: "echo_overlap" };
+
+  return { ok: true as const };
+}
+
 type TrajectoryCandidateInput = {
   longTermDirectionLine?: string;
   workContextLine?: string;
@@ -165,6 +242,11 @@ function buildTrajectoryCandidate(input?: TrajectoryCandidateInput | null): User
   if (components.length < 2) return null;
   if (components.some((entry) => isLowConfidenceText(entry.value ?? ""))) return null;
   if (!dailyAnchor && topLoop && topLoopStale) return null;
+  for (let i = 1; i < components.length; i += 1) {
+    const current = (components[i].value ?? "").toLowerCase();
+    const previous = (components[i - 1].value ?? "").toLowerCase();
+    if (current === previous) return null;
+  }
 
   const line = `Trajectory: ${components.map((entry) => entry.value).join(" -> ")}.`;
   return { key: "synapse:trajectory", line };
@@ -296,6 +378,20 @@ function selectUserContextCandidates(params: {
   const recentSet = new Set(params.recentInjectedContextKeys);
   for (const candidate of candidates) {
     if (selected.length >= 3) break;
+    const quality = isGoodContextLine({
+      line: candidate.line,
+      userText: params.transcript,
+      key: candidate.key,
+    });
+    if (!quality.ok) {
+      if (env.FEATURE_CONTEXT_DEBUG === "true") {
+        console.debug("[context.line.drop]", {
+          key: candidate.key,
+          reason: quality.reason,
+        });
+      }
+      continue;
+    }
     const repeated = recentSet.has(candidate.key);
     const allowRepeat = transcriptReMentionsKey(params.transcript, candidate.key);
     if (repeated && !allowRepeat) continue;
@@ -498,6 +594,9 @@ type OverlayState = {
   queryCache?: { fetchedAt?: string | null; facts?: string[] };
   recentInjectedContextKeys?: string[];
   recentOverlayKeys?: string[];
+  stanceActive?: StanceOverlayType | null;
+  stanceTurnsRemaining?: number;
+  endearmentCooldownTurns?: number;
   user?: OverlayUserState;
 };
 
@@ -781,6 +880,15 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
           .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
           .slice(-6)
       : [],
+    stanceActive: typeof raw.stanceActive === "string" ? (raw.stanceActive as StanceOverlayType) : null,
+    stanceTurnsRemaining:
+      typeof raw.stanceTurnsRemaining === "number" && Number.isFinite(raw.stanceTurnsRemaining)
+        ? Math.max(0, raw.stanceTurnsRemaining)
+        : 0,
+    endearmentCooldownTurns:
+      typeof raw.endearmentCooldownTurns === "number" && Number.isFinite(raw.endearmentCooldownTurns)
+        ? Math.max(0, raw.endearmentCooldownTurns)
+        : 0,
     user: typeof raw.user === "object" && raw.user && !Array.isArray(raw.user)
       ? {
           ...(raw.user as OverlayUserState),
@@ -1747,6 +1855,7 @@ async function runLibrarianReflex(params: {
 function buildChatMessages(params: {
   persona: string;
   momentumGuardBlock?: string | null;
+  styleGuardBlock?: string | null;
   userContextBlock?: string | null;
   stanceOverlayBlock?: string | null;
   tacticOverlayBlock?: string | null;
@@ -1772,6 +1881,7 @@ function buildChatMessages(params: {
   return [
     { role: "system" as const, content: params.persona },
     { role: "system" as const, content: postureBlock },
+    ...(params.styleGuardBlock ? [{ role: "system" as const, content: params.styleGuardBlock }] : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
     ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
@@ -2412,6 +2522,61 @@ function updateRecentOverlayKeys(previous: string[], nextKeys: string[]) {
   return next.slice(-6);
 }
 
+function userRequestedActionPlan(text: string) {
+  const lowered = normalizeWhitespace(text).toLowerCase();
+  return /\b(tell me what to do|give me a plan|draft message|draft a message|next steps|what should i do)\b/i.test(lowered);
+}
+
+function userRequestedPush(text: string) {
+  const lowered = normalizeWhitespace(text).toLowerCase();
+  return /\b(push me|hold me accountable|be strict)\b/i.test(lowered);
+}
+
+function nextWitnessHysteresisTurns(params: {
+  previousStance: StanceOverlayType | "none";
+  previousTurnsRemaining: number;
+  selectedStance: StanceOverlayType | "none";
+  transcript: string;
+  pressure: ConversationPressure;
+}) {
+  const actionRequested = userRequestedActionPlan(params.transcript);
+  const pushRequested = userRequestedPush(params.transcript);
+  if (params.selectedStance === "witness") return 2;
+  if (params.previousStance === "witness" && params.previousTurnsRemaining > 0) {
+    if (actionRequested || pushRequested || params.pressure === "LOW") return 0;
+    return Math.max(0, params.previousTurnsRemaining - 1);
+  }
+  return 0;
+}
+
+function buildStyleGuardBlock(params: {
+  stance: StanceOverlayType | "none";
+  endearmentCooldownTurns: number;
+}) {
+  const lines = ["[STYLE_GUARD]"];
+  if (params.stance === "witness") {
+    lines.push("- No endearments in this turn.");
+    lines.push('- Ban phrases: "must feel", "that sounds", "all ears", "so heavy", "so jumbled".');
+    return lines.join("\n");
+  }
+  if (params.endearmentCooldownTurns > 0) {
+    lines.push("- Do not use endearments in this turn.");
+    return lines.join("\n");
+  }
+  lines.push("- If used, allow at most one endearment this turn.");
+  return lines.join("\n");
+}
+
+function nextEndearmentCooldownTurns(current: number, stance: StanceOverlayType | "none") {
+  if (stance === "witness") {
+    return Math.max(0, current - 1);
+  }
+  if (current > 0) {
+    return current - 1;
+  }
+  return 8;
+}
+
 function shouldSuppressByOverlayRepetition(params: {
   key: string;
   recentOverlayKeys: string[];
@@ -2425,6 +2590,74 @@ function shouldSuppressByOverlayRepetition(params: {
     return !(params.pressure === "HIGH" || params.riskLevel === "HIGH" || params.riskLevel === "CRISIS");
   }
   return true;
+}
+
+function resolvePolicySkipSelection(params: {
+  skipReason: OverlayPolicyDecision["reason"];
+  transcript: string;
+  posture: ConversationPosture;
+  intent: OverlayIntent;
+  explicitTopicShift: boolean;
+  avoidanceOrDrift: boolean;
+  openLoops?: string[];
+  commitments?: string[];
+  recentUserMessages: string[];
+  overlayUsed: OverlayUsed;
+  dailyFocusEligible: boolean;
+  dailyReviewEligible: boolean;
+  weeklyCompassEligible: boolean;
+  hasTodayFocus: boolean;
+  hasDailyReviewToday: boolean;
+  hasWeeklyCompass: boolean;
+  pressure: ConversationPressure;
+  riskLevel: RiskLevel;
+  mood: UserMood | null | undefined;
+  tone: UserTone | null | undefined;
+  userLastTugAt?: string | null;
+  tugBackoff?: Record<string, string>;
+  now: Date;
+}) {
+  const decision = selectOverlay({
+    transcript: params.transcript,
+    posture: params.posture,
+    intent: params.intent,
+    explicitTopicShift: params.explicitTopicShift,
+    avoidanceOrDrift: params.avoidanceOrDrift,
+    openLoops: params.openLoops,
+    commitments: params.commitments,
+    recentUserMessages: params.recentUserMessages,
+    overlayUsed: params.overlayUsed,
+    dailyFocusEligible: params.dailyFocusEligible,
+    dailyReviewEligible: params.dailyReviewEligible,
+    weeklyCompassEligible: params.weeklyCompassEligible,
+    hasTodayFocus: params.hasTodayFocus,
+    hasDailyReviewToday: params.hasDailyReviewToday,
+    hasWeeklyCompass: params.hasWeeklyCompass,
+    conflictSignals: {
+      pressure: params.pressure,
+      riskLevel: params.riskLevel,
+      mood: params.mood ?? undefined,
+      tone: params.tone ?? undefined,
+    },
+    userLastTugAt: params.userLastTugAt ?? null,
+    tugBackoff: params.tugBackoff,
+    now: params.now,
+  });
+
+  if (decision.stanceOverlay === "witness") {
+    return {
+      stanceSelected: "witness" as const,
+      tacticSelected: "none" as const,
+      triggerReason: "witness_force_during_policy_skip",
+      suppressionReason: `policy_${params.skipReason}`,
+    };
+  }
+  return {
+    stanceSelected: "none" as const,
+    tacticSelected: "none" as const,
+    triggerReason: `policy_skip_${params.skipReason}`,
+    suppressionReason: `policy_${params.skipReason}`,
+  };
 }
 
 function validateOpsSnippet(input: string | null) {
@@ -2676,6 +2909,9 @@ export async function POST(request: NextRequest) {
     let queryCache = overlayState.queryCache ?? { fetchedAt: null, facts: [] as string[] };
     let recentInjectedContextKeys = overlayState.recentInjectedContextKeys ?? [];
     let recentOverlayKeys = overlayState.recentOverlayKeys ?? [];
+    let stanceActive = overlayState.stanceActive ?? null;
+    let stanceTurnsRemaining = overlayState.stanceTurnsRemaining ?? 0;
+    let endearmentCooldownTurns = overlayState.endearmentCooldownTurns ?? 0;
     const overlayUser = overlayState.user ?? {};
     // Trajectory rituals are day/week scoped to the user's configured local zone.
     const timeZone = "Europe/Zagreb";
@@ -2701,6 +2937,9 @@ export async function POST(request: NextRequest) {
       queryCache = { fetchedAt: null, facts: [] };
       recentInjectedContextKeys = [];
       recentOverlayKeys = [];
+      stanceActive = null;
+      stanceTurnsRemaining = 0;
+      endearmentCooldownTurns = 0;
     }
     if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
       startbriefV2FirstUserLowSignal = isLowSignalFirstUserMessage(sttResult.transcript);
@@ -2942,7 +3181,38 @@ export async function POST(request: NextRequest) {
       overlayTurnCount = 0;
       shortReplyStreak = 0;
     } else if (overlayPolicy.skip) {
-      overlayTriggerReason = `policy_skip_${overlayPolicy.reason}`;
+      const skipDecision = resolvePolicySkipSelection({
+        skipReason: overlayPolicy.reason,
+        transcript: sttResult.transcript,
+        posture,
+        intent: overlayIntent,
+        explicitTopicShift: gateExplicitTopicShift,
+        avoidanceOrDrift,
+        openLoops: context.overlayContext?.openLoops,
+        commitments: context.overlayContext?.commitments,
+        recentUserMessages: context.recentMessages
+          .filter((entry) => entry.role === "user")
+          .map((entry) => entry.content)
+          .slice(-3),
+        overlayUsed,
+        dailyFocusEligible,
+        dailyReviewEligible,
+        weeklyCompassEligible,
+        hasTodayFocus: overlayUser.todayFocusDate === dayKey,
+        hasDailyReviewToday,
+        hasWeeklyCompass,
+        pressure,
+        riskLevel,
+        mood: userState?.mood,
+        tone: userState?.tone,
+        userLastTugAt: overlayUser.lastTugAt ?? null,
+        tugBackoff: overlayUser.tugBackoff,
+        now,
+      });
+      stanceOverlayType = skipDecision.stanceSelected;
+      tacticOverlayType = skipDecision.tacticSelected;
+      overlayTriggerReason = skipDecision.triggerReason;
+      overlaySuppressionReason = skipDecision.suppressionReason;
       if (overlayTypeActive) {
         overlayExitReason = "policy";
       }
@@ -2978,6 +3248,27 @@ export async function POST(request: NextRequest) {
           shortReplyStreak = 0;
         }
       }
+    }
+
+    const previousStance = (stanceActive ?? "none") as StanceOverlayType | "none";
+    const witnessCarryTurns = nextWitnessHysteresisTurns({
+      previousStance,
+      previousTurnsRemaining: stanceTurnsRemaining,
+      selectedStance: stanceOverlayType,
+      transcript: sttResult.transcript,
+      pressure,
+    });
+    if (stanceOverlayType === "none" && previousStance === "witness" && witnessCarryTurns > 0) {
+      stanceOverlayType = "witness";
+      overlaySuppressionReason = overlaySuppressionReason ?? "witness_hysteresis";
+      overlayTriggerReason = overlayTriggerReason === "none" ? "witness_hysteresis_hold" : overlayTriggerReason;
+    }
+    if (stanceOverlayType === "witness") {
+      stanceActive = "witness";
+      stanceTurnsRemaining = witnessCarryTurns;
+    } else {
+      stanceActive = stanceOverlayType === "none" ? null : stanceOverlayType;
+      stanceTurnsRemaining = 0;
     }
 
     if (!overlayPolicy.skip && overlayTypeActive === "curiosity_spiral") {
@@ -3119,6 +3410,11 @@ export async function POST(request: NextRequest) {
       const overlayText = await loadOverlay(tacticOverlayType);
       tacticOverlayBlock = `[OVERLAY]\n${overlayText}`;
     }
+    const styleGuardBlock = buildStyleGuardBlock({
+      stance: stanceOverlayType,
+      endearmentCooldownTurns,
+    });
+    endearmentCooldownTurns = nextEndearmentCooldownTurns(endearmentCooldownTurns, stanceOverlayType);
 
     const deferredProfileLines = buildDeferredProfileContextLines({
       isSessionStart: context.isSessionStart,
@@ -3171,6 +3467,9 @@ export async function POST(request: NextRequest) {
       queryCache,
       recentInjectedContextKeys,
       recentOverlayKeys,
+      stanceActive,
+      stanceTurnsRemaining,
+      endearmentCooldownTurns,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -3205,6 +3504,7 @@ export async function POST(request: NextRequest) {
         intent: overlayIntent,
         localHour: zoned.hour,
       }),
+      styleGuardBlock,
       userContextBlock,
       stanceOverlayBlock,
       tacticOverlayBlock,
@@ -3279,6 +3579,7 @@ export async function POST(request: NextRequest) {
     const systemBlockOrder = [
       "persona",
       "posture",
+      ...(styleGuardBlock ? ["style_guard"] : []),
       ...(userContextBlock ? ["user_context"] : []),
       ...(stanceOverlayBlock ? ["stance_overlay"] : []),
       ...(tacticOverlayBlock ? ["overlay"] : []),
@@ -3593,6 +3894,10 @@ export const __test__buildDeferredProfileContextLines = buildDeferredProfileCont
 export const __test__extractLocalTurnSignalLine = extractLocalTurnSignalLine;
 export const __test__selectUserContextCandidates = selectUserContextCandidates;
 export const __test__updateRecentInjectedContextKeys = updateRecentInjectedContextKeys;
+export const __test__resolvePolicySkipSelection = resolvePolicySkipSelection;
+export const __test__nextWitnessHysteresisTurns = nextWitnessHysteresisTurns;
+export const __test__buildStyleGuardBlock = buildStyleGuardBlock;
+export const __test__nextEndearmentCooldownTurns = nextEndearmentCooldownTurns;
 export const __test__buildStartbriefInjection = buildStartbriefInjection;
 export const __test__shouldInjectOpsSnippet = shouldInjectOpsSnippet;
 export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalMutualExclusion;

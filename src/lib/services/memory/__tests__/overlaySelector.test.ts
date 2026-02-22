@@ -104,6 +104,20 @@ async function main() {
     expect(decision.stanceOverlay).toBe("high_standards_friend");
   });
 
+  await runTest("momentum explicit deliverable usually keeps stance none", () => {
+    const decision = selectOverlay({
+      transcript: "Help me draft the launch update for today's deliverable",
+      posture: "MOMENTUM",
+      intent: "output_task",
+      conflictSignals: { pressure: "MED", riskLevel: "LOW" },
+      overlayUsed: {},
+      openLoops: ["ship launch update"],
+      commitments: [],
+      now: new Date("2026-02-22T12:00:00Z"),
+    });
+    expect(decision.stanceOverlay).toBe("none");
+  });
+
   await runTest("witness suppresses accountability_tug", () => {
     const decision = selectOverlay({
       transcript: "I feel overwhelmed and can we just sit with this for a minute",
