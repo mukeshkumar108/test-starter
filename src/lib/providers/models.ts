@@ -7,7 +7,7 @@ export const MODELS = {
     MENTOR: "bytedance-seed/seed-1.6-flash",
     SUPPORTIVE: "bytedance-seed/seed-1.6-flash", 
     COACH: "bytedance-seed/seed-1.6-flash",
-    CREATIVE: "bytedance-seed/seed-1.6-flash",
+    CREATIVE: "bytedance-seed/seed-1.6",
     ANALYTICAL: "bytedance-seed/seed-1.6-flash",
     SAFETY: "bytedance-seed/seed-1.6",
   },

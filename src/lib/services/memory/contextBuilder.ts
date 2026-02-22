@@ -26,6 +26,8 @@ export type DeferredProfileContext = {
   workContextLine?: string;
   longTermDirectionLine?: string;
   communicationPreferenceLine?: string;
+  dailyAnchorsLine?: string;
+  recentSignalsLine?: string;
 };
 
 export interface ConversationContext {
@@ -689,6 +691,86 @@ function extractText(value: unknown): string | null {
   return null;
 }
 
+function toDisplayKey(input: string) {
+  return input
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatSignalValue(value: unknown) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Number.isInteger(value) ? new Intl.NumberFormat("en-US").format(value) : String(value);
+  }
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (Array.isArray(value)) {
+    const items = value
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .slice(0, 2);
+    return items.length > 0 ? items.join(", ") : null;
+  }
+  if (isRecord(value)) {
+    return extractText(value);
+  }
+  return null;
+}
+
+function buildDailyAnchorsLine(value: unknown) {
+  if (!isRecord(value)) return null;
+  const preferredKeys = [
+    "steps_goal",
+    "sleep_goal",
+    "wake_time",
+    "bed_time",
+    "focus_block",
+    "hydration_goal",
+  ];
+  const used = new Set<string>();
+  const parts: string[] = [];
+
+  for (const key of preferredKeys) {
+    const formatted = formatSignalValue(value[key]);
+    if (!formatted) continue;
+    used.add(key);
+    parts.push(`${toDisplayKey(key)} ${formatted}`);
+    if (parts.length >= 2) break;
+  }
+
+  if (parts.length < 2) {
+    for (const [key, raw] of Object.entries(value)) {
+      if (used.has(key)) continue;
+      const formatted = formatSignalValue(raw);
+      if (!formatted) continue;
+      parts.push(`${toDisplayKey(key)} ${formatted}`);
+      if (parts.length >= 2) break;
+    }
+  }
+
+  if (parts.length === 0) return null;
+  return limitWords(`Daily anchors: ${parts.join("; ")}.`, 24);
+}
+
+function buildRecentSignalsLine(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const items = value
+    .map((item) => {
+      if (typeof item === "string" && item.trim()) return item.trim();
+      if (isRecord(item)) {
+        const extracted =
+          extractText(item) ??
+          (typeof item.signal === "string" ? item.signal.trim() : "") ??
+          (typeof item.label === "string" ? item.label.trim() : "");
+        return extracted || null;
+      }
+      return null;
+    })
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 2);
+  if (items.length === 0) return null;
+  return limitWords(`Recent signals: ${items.join("; ")}.`, 24);
+}
+
 function sourceRank(source: unknown) {
   if (source === "user_stated") return 2;
   if (source === "manual") return 1;
@@ -1022,6 +1104,14 @@ function toDeferredProfileContext(userModel: SynapseUserModelResponse | null): D
           24
         );
       }
+    }
+    const dailyAnchorsLine = buildDailyAnchorsLine(model.daily_anchors);
+    if (dailyAnchorsLine) {
+      output.dailyAnchorsLine = dailyAnchorsLine;
+    }
+    const recentSignalsLine = buildRecentSignalsLine(model.recent_signals);
+    if (recentSignalsLine) {
+      output.recentSignalsLine = recentSignalsLine;
     }
   }
   return output;

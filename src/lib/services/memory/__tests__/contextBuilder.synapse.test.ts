@@ -167,6 +167,8 @@ async function main() {
         ],
         patterns: [{ text: "Moves fast and then overcommits", source: "inferred", confidence: 0.7 }],
         preferences: { tone: "direct, warm", avoid: ["therapy-style"] },
+        daily_anchors: { steps_goal: 10000 },
+        recent_signals: [{ text: "Sleep dipped this week" }],
       },
     };
   };
@@ -220,6 +222,12 @@ async function main() {
   }
   if (!context.deferredProfileContext?.relationshipsLine?.includes("Ashley")) {
     throw new Error("Expected relationship context to be deferred into profile context");
+  }
+  if (!context.deferredProfileContext?.dailyAnchorsLine?.includes("steps goal")) {
+    throw new Error("Expected daily anchors to map into deferred profile context");
+  }
+  if (!context.deferredProfileContext?.recentSignalsLine?.includes("Sleep dipped")) {
+    throw new Error("Expected recent signals to map into deferred profile context");
   }
   if (context.situationalContext.includes("Long-term direction")) {
     throw new Error("Did not expect deferred profile lines to be injected on session open");

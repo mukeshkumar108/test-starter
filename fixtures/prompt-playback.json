@@ -54,6 +54,9 @@
     }
   ],
   "models": [
-    "bytedance-seed/seed-1.6-flash"
+    "bytedance-seed/seed-1.6-flash",
+    "nousresearch/hermes-3-llama-3.1-405b",
+    "neversleep/noromaid-20b",
+    "bytedance-seed/seed-1.6"
   ]
 }

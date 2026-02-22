@@ -33,9 +33,10 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
-  await runTest("overlay injected before bridge/handover/ops/supplemental", () => {
+  await runTest("user context and overlay injected in expected order", () => {
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
+      userContextBlock: "[USER_CONTEXT]\n- Daily anchors: steps goal 10,000.",
       overlayBlock: "[OVERLAY]\nOverlay text",
       bridgeBlock: "BRIDGE",
       handoverBlock: "HANDOVER",
@@ -47,6 +48,7 @@ async function main() {
 
     const contents = messages.map((message) => message.content);
     const indexPersona = contents.indexOf("PERSONA");
+    const indexUserContext = contents.findIndex((value) => value.startsWith("[USER_CONTEXT]"));
     const indexOverlay = contents.findIndex((value) => value.startsWith("[OVERLAY]"));
     const indexBridge = contents.indexOf("BRIDGE");
     const indexHandover = contents.indexOf("HANDOVER");
@@ -54,6 +56,8 @@ async function main() {
     const indexSupplemental = contents.findIndex((value) => value.startsWith("[SUPPLEMENTAL_CONTEXT]"));
 
     expect(indexPersona).toBe(0);
+    expect(indexUserContext).toBeGreaterThan(indexPersona);
+    expect(indexOverlay).toBeGreaterThan(indexUserContext);
     expect(indexOverlay).toBeGreaterThan(indexPersona);
     expect(indexBridge).toBeGreaterThan(indexOverlay);
     expect(indexHandover).toBeGreaterThan(indexBridge);

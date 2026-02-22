@@ -1456,6 +1456,7 @@ async function runLibrarianReflex(params: {
 function buildChatMessages(params: {
   persona: string;
   momentumGuardBlock?: string | null;
+  userContextBlock?: string | null;
   overlayBlock?: string | null;
   bridgeBlock?: string | null;
   handoverBlock?: string | null;
@@ -1478,6 +1479,7 @@ function buildChatMessages(params: {
   return [
     { role: "system" as const, content: params.persona },
     { role: "system" as const, content: postureBlock },
+    ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
     ...(params.overlayBlock ? [{ role: "system" as const, content: params.overlayBlock }] : []),
     ...(params.bridgeBlock ? [{ role: "system" as const, content: params.bridgeBlock }] : []),
     ...(params.handoverBlock ? [{ role: "system" as const, content: params.handoverBlock }] : []),
@@ -1941,6 +1943,8 @@ function buildDeferredProfileContextLines(params: {
   // - work context: only for momentum/output_task intent
   // - long-term direction: only for momentum + direct request
   // - communication preference: only when user asks about style/tone
+  // - daily anchors: only for momentum/practical posture
+  // - recent signals: only for companion/recovery posture
   if (params.isSessionStart || !params.profile) return [] as string[];
   const lines: string[] = [];
   const profile = params.profile;
@@ -1971,6 +1975,16 @@ function buildDeferredProfileContextLines(params: {
   const includeCommunicationPreference = isStyleRequest(params.transcript);
   if (includeCommunicationPreference && profile.communicationPreferenceLine) {
     lines.push(profile.communicationPreferenceLine);
+  }
+
+  const includeDailyAnchors = params.posture === "MOMENTUM" || params.posture === "PRACTICAL";
+  if (includeDailyAnchors && profile.dailyAnchorsLine) {
+    lines.push(profile.dailyAnchorsLine);
+  }
+
+  const includeRecentSignals = params.posture === "COMPANION" || params.posture === "RECOVERY";
+  if (includeRecentSignals && profile.recentSignalsLine) {
+    lines.push(profile.recentSignalsLine);
   }
 
   return Array.from(new Set(lines)).slice(0, 2);
@@ -2305,6 +2319,7 @@ export async function POST(request: NextRequest) {
     const gateExplicit = librarianResult?.gateExplicit ?? false;
     const gateExplicitTopicShift = librarianResult?.gateExplicitTopicShift ?? false;
     const postureConfidence = librarianResult?.postureConfidence ?? 0;
+    const avoidanceOrDrift = librarianResult?.avoidanceOrDrift ?? false;
     const correctionSignal = isExplicitAssistantCorrection(sttResult.transcript);
     const frictionSignal = hasCorrectionFrictionSignal(sttResult.transcript);
     if (frictionSignal) {
@@ -2759,12 +2774,27 @@ export async function POST(request: NextRequest) {
     }
     timings.overlay_ms = Date.now() - overlayStart;
 
+    const deferredProfileLines = buildDeferredProfileContextLines({
+      isSessionStart: context.isSessionStart,
+      profile: context.deferredProfileContext,
+      posture,
+      intent: overlayIntent,
+      isDirectRequest: overlayIsDirectRequest,
+      transcript: sttResult.transcript,
+      avoidanceOrDrift,
+    });
+    const userContextBlock =
+      deferredProfileLines.length > 0
+        ? `[USER_CONTEXT]\n${deferredProfileLines.map((line) => `- ${line}`).join("\n")}`
+        : null;
+
     const messages = buildChatMessages({
       persona: context.persona,
       momentumGuardBlock: buildMomentumGuardBlock({
         intent: overlayIntent,
         localHour: zoned.hour,
       }),
+      userContextBlock,
       overlayBlock,
       bridgeBlock,
       handoverBlock,
@@ -2834,6 +2864,7 @@ export async function POST(request: NextRequest) {
     const systemBlockOrder = [
       "persona",
       "posture",
+      ...(userContextBlock ? ["user_context"] : []),
       ...(overlayBlock ? ["overlay"] : []),
       ...(bridgeBlock ? ["bridge"] : []),
       ...(handoverBlock ? ["handover"] : []),

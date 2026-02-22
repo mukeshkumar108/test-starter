@@ -45,6 +45,7 @@ async function main() {
   await runTest("message order follows final prompt stack", () => {
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
+      userContextBlock: "[USER_CONTEXT]\n- Daily anchors: steps goal 10,000.",
       overlayBlock: "[OVERLAY]\nOverlay behavior",
       bridgeBlock: "BRIDGE",
       handoverBlock: "HANDOVER VERBATIM",
@@ -56,13 +57,14 @@ async function main() {
     const contents = messages.map((message) => message.content);
     expect(contents[0]).toBe("PERSONA");
     expect(contents[1].startsWith("[CONVERSATION_POSTURE]")).toBe(true);
-    expect(contents[2].startsWith("[OVERLAY]")).toBe(true);
-    expect(contents[3]).toBe("BRIDGE");
-    expect(contents[4]).toBe("HANDOVER VERBATIM");
-    expect(contents[5]).toBe("One useful thread to anchor on is walk daily.");
-    expect(contents[6].startsWith("[SUPPLEMENTAL_CONTEXT]")).toBe(true);
-    expect(contents[7]).toBe("prev");
-    expect(contents[8]).toBe("current user turn");
+    expect(contents[2].startsWith("[USER_CONTEXT]")).toBe(true);
+    expect(contents[3].startsWith("[OVERLAY]")).toBe(true);
+    expect(contents[4]).toBe("BRIDGE");
+    expect(contents[5]).toBe("HANDOVER VERBATIM");
+    expect(contents[6]).toBe("One useful thread to anchor on is walk daily.");
+    expect(contents[7].startsWith("[SUPPLEMENTAL_CONTEXT]")).toBe(true);
+    expect(contents[8]).toBe("prev");
+    expect(contents[9]).toBe("current user turn");
   });
 
   await runTest("legacy orientation blocks never appear in composed messages", () => {

@@ -131,6 +131,75 @@ async function main() {
     expect(lines.join("\n")).toContain("Current work context");
   });
 
+  await runTest("daily anchors inject for momentum/practical posture", () => {
+    const momentumLines = __test__buildDeferredProfileContextLines({
+      isSessionStart: false,
+      profile: {
+        dailyAnchorsLine: "Daily anchors: steps goal 10,000.",
+      },
+      posture: "MOMENTUM",
+      intent: "companion",
+      isDirectRequest: false,
+      transcript: "quick check-in",
+      avoidanceOrDrift: false,
+    });
+    expect(momentumLines.join("\n")).toContain("Daily anchors");
+
+    const practicalLines = __test__buildDeferredProfileContextLines({
+      isSessionStart: false,
+      profile: {
+        dailyAnchorsLine: "Daily anchors: steps goal 10,000.",
+      },
+      posture: "PRACTICAL",
+      intent: "companion",
+      isDirectRequest: false,
+      transcript: "quick check-in",
+      avoidanceOrDrift: false,
+    });
+    expect(practicalLines.join("\n")).toContain("Daily anchors");
+  });
+
+  await runTest("recent signals inject for companion/recovery posture only", () => {
+    const companionLines = __test__buildDeferredProfileContextLines({
+      isSessionStart: false,
+      profile: {
+        recentSignalsLine: "Recent signals: low sleep trend.",
+      },
+      posture: "COMPANION",
+      intent: "companion",
+      isDirectRequest: false,
+      transcript: "chat",
+      avoidanceOrDrift: false,
+    });
+    expect(companionLines.join("\n")).toContain("Recent signals");
+
+    const recoveryLines = __test__buildDeferredProfileContextLines({
+      isSessionStart: false,
+      profile: {
+        recentSignalsLine: "Recent signals: low sleep trend.",
+      },
+      posture: "RECOVERY",
+      intent: "companion",
+      isDirectRequest: false,
+      transcript: "chat",
+      avoidanceOrDrift: false,
+    });
+    expect(recoveryLines.join("\n")).toContain("Recent signals");
+
+    const momentumLines = __test__buildDeferredProfileContextLines({
+      isSessionStart: false,
+      profile: {
+        recentSignalsLine: "Recent signals: low sleep trend.",
+      },
+      posture: "MOMENTUM",
+      intent: "momentum",
+      isDirectRequest: false,
+      transcript: "focus",
+      avoidanceOrDrift: false,
+    });
+    expect(momentumLines.length).toBe(0);
+  });
+
   const failed = results.filter((result) => !result.passed);
   if (failed.length > 0) {
     console.error("\nSituational context policy tests failed:");

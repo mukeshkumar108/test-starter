@@ -106,6 +106,8 @@ export type SynapseUserModelResponse = {
     work_context?: unknown;
     patterns?: unknown[];
     preferences?: Record<string, unknown> | null;
+    daily_anchors?: unknown;
+    recent_signals?: unknown[];
     health?: unknown;
     spirituality?: unknown;
   } | null;
