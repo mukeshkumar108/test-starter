@@ -13,6 +13,8 @@
 - Added librarian trace metadata for startbrief path:
   - `startbrief_quality` (`usable` | `weak_rejected`)
   - `summary_content_quality`
+- Removed explicit lexical session-close trigger (`bye`/`goodnight`) from chat route.
+- Removed duplicate stale-close invocation in chat route; `ensureActiveSession` is now the single lifecycle path.
 
 ## Validation Done
 - `pnpm tsx src/lib/services/session/__tests__/sessionSynapseIngest.test.ts`

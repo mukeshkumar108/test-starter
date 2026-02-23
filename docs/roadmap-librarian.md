@@ -10,7 +10,7 @@
 1. Cache `/session/brief` per session for 2–5 minutes.
 2. Sort recall sheet by relevance, cap to 3–5 facts.
 3. Make thresholds configurable via env (`LIBRARIAN_EXPLICIT_THRESHOLD`, `LIBRARIAN_AMBIENT_THRESHOLD`).
-4. Add “goodbye” / “talk later” detection to end sessions early.
+4. Add lifecycle telemetry for session boundaries (close reason, ingest enqueue status, retry state).
 
 ## Bigger Wins (2–4 weeks)
 1. Latency telemetry for gate/spec/relevance vs main LLM.

@@ -28,6 +28,7 @@ It is intentionally simple: **bookend memory** (brief at session start, ingest a
    - If `now - last_user_message > 5 min`, close session (configurable)
    - Open or continue the active session
    - Session close triggers Synapse `/session/ingest` (async)
+   - No lexical “bye/goodnight” auto-close trigger in chat route
 4. `buildContext(...)` in `contextBuilder.ts`
    - Load persona prompt
    - Load last 8 messages (working memory)

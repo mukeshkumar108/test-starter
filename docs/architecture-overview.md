@@ -19,6 +19,7 @@ The system optimizes for continuity without bloating every request.
 
 ### 2) Session Boundary (Bookends)
 - A session ends when **last user message > 5 minutes** (configurable)
+- Session close is lifecycle-driven (no lexical “bye”/“goodnight” trigger)
 - On close, we send the full transcript to Synapse `/session/ingest`
 - On start, we pull Synapse `/session/startbrief` (cached per session)
 - `/session/brief` is fallback-only

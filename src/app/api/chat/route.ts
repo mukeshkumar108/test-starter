@@ -38,7 +38,7 @@ import {
   type TurnTier,
   type RoutingMoment,
 } from "@/lib/providers/models";
-import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
+import { ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
 import type { SynapseStartBriefResponse } from "@/lib/services/synapseClient";
 
@@ -532,18 +532,6 @@ function getSessionContext(sessionState?: any) {
       : "unknown";
 
   return `[SESSION STATE] Time Since Last Interaction: ${timeSince} Message Count: ${messageCount}`;
-}
-
-function isEndOfSessionIntent(transcript: string) {
-  const lowered = transcript.toLowerCase();
-  const patterns = [
-    "bye",
-    "talk later",
-    "see you",
-    "goodnight",
-    "catch you later",
-  ];
-  return patterns.some((pattern) => lowered.includes(pattern));
 }
 
 type MemoryGateResult = {
@@ -3120,7 +3108,6 @@ export async function POST(request: NextRequest) {
     }
 
     const now = new Date();
-    await closeStaleSessionIfAny(user.id, personaId, now);
     const session = await ensureActiveSession(user.id, personaId, now);
 
     // Step 2: Build conversation context
@@ -4114,7 +4101,6 @@ export async function POST(request: NextRequest) {
       console.warn("[rolling.summary.err]", { userId: user.id, personaId, error });
     });
 
-    const shouldCloseSession = isEndOfSessionIntent(sttResult.transcript);
 
     const tracePayload = buildChatTrace({
       traceId,
@@ -4177,12 +4163,6 @@ export async function POST(request: NextRequest) {
       requestId,
       ...(debugPayload ? { debug: debugPayload } : {}),
     });
-
-    if (shouldCloseSession) {
-      void closeSessionOnExplicitEnd(user.id, personaId, new Date()).catch((error) => {
-        console.warn("[session.close.err]", { userId: user.id, personaId, requestId, error });
-      });
-    }
 
     return payload;
 

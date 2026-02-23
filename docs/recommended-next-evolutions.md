@@ -12,5 +12,5 @@ Cache session briefs for a few minutes to reduce repeated calls on fast turn‑t
 4. **Tool orchestration**
 Add tool calls (calendar, gmail) behind a clean router layer once memory is stable.
 
-5. **Session end heuristics**
-Add explicit “goodbye” detection or user intent to close sessions sooner.
+5. **Session lifecycle hardening**
+Keep session close behavior lifecycle-driven (inactivity/session boundary signals), not lexical “goodbye” triggers.
