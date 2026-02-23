@@ -20,6 +20,7 @@ import {
   __test__buildBouncerAuthorityTraceFields,
   __test__buildMomentumGuardBlock,
   __test__shouldInjectSignalPack,
+  __test__buildContextGovernorSelection,
 } from "../chat/route";
 
 type TestResult = { name: string; passed: boolean; error?: string };
@@ -219,6 +220,53 @@ async function main() {
       isUrgent: false,
     });
     expect(useSignalPack).toBe(true);
+  });
+
+  await runTest("context governor suppresses overlapping signal loop classes when handover exists", () => {
+    const governed = __test__buildContextGovernorSelection({
+      userContextBlock: "[USER_CONTEXT]\n- Local (now): focused on this conversation.",
+      signalPackBlock:
+        "Signal Pack (private):\n- [open_loops] Follow up on pending item.\n- [state] Feels emotionally raw.",
+      bridgeBlock: "Bridge note.",
+      handoverBlock: "Handover note.",
+      opsSnippetBlock: "One useful thread to anchor on is the pending item.",
+      intent: "companion",
+      posture: "RELATIONSHIP",
+      pressure: "MED",
+      stance: "none",
+      riskLevel: "LOW",
+    });
+    expect(governed.handoverBlock ?? "").toBe("Handover note.");
+    expect(governed.signalPackBlock ?? "").toContain("[state] Feels emotionally raw.");
+    expect(governed.signalPackBlock ?? "").notToContain("[open_loops]");
+  });
+
+  await runTest("context governor enforces context budget", () => {
+    const lineA = `A-${"x".repeat(250)}`;
+    const lineB = `B-${"x".repeat(250)}`;
+    const lineC = `C-${"x".repeat(250)}`;
+    const lineD = `D-${"x".repeat(250)}`;
+    const lineE = `E-${"x".repeat(250)}`;
+    const governed = __test__buildContextGovernorSelection({
+      userContextBlock: `[USER_CONTEXT]\n- ${lineA}\n- ${lineB}\n- ${lineC}\n- ${lineD}\n- ${lineE}`,
+      signalPackBlock: `Signal Pack (private):\n- [identity] ${lineA}\n- [state] ${lineB}`,
+      bridgeBlock: lineC,
+      handoverBlock: lineD,
+      opsSnippetBlock: lineE,
+      intent: "momentum",
+      posture: "MOMENTUM",
+      pressure: "MED",
+      stance: "none",
+      riskLevel: "LOW",
+    });
+    const totalChars =
+      (governed.userContextBlock?.length ?? 0) +
+      (governed.signalPackBlock?.length ?? 0) +
+      (governed.bridgeBlock?.length ?? 0) +
+      (governed.handoverBlock?.length ?? 0) +
+      (governed.opsSnippetBlock?.length ?? 0);
+    expect(totalChars <= 1200).toBe(true);
+    expect(governed.runtime.dropped_by_reason.budget > 0).toBe(true);
   });
 
   await runTest("magic moment is prioritized in selected user context candidates", () => {
