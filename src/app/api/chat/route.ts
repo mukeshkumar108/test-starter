@@ -1952,6 +1952,7 @@ function buildChatMessages(params: {
   momentumGuardBlock?: string | null;
   styleGuardBlock?: string | null;
   userContextBlock?: string | null;
+  signalPackBlock?: string | null;
   stanceOverlayBlock?: string | null;
   tacticOverlayBlock?: string | null;
   overlayBlock?: string | null;
@@ -1993,6 +1994,7 @@ function buildChatMessages(params: {
     { role: "system" as const, content: postureBlock },
     ...(params.styleGuardBlock ? [{ role: "system" as const, content: params.styleGuardBlock }] : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
+    ...(params.signalPackBlock ? [{ role: "system" as const, content: params.signalPackBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
     ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
     ...(params.overlayBlock ? [{ role: "system" as const, content: params.overlayBlock }] : []),
@@ -2119,6 +2121,36 @@ function buildMomentumGuardBlock(params: {
     );
   }
   return lines.join("\n");
+}
+
+function shouldInjectSignalPack(params: {
+  signalPackBlock?: string | null;
+  isSessionStart: boolean;
+  intent: OverlayIntent;
+  posture: ConversationPosture;
+  pressure: ConversationPressure;
+  stance: StanceOverlayType | "none";
+  riskLevel: RiskLevel;
+  isUrgent: boolean;
+}) {
+  if (!params.signalPackBlock) return false;
+  if (params.isSessionStart) return false;
+  if (params.isUrgent) return false;
+  if (params.riskLevel === "HIGH" || params.riskLevel === "CRISIS") return false;
+  if (params.stance === "witness" && params.pressure === "HIGH") return false;
+
+  const isTaskingTurn =
+    params.intent === "momentum" || params.intent === "output_task" || params.posture === "PRACTICAL";
+  if (isTaskingTurn) return true;
+
+  const isRelationalTurn =
+    params.intent === "companion" ||
+    params.posture === "COMPANION" ||
+    params.posture === "RELATIONSHIP" ||
+    params.posture === "REFLECTION";
+  if (isRelationalTurn) return true;
+
+  return params.posture === "IDEATION" || params.posture === "MOMENTUM";
 }
 
 function shouldTriggerDailyFocus(params: {
@@ -3865,6 +3897,19 @@ export async function POST(request: NextRequest) {
     }
     timings.overlay_ms = Date.now() - overlayStart;
 
+    const signalPackBlock = shouldInjectSignalPack({
+      signalPackBlock: context.signalPackBlock ?? null,
+      isSessionStart: context.isSessionStart,
+      intent: overlayIntent,
+      posture,
+      pressure,
+      stance: stanceOverlayType,
+      riskLevel,
+      isUrgent: effectiveSignals.isUrgent,
+    })
+      ? context.signalPackBlock ?? null
+      : null;
+
     const messages = buildChatMessages({
       persona: context.persona,
       momentumGuardBlock: buildMomentumGuardBlock({
@@ -3874,6 +3919,7 @@ export async function POST(request: NextRequest) {
       }),
       styleGuardBlock,
       userContextBlock,
+      signalPackBlock,
       stanceOverlayBlock,
       tacticOverlayBlock,
       bridgeBlock,
@@ -3950,6 +3996,7 @@ export async function POST(request: NextRequest) {
       "posture",
       ...(styleGuardBlock ? ["style_guard"] : []),
       ...(userContextBlock ? ["user_context"] : []),
+      ...(signalPackBlock ? ["signal_pack"] : []),
       ...(stanceOverlayBlock ? ["stance_overlay"] : []),
       ...(tacticOverlayBlock ? ["overlay"] : []),
       ...(bridgeBlock ? ["bridge"] : []),
@@ -4289,6 +4336,7 @@ export const __test__buildStyleGuardBlock = buildStyleGuardBlock;
 export const __test__nextEndearmentCooldownTurns = nextEndearmentCooldownTurns;
 export const __test__buildStartbriefInjection = buildStartbriefInjection;
 export const __test__shouldInjectOpsSnippet = shouldInjectOpsSnippet;
+export const __test__shouldInjectSignalPack = shouldInjectSignalPack;
 export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalMutualExclusion;
 export const __test__deriveTurnConstraintsFromTranscript = deriveTurnConstraintsFromTranscript;
 export const __test__resolveEffectiveOverlaySignals = resolveEffectiveOverlaySignals;

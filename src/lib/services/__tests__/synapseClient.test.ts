@@ -224,6 +224,54 @@ async function main() {
   expect((result as any)?.metadata?.quality_flag).toBe("needs_review");
   });
 
+  await runTest("signalsPack() hits correct URL and normalizes classes", async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo, init?: RequestInit) => {
+    calls.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(
+      JSON.stringify({
+        generated_at: "2026-02-23T08:20:00.000Z",
+        session_id: "session-1",
+        classes: {
+          identity: [
+            {
+              id: "sig-1",
+              class: "identity",
+              text: "  Prefers direct replies.  ",
+              confidence: 0.9,
+              salience: 0.8,
+              sensitivity: "LOW",
+            },
+          ],
+          today: [{ id: "sig-2", class: "today", text: 1 }],
+        },
+        debug: { source: "test" },
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  const { signalsPack } = await import("../synapseClient");
+  const result = await signalsPack({
+    tenantId: "tenant-test",
+    userId: "user-1",
+    sessionId: "session-1",
+    now: "2026-02-23T08:20:00.000Z",
+  });
+
+  globalThis.fetch = originalFetch;
+
+  expect(calls.length).toBe(1);
+  expect(calls[0].url).toBe(
+    "https://synapse.test/signals/pack?tenantId=tenant-test&userId=user-1&sessionId=session-1&now=2026-02-23T08%3A20%3A00.000Z"
+  );
+  expect((result as any)?.classes?.identity?.length).toBe(1);
+  expect((result as any)?.classes?.identity?.[0]?.text).toBe("  Prefers direct replies.  ");
+  expect((result as any)?.classes?.today?.length).toBe(1);
+  expect((result as any)?.classes?.open_loops?.length).toBe(0);
+  });
+
   await runTest("ingest() hits correct URL", async () => {
   const calls: Array<{ url: string; body: string }> = [];
   const originalFetch = globalThis.fetch;

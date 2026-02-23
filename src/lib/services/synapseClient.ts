@@ -134,6 +134,33 @@ export type SynapseDailyAnalysisResponse = {
   } | null;
 };
 
+export type SynapseSignalPackClassName =
+  | "identity"
+  | "trajectory"
+  | "today"
+  | "open_loops"
+  | "state"
+  | "relationships";
+
+export type SynapseSignalPackItem = {
+  id: string | null;
+  class: SynapseSignalPackClassName;
+  text: string | null;
+  confidence: number | null;
+  salience: number | null;
+  sensitivity: string | null;
+  recency_ts: string | null;
+  source: string | null;
+  surface_policy: string | null;
+};
+
+export type SynapseSignalsPackResponse = {
+  generated_at: string | null;
+  session_id: string | null;
+  classes: Record<SynapseSignalPackClassName, SynapseSignalPackItem[]>;
+  debug: Record<string, unknown> | null;
+};
+
 function toNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -374,6 +401,72 @@ function normalizeSynapseDailyAnalysisResponse(payload: unknown): SynapseDailyAn
   };
 }
 
+function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPackResponse {
+  const emptyClasses: Record<SynapseSignalPackClassName, SynapseSignalPackItem[]> = {
+    identity: [],
+    trajectory: [],
+    today: [],
+    open_loops: [],
+    state: [],
+    relationships: [],
+  };
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      generated_at: null,
+      session_id: null,
+      classes: emptyClasses,
+      debug: null,
+    };
+  }
+  const value = payload as Record<string, unknown>;
+  const rawClasses =
+    value.classes && typeof value.classes === "object" && !Array.isArray(value.classes)
+      ? (value.classes as Record<string, unknown>)
+      : {};
+  const classNames: SynapseSignalPackClassName[] = [
+    "identity",
+    "trajectory",
+    "today",
+    "open_loops",
+    "state",
+    "relationships",
+  ];
+  const classes = classNames.reduce(
+    (acc, className) => {
+      const rows = Array.isArray(rawClasses[className]) ? (rawClasses[className] as unknown[]) : [];
+      acc[className] = rows
+        .map((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+          const item = row as Record<string, unknown>;
+          return {
+            id: toNullableString(item.id),
+            class: className,
+            text: toNullableString(item.text),
+            confidence: toNullableNumber(item.confidence),
+            salience: toNullableNumber(item.salience),
+            sensitivity: toNullableString(item.sensitivity),
+            recency_ts: toNullableString(item.recency_ts),
+            source: toNullableString(item.source),
+            surface_policy: toNullableString(item.surface_policy),
+          } satisfies SynapseSignalPackItem;
+        })
+        .filter((item): item is SynapseSignalPackItem => Boolean(item));
+      return acc;
+    },
+    { ...emptyClasses } as Record<SynapseSignalPackClassName, SynapseSignalPackItem[]>
+  );
+  const debug =
+    value.debug && typeof value.debug === "object" && !Array.isArray(value.debug)
+      ? (value.debug as Record<string, unknown>)
+      : null;
+  return {
+    generated_at: toNullableString(value.generated_at),
+    session_id: toNullableString(value.session_id),
+    classes,
+    debug,
+  };
+}
+
 const DEFAULT_TIMEOUT_MS = 3000;
 
 function resolveTimeoutMs() {
@@ -564,6 +657,23 @@ export async function dailyAnalysis<TPayload = unknown, TResponse = unknown>(
   const result = await requestJson<undefined, TResponse>("GET", path);
   if (!result?.ok) return null;
   return normalizeSynapseDailyAnalysisResponse(result.data) as TResponse;
+}
+
+export async function signalsPack<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const params = new URLSearchParams();
+  const asRecord = (payload ?? {}) as Record<string, unknown>;
+  for (const key of ["tenantId", "userId", "sessionId", "now"]) {
+    const value = asRecord[key];
+    if (typeof value === "string" && value.length > 0) {
+      params.set(key, value);
+    }
+  }
+  const path = `/signals/pack${params.toString() ? `?${params.toString()}` : ""}`;
+  const result = await requestJson<undefined, TResponse>("GET", path);
+  if (!result?.ok) return null;
+  return normalizeSynapseSignalsPackResponse(result.data) as TResponse;
 }
 
 export async function ingest<TPayload = unknown, TResponse = unknown>(

@@ -4,6 +4,9 @@ import * as synapseClient from "@/lib/services/synapseClient";
 import type {
   SynapseBriefResponse,
   SynapseDailyAnalysisResponse,
+  SynapseSignalPackClassName,
+  SynapseSignalPackItem,
+  SynapseSignalsPackResponse,
   SynapseMemoryLoopItem,
   SynapseMemoryLoopsResponse,
   SynapseStartBriefResponse,
@@ -33,6 +36,7 @@ export type DeferredProfileContext = {
 export interface ConversationContext {
   persona: string;
   situationalContext?: string;
+  signalPackBlock?: string;
   sessionStartHandoff?: SessionStartHandoff;
   deferredProfileContext?: DeferredProfileContext;
   startbriefPacket?: SynapseStartBriefResponse;
@@ -67,10 +71,51 @@ const USER_MODEL_SESSION_KEY = "userModelSessionId";
 const USER_MODEL_DATA_KEY = "userModelData";
 const DAILY_ANALYSIS_SESSION_KEY = "dailyAnalysisSessionId";
 const DAILY_ANALYSIS_DATA_KEY = "dailyAnalysisData";
+const SIGNAL_PACK_SESSION_KEY = "signalsPackSessionId";
+const SIGNAL_PACK_DATA_KEY = "signalsPackData";
+const SIGNAL_PACK_BLOCK_MAX_CHARS = 900;
 const briefCache = new Map<
   string,
   { fetchedAt: number; brief: SynapseBriefResponse }
 >();
+
+const SIGNAL_PACK_CLASS_ORDER: SynapseSignalPackClassName[] = [
+  "identity",
+  "trajectory",
+  "today",
+  "open_loops",
+  "state",
+  "relationships",
+];
+
+const SIGNAL_PACK_CLASS_LIMITS: Record<SynapseSignalPackClassName, number> = {
+  identity: 3,
+  trajectory: 3,
+  today: 3,
+  open_loops: 3,
+  state: 3,
+  relationships: 3,
+};
+
+type SignalsPackEmittedCounts = Record<SynapseSignalPackClassName, number>;
+
+type SignalsPackRuntime = {
+  used: boolean;
+  counts: SignalsPackEmittedCounts;
+  error: string | null;
+  block: string | null;
+};
+
+function createEmptySignalsPackCounts(): SignalsPackEmittedCounts {
+  return {
+    identity: 0,
+    trajectory: 0,
+    today: 0,
+    open_loops: 0,
+    state: 0,
+    relationships: 0,
+  };
+}
 
 type SessionWindow = { startedAt: Date; endedAt: Date | null };
 
@@ -659,6 +704,28 @@ function withStartBriefForSession(
   };
 }
 
+function getSignalsPackForSession(state: unknown, sessionId: string) {
+  if (!sessionId) return null;
+  const scoped = asStateRecord(state)[SIGNAL_PACK_SESSION_KEY];
+  if (typeof scoped !== "string" || scoped !== sessionId) return null;
+  const raw = asStateRecord(state)[SIGNAL_PACK_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw as SynapseSignalsPackResponse;
+}
+
+function withSignalsPackForSession(
+  state: unknown,
+  sessionId: string,
+  pack: SynapseSignalsPackResponse
+) {
+  const base = asStateRecord(state);
+  return {
+    ...base,
+    [SIGNAL_PACK_SESSION_KEY]: sessionId,
+    [SIGNAL_PACK_DATA_KEY]: pack,
+  };
+}
+
 function getSynapseBrief() {
   const override = (globalThis as { __synapseBriefOverride?: typeof synapseClient.sessionBrief })
     .__synapseBriefOverride;
@@ -687,6 +754,12 @@ function getSynapseDailyAnalysis() {
   const override = (globalThis as { __synapseDailyAnalysisOverride?: typeof synapseClient.dailyAnalysis })
     .__synapseDailyAnalysisOverride;
   return typeof override === "function" ? override : synapseClient.dailyAnalysis;
+}
+
+function getSynapseSignalsPack() {
+  const override = (globalThis as { __synapseSignalsPackOverride?: typeof synapseClient.signalsPack })
+    .__synapseSignalsPackOverride;
+  return typeof override === "function" ? override : synapseClient.signalsPack;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1139,6 +1212,61 @@ function toDeferredProfileContext(userModel: SynapseUserModelResponse | null): D
   return output;
 }
 
+function normalizeSignalPackLineText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function shouldUseSignalPackSteeringNote(item: SynapseSignalPackItem) {
+  const sensitivity = (item.sensitivity ?? "").toUpperCase();
+  const surfacePolicy = (item.surface_policy ?? "").toLowerCase();
+  return sensitivity === "HIGH" || surfacePolicy === "steer_only";
+}
+
+function buildSignalPackLine(item: SynapseSignalPackItem) {
+  if (shouldUseSignalPackSteeringNote(item)) {
+    return `- [${item.class}] Sensitive item present: steer gently, avoid verbatim repetition.`;
+  }
+  const text = normalizeSignalPackLineText(item.text ?? "");
+  if (!text) return null;
+  return `- [${item.class}] ${text}`;
+}
+
+function buildSignalPackRuntime(pack: SynapseSignalsPackResponse | null): SignalsPackRuntime {
+  const counts = createEmptySignalsPackCounts();
+  if (!pack || !pack.classes) {
+    return { used: false, counts, error: null, block: null };
+  }
+  const lines: string[] = [];
+  let charsUsed = 0;
+  for (const className of SIGNAL_PACK_CLASS_ORDER) {
+    const classItems = Array.isArray(pack.classes[className]) ? pack.classes[className] : [];
+    const limit = SIGNAL_PACK_CLASS_LIMITS[className];
+    let emittedForClass = 0;
+    for (const item of classItems) {
+      if (emittedForClass >= limit) break;
+      const line = buildSignalPackLine(item);
+      if (!line) continue;
+      const projectedChars = charsUsed + line.length + (lines.length > 0 ? 1 : 0);
+      if (projectedChars > SIGNAL_PACK_BLOCK_MAX_CHARS) {
+        break;
+      }
+      lines.push(line);
+      charsUsed = projectedChars;
+      emittedForClass += 1;
+    }
+    counts[className] = emittedForClass;
+  }
+  if (lines.length === 0) {
+    return { used: false, counts, error: null, block: null };
+  }
+  return {
+    used: true,
+    counts,
+    error: null,
+    block: `Signal Pack (private):\n${lines.join("\n")}`,
+  };
+}
+
 function getUserModelForSession(state: unknown, sessionId: string) {
   if (!sessionId) return null;
   const scoped = asStateRecord(state)[USER_MODEL_SESSION_KEY];
@@ -1230,8 +1358,52 @@ export async function buildContextFromSynapse(
   const cachedStartBrief = getStartBriefForSession(sessionState?.state, sessionId);
   const cachedUserModel = getUserModelForSession(sessionState?.state, sessionId);
   const cachedDailyAnalysis = getDailyAnalysisForSession(sessionState?.state, sessionId);
+  const cachedSignalsPack = getSignalsPackForSession(sessionState?.state, sessionId);
+  let workingState = sessionState?.state;
+  let fetchedSignalsPack: SynapseSignalsPackResponse | null = null;
   const deferredProfileContext = toDeferredProfileContext(cachedUserModel);
   let rejectedSummaryContentQuality: string | null = null;
+  let signalsPackRuntime: SignalsPackRuntime = {
+    used: false,
+    counts: createEmptySignalsPackCounts(),
+    error: null,
+    block: null,
+  };
+
+  if (cachedSignalsPack) {
+    signalsPackRuntime = buildSignalPackRuntime(cachedSignalsPack);
+  } else if (isSessionStart) {
+    try {
+      const signalsPack = await getSynapseSignalsPack()<{
+        tenantId?: string;
+        userId: string;
+        sessionId: string;
+        now: string;
+      }, SynapseSignalsPackResponse>({
+        tenantId: env.SYNAPSE_TENANT_ID,
+        userId,
+        sessionId,
+        now: new Date().toISOString(),
+      });
+      signalsPackRuntime = buildSignalPackRuntime(signalsPack);
+      if (signalsPack) {
+        fetchedSignalsPack = signalsPack;
+        workingState = withSignalsPackForSession(workingState, sessionId, signalsPack);
+        await prisma.sessionState.upsert({
+          where: { userId_personaId: { userId, personaId } },
+          update: { state: workingState as any, updatedAt: new Date() },
+          create: { userId, personaId, state: workingState as any },
+        });
+      }
+    } catch (error) {
+      signalsPackRuntime = {
+        used: false,
+        counts: createEmptySignalsPackCounts(),
+        error: error instanceof Error ? error.message : String(error),
+        block: null,
+      };
+    }
+  }
 
   if (cachedStartBrief && isUsableStartBrief(cachedStartBrief)) {
     const cachedItemsCount = Array.isArray(cachedStartBrief.items) ? cachedStartBrief.items.length : 0;
@@ -1254,6 +1426,9 @@ export async function buildContextFromSynapse(
             startbrief_quality: "usable",
             summary_content_quality: cachedSummaryContentQuality,
             source: "session_cache",
+            signals_pack_used: signalsPackRuntime.used,
+            signals_pack_counts: signalsPackRuntime.counts,
+            signals_pack_error: signalsPackRuntime.error,
           },
           brief: cachedStartBrief as any,
         },
@@ -1276,6 +1451,7 @@ export async function buildContextFromSynapse(
             .filter(Boolean)
             .join("\n")
         : undefined,
+      signalPackBlock: isSessionStart ? undefined : signalsPackRuntime.block ?? undefined,
       sessionStartHandoff: isSessionStart ? startHandoff : undefined,
       deferredProfileContext,
       startbriefPacket: cachedStartBrief,
@@ -1335,7 +1511,15 @@ export async function buildContextFromSynapse(
       const userModel = userModelResult ?? { exists: false };
       const dailyAnalysis =
         dailyAnalysisResult && dailyAnalysisResult.exists !== false ? dailyAnalysisResult : null;
-      const stateWithStartBrief = withStartBriefForSession(sessionState?.state, sessionId, startBrief);
+      const stateWithSignalCache =
+        fetchedSignalsPack && !cachedSignalsPack
+          ? withSignalsPackForSession(workingState, sessionId, fetchedSignalsPack)
+          : workingState;
+      const stateWithStartBrief = withStartBriefForSession(
+        stateWithSignalCache,
+        sessionId,
+        startBrief
+      );
       const stateWithUserModel = withUserModelForSession(stateWithStartBrief, sessionId, userModel);
       const nextState = dailyAnalysis
         ? withDailyAnalysisForSession(stateWithUserModel, sessionId, dailyAnalysis)
@@ -1365,6 +1549,9 @@ export async function buildContextFromSynapse(
               startbrief_quality: "usable",
               summary_content_quality: startSummaryContentQuality,
               source: "synapse_startbrief",
+              signals_pack_used: signalsPackRuntime.used,
+              signals_pack_counts: signalsPackRuntime.counts,
+              signals_pack_error: signalsPackRuntime.error,
             },
             brief: startBrief as any,
           },
@@ -1386,6 +1573,7 @@ export async function buildContextFromSynapse(
         ]
           .filter(Boolean)
           .join("\n"),
+        signalPackBlock: undefined,
         sessionStartHandoff: startHandoff,
         deferredProfileContext: fetchedDeferredProfileContext,
         startbriefPacket: startBrief,
@@ -1459,6 +1647,7 @@ export async function buildContextFromSynapse(
     return {
       persona: personaPrompt,
       situationalContext: undefined,
+      signalPackBlock: signalsPackRuntime.block ?? undefined,
       deferredProfileContext,
       startbriefPacket: undefined,
       startbriefFetch: null,
@@ -1525,6 +1714,9 @@ export async function buildContextFromSynapse(
             startbrief_quality: "weak_rejected",
             summary_content_quality: rejectedSummaryContentQuality,
             source: "session_brief_cache",
+            signals_pack_used: signalsPackRuntime.used,
+            signals_pack_counts: signalsPackRuntime.counts,
+            signals_pack_error: signalsPackRuntime.error,
           },
         },
       }).catch((error) => {
@@ -1534,6 +1726,7 @@ export async function buildContextFromSynapse(
     return {
       persona: personaPrompt,
       situationalContext: situationalWithTrajectory ?? undefined,
+      signalPackBlock: signalsPackRuntime.block ?? undefined,
       startbriefPacket: undefined,
       startbriefFetch: null,
       rollingSummary,
@@ -1609,6 +1802,9 @@ export async function buildContextFromSynapse(
           startbrief_quality: "weak_rejected",
           summary_content_quality: rejectedSummaryContentQuality,
           source: "session_brief_fetch",
+          signals_pack_used: signalsPackRuntime.used,
+          signals_pack_counts: signalsPackRuntime.counts,
+          signals_pack_error: signalsPackRuntime.error,
         },
       },
     }).catch((error) => {
@@ -1632,6 +1828,7 @@ export async function buildContextFromSynapse(
   return {
     persona: personaPrompt,
     situationalContext: situationalWithTrajectory ?? undefined,
+    signalPackBlock: signalsPackRuntime.block ?? undefined,
     startbriefPacket: undefined,
     startbriefFetch: null,
     rollingSummary,
@@ -1686,6 +1883,7 @@ async function buildContextLocal(
     return {
       persona: personaPrompt,
       situationalContext: undefined,
+      signalPackBlock: undefined,
       startbriefPacket: undefined,
       startbriefFetch: null,
       rollingSummary,

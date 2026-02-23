@@ -59,6 +59,8 @@ function expect<T>(actual: T) {
 }
 
 async function main() {
+  (globalThis as any).__synapseSignalsPackOverride = async () => null;
+
   await runTest("buildContextFromSynapse maps startbrief payload", async () => {
   const { prisma } = await import("../../../prisma");
   const { buildContextFromSynapse } = await import("../contextBuilder");
@@ -90,6 +92,7 @@ async function main() {
   let loopsPayload: any = null;
   let userModelPayload: any = null;
   let dailyAnalysisPayload: any = null;
+  let signalsPackPayload: any = null;
 
   (globalThis as any).__synapseStartBriefOverride = async (payload: any) => {
     startBriefPayload = payload;
@@ -163,7 +166,7 @@ async function main() {
           confidence: 0.9,
         },
         key_relationships: [
-          { name: "Ashley", who: "partner", source: "user_stated", confidence: 0.9 },
+          { name: "RELATION_A", who: "close_contact", source: "user_stated", confidence: 0.9 },
         ],
         patterns: [{ text: "Moves fast and then overcommits", source: "inferred", confidence: 0.7 }],
         preferences: { tone: "direct, warm", avoid: ["therapy-style"] },
@@ -182,6 +185,67 @@ async function main() {
       metadata: { quality_flag: "ok" },
     };
   };
+  (globalThis as any).__synapseSignalsPackOverride = async (payload: any) => {
+    signalsPackPayload = payload;
+    return {
+      generated_at: "2026-02-23T08:27:00.000Z",
+      session_id: "session-1",
+      classes: {
+        identity: [
+          {
+            id: "sig-identity-1",
+            class: "identity",
+            text: "User prefers direct communication.",
+            confidence: 0.93,
+            salience: 0.82,
+            sensitivity: "LOW",
+            recency_ts: "2026-02-23T08:20:00.000Z",
+            source: "memory",
+          },
+        ],
+        trajectory: [],
+        today: [],
+        open_loops: [
+          {
+            id: "sig-open-1",
+            class: "open_loops",
+            text: "Sensitive relationship repair thread still unresolved.",
+            confidence: 0.97,
+            salience: 0.9,
+            sensitivity: "HIGH",
+            recency_ts: "2026-02-23T08:25:00.000Z",
+            source: "memory",
+          },
+        ],
+        state: [
+          {
+            id: "sig-state-1",
+            class: "state",
+            text: "Tired and groggy this morning.",
+            confidence: 0.8,
+            salience: 0.7,
+            sensitivity: "LOW",
+            recency_ts: "2026-02-23T08:26:00.000Z",
+            source: "transcript",
+          },
+        ],
+        relationships: [
+          {
+            id: "sig-rel-1",
+            class: "relationships",
+            text: "[REDACTED]",
+            confidence: 0.84,
+            salience: 0.75,
+            sensitivity: "LOW",
+            recency_ts: "2026-02-23T08:24:00.000Z",
+            source: "memory",
+            surface_policy: "steer_only",
+          },
+        ],
+      },
+      debug: { source: "test" },
+    };
+  };
 
   const context = await buildContextFromSynapse(
     "user-1",
@@ -195,6 +259,8 @@ async function main() {
   delete (globalThis as any).__synapseMemoryLoopsOverride;
   delete (globalThis as any).__synapseUserModelOverride;
   delete (globalThis as any).__synapseDailyAnalysisOverride;
+  delete (globalThis as any).__synapseSignalsPackOverride;
+  (globalThis as any).__synapseSignalsPackOverride = async () => null;
 
   if (!context) throw new Error("Expected context, got null");
 
@@ -220,7 +286,7 @@ async function main() {
   if (!context.deferredProfileContext?.workContextLine?.includes("Current work focus")) {
     throw new Error("Expected work context to be deferred into profile context");
   }
-  if (!context.deferredProfileContext?.relationshipsLine?.includes("Ashley")) {
+  if (!context.deferredProfileContext?.relationshipsLine?.includes("RELATION_A")) {
     throw new Error("Expected relationship context to be deferred into profile context");
   }
   if (!context.deferredProfileContext?.dailyAnchorsLine?.includes("steps goal")) {
@@ -232,6 +298,11 @@ async function main() {
   if (context.situationalContext.includes("Long-term direction")) {
     throw new Error("Did not expect deferred profile lines to be injected on session open");
   }
+  if (context.signalPackBlock) {
+    throw new Error("Did not expect signal pack block on session-start turn");
+  }
+  expect(signalsPackPayload?.tenantId ?? null).toBe("tenant-test");
+  expect(signalsPackPayload?.sessionId ?? null).toBe("session-1");
   const openLoops = context.overlayContext?.openLoops ?? [];
   const commitments = context.overlayContext?.commitments ?? [];
   expect(openLoops.length).toBe(2);
@@ -742,6 +813,105 @@ async function main() {
 
   expect(context?.rollingSummary ?? null).toBe(null);
   });
+
+  await runTest("buildContextFromSynapse caches signals pack per session", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-signals-cache.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  let persistedState: any = null;
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () =>
+    persistedState ? { rollingSummary: null, state: persistedState } : null;
+  (prisma.sessionState.upsert as any) = async (args: any) => {
+    persistedState = args?.update?.state ?? args?.create?.state ?? persistedState;
+    return { id: "state-signals-cache" };
+  };
+
+  let signalsPackCalls = 0;
+  (globalThis as any).__synapseSignalsPackOverride = async () => {
+    signalsPackCalls += 1;
+    return {
+      generated_at: "2026-02-23T10:00:00.000Z",
+      session_id: "session-cache-1",
+      classes: {
+        identity: [{ id: "sp-1", class: "identity", text: "Prefers concise responses.", sensitivity: "LOW" }],
+        trajectory: [],
+        today: [],
+        open_loops: [
+          {
+            id: "sp-2",
+            class: "open_loops",
+            text: "Sensitive private detail.",
+            sensitivity: "HIGH",
+          },
+        ],
+        state: [],
+        relationships: [],
+      },
+      debug: { source: "cache-test" },
+    };
+  };
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
+    timeOfDayLabel: "MORNING",
+    timeGapHuman: "1 minute",
+    bridgeText: "Bridge.",
+    items: [{ kind: "loop", text: "Prepare test payload.", type: "OPEN_LOOP" }],
+  });
+  (globalThis as any).__synapseMemoryLoopsOverride = async () => ({ items: [], metadata: { count: 0 } });
+  (globalThis as any).__synapseUserModelOverride = async () => ({ exists: false });
+  (globalThis as any).__synapseDailyAnalysisOverride = async () => ({ exists: false });
+
+  const first = await buildContextFromSynapse(
+    "user-cache-1",
+    "persona-cache-1",
+    "hello",
+    "session-cache-1",
+    true
+  );
+  const second = await buildContextFromSynapse(
+    "user-cache-1",
+    "persona-cache-1",
+    "hello again",
+    "session-cache-1",
+    false
+  );
+
+  delete (globalThis as any).__synapseSignalsPackOverride;
+  delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseMemoryLoopsOverride;
+  delete (globalThis as any).__synapseUserModelOverride;
+  delete (globalThis as any).__synapseDailyAnalysisOverride;
+  (globalThis as any).__synapseSignalsPackOverride = async () => null;
+
+  expect(signalsPackCalls).toBe(1);
+  if (first?.signalPackBlock) {
+    throw new Error("Did not expect first call (session start) to include signal pack block");
+  }
+  if (!second?.signalPackBlock?.includes("Signal Pack (private):")) {
+    throw new Error("Expected second call to include cached signal pack block");
+  }
+  if (!second.signalPackBlock.includes("[identity] Prefers concise responses.")) {
+    throw new Error("Expected cached signal pack line on second call");
+  }
+  if (second.signalPackBlock.includes("Sensitive private detail.")) {
+    throw new Error("Did not expect sensitive signal text to appear verbatim");
+  }
+  if (!second.signalPackBlock.includes("[open_loops] Sensitive item present")) {
+    throw new Error("Expected sensitive steering note for cached signal pack");
+  }
+  });
+
+  delete (globalThis as any).__synapseSignalsPackOverride;
 
   const failed = results.filter((r) => !r.passed);
   if (failed.length > 0) {

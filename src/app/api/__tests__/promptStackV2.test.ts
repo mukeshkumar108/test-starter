@@ -19,6 +19,7 @@ import {
   __test__shouldHoldWitnessOnContinuation,
   __test__buildBouncerAuthorityTraceFields,
   __test__buildMomentumGuardBlock,
+  __test__shouldInjectSignalPack,
 } from "../chat/route";
 
 type TestResult = { name: string; passed: boolean; error?: string };
@@ -165,6 +166,59 @@ async function main() {
     const contents = messages.map((message) => message.content);
     expect(contents[2]).toContain("Local (now): stressed lately");
     expect(contents[2]).toContain("Synapse (recent): Daily anchors");
+  });
+
+  await runTest("signal pack is not injected on session start", () => {
+    const useSignalPack = __test__shouldInjectSignalPack({
+      signalPackBlock: "Signal Pack (private):\n- [identity] Prefers concise responses.",
+      isSessionStart: true,
+      intent: "companion",
+      posture: "COMPANION",
+      pressure: "LOW",
+      stance: "none",
+      riskLevel: "LOW",
+      isUrgent: false,
+    });
+    expect(useSignalPack).toBe(false);
+  });
+
+  await runTest("signal pack is suppressed on urgent or high-risk turns", () => {
+    const urgent = __test__shouldInjectSignalPack({
+      signalPackBlock: "Signal Pack (private):\n- [identity] Prefers concise responses.",
+      isSessionStart: false,
+      intent: "companion",
+      posture: "COMPANION",
+      pressure: "MED",
+      stance: "none",
+      riskLevel: "LOW",
+      isUrgent: true,
+    });
+    const highRisk = __test__shouldInjectSignalPack({
+      signalPackBlock: "Signal Pack (private):\n- [identity] Prefers concise responses.",
+      isSessionStart: false,
+      intent: "companion",
+      posture: "COMPANION",
+      pressure: "MED",
+      stance: "none",
+      riskLevel: "HIGH",
+      isUrgent: false,
+    });
+    expect(urgent).toBe(false);
+    expect(highRisk).toBe(false);
+  });
+
+  await runTest("signal pack is injected on normal non-start turns based on librarian labels", () => {
+    const useSignalPack = __test__shouldInjectSignalPack({
+      signalPackBlock: "Signal Pack (private):\n- [identity] Prefers concise responses.",
+      isSessionStart: false,
+      intent: "momentum",
+      posture: "MOMENTUM",
+      pressure: "MED",
+      stance: "none",
+      riskLevel: "LOW",
+      isUrgent: false,
+    });
+    expect(useSignalPack).toBe(true);
   });
 
   await runTest("magic moment is prioritized in selected user context candidates", () => {
