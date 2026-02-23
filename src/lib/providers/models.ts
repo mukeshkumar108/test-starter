@@ -29,6 +29,11 @@ export const MODEL_TIERS = {
 } as const;
 
 export type TurnTier = keyof typeof MODEL_TIERS;
+export type TierBurstState = {
+  activeId: string | null;
+  remaining: number;
+  lastUsedAt: number;
+};
 export type RoutingMoment =
   | "grief"
   | "relationship_rupture"
@@ -129,4 +134,97 @@ export function getChatModelForTurn(params: {
   tier: TurnTier;
 }): ChatModel {
   return MODEL_TIERS[params.tier];
+}
+
+export function buildBurstEventId(params: {
+  stanceSelected?: "witness" | "excavator" | "repair_and_forward" | "high_standards_friend" | "none" | null;
+  moment?: RoutingMoment | null;
+  intent?: "companion" | "momentum" | "output_task" | "learning" | null;
+  topicHint?: string | null;
+}) {
+  const driver =
+    params.stanceSelected && params.stanceSelected !== "none"
+      ? `stance:${params.stanceSelected}`
+      : `moment:${params.moment ?? "none"}`;
+  const intentPart = `intent:${params.intent ?? "companion"}`;
+  const topicPart = `topic:${params.topicHint ?? "general"}`;
+  return `${driver}|${intentPart}|${topicPart}`;
+}
+
+export function applyT3BurstRouting(params: {
+  baseTier: TurnTier;
+  baseReason: string;
+  burstState: TierBurstState;
+  stanceSelected?: "witness" | "excavator" | "repair_and_forward" | "high_standards_friend" | "none" | null;
+  moment?: RoutingMoment | null;
+  intent?: "companion" | "momentum" | "output_task" | "learning" | null;
+  topicHint?: string | null;
+  nowMs: number;
+}) {
+  const peakStance =
+    params.stanceSelected === "witness" ||
+    params.stanceSelected === "excavator" ||
+    params.stanceSelected === "repair_and_forward" ||
+    params.stanceSelected === "high_standards_friend";
+  const peakMoment =
+    params.moment === "grief" ||
+    params.moment === "relationship_rupture" ||
+    params.moment === "comeback" ||
+    params.moment === "strain";
+  const isPeak = peakStance || peakMoment;
+  const burstEventId = isPeak
+    ? buildBurstEventId({
+        stanceSelected: params.stanceSelected,
+        moment: params.moment,
+        intent: params.intent,
+        topicHint: params.topicHint,
+      })
+    : null;
+  const burstRemainingBefore = Math.max(0, params.burstState.remaining ?? 0);
+  let nextState: TierBurstState = {
+    activeId: params.burstState.activeId ?? null,
+    remaining: burstRemainingBefore,
+    lastUsedAt: params.burstState.lastUsedAt ?? 0,
+  };
+  let selectedTier = params.baseTier;
+  let routingReason = params.baseReason;
+  let burstWasStarted = false;
+
+  if (isPeak && burstEventId) {
+    if (!nextState.activeId || nextState.activeId !== burstEventId) {
+      nextState = {
+        activeId: burstEventId,
+        remaining: 2,
+        lastUsedAt: params.nowMs,
+      };
+      burstWasStarted = true;
+    }
+
+    if (nextState.remaining > 0) {
+      selectedTier = "T3";
+      nextState = {
+        ...nextState,
+        remaining: Math.max(0, nextState.remaining - 1),
+        lastUsedAt: params.nowMs,
+      };
+      routingReason = burstWasStarted ? "burst_started_t3" : "burst_continued_t3";
+    } else {
+      selectedTier = "T2";
+      nextState = {
+        ...nextState,
+        lastUsedAt: params.nowMs,
+      };
+      routingReason = "burst_capped_force_t2";
+    }
+  }
+
+  return {
+    tier: selectedTier,
+    routingReason,
+    burstEventId,
+    burstWasStarted,
+    burstRemainingBefore,
+    burstRemainingAfter: nextState.remaining,
+    burstState: nextState,
+  };
 }

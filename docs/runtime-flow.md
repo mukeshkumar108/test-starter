@@ -55,6 +55,11 @@ Two paths run in parallel:
      - `T2`: `google/gemini-2.5-flash`
      - `T3`: `anthropic/claude-sonnet-4.6`
    - `moment` is derived before tier selection from selected user-context moment keys + transcript heuristics, with fallback: `stance=witness && pressure=HIGH` => `moment=grief`.
+   - T3 uses burst routing in session-local state:
+     - Peak event starts a 2-turn T3 burst (`remaining=2` then decrement each use).
+     - Same event after remaining reaches 0 is forced to `T2`.
+     - New event ID re-starts a fresh 2-turn burst.
+     - Event ID is deterministic and stance-dominant: `stance|intent|topicHint`.
    - Final call: OpenRouter primary → fallback, then OpenAI emergency.
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
@@ -104,6 +109,11 @@ Order is fixed:
   - `chosenModel`
   - `tierSelected` (prompt-packet trace `memoryQuery`)
   - `routingReason` (prompt-packet trace `memoryQuery`)
+  - `burstActiveId`
+  - `burstRemainingBefore`
+  - `burstRemainingAfter`
+  - `burstEventId`
+  - `burstWasStarted`
   - `startbrief_used`
   - `startbrief_fallback`
   - `startbrief_items_count`

@@ -44,4 +44,10 @@ The prompt is intentionally small and ordered.
     - `T2` -> `google/gemini-2.5-flash`
     - `T3` -> `anthropic/claude-sonnet-4.6`
   - Precedence: `risk > stance > moment > pressure > intent`.
+  - T3 is burst-limited in session state:
+    - peak events get max 2 T3 turns per stable event id
+    - then forced fallback to T2 until a new event id appears
+    - event id is stance-dominant (`stance|intent|topicHint`)
   - Prompt-packet trace includes `tierSelected` and `routingReason` in `memoryQuery`.
+  - Prompt-packet trace also includes burst metadata:
+    - `burstActiveId`, `burstRemainingBefore`, `burstRemainingAfter`, `burstEventId`, `burstWasStarted`.

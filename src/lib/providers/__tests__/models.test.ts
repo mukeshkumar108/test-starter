@@ -4,6 +4,7 @@
  */
 
 import {
+  applyT3BurstRouting,
   MODELS,
   MODEL_TIERS,
   getChatModelForGate,
@@ -134,6 +135,104 @@ async function main() {
     });
     expect(safetyModel).toBe(MODELS.CHAT.SAFETY);
     expect(tierDecision.tier).toBe("T3");
+  });
+
+  await runTest("peak turn starts burst and uses T3", () => {
+    const burst = applyT3BurstRouting({
+      baseTier: "T2",
+      baseReason: "stance_witness",
+      burstState: { activeId: null, remaining: 0, lastUsedAt: 0 },
+      stanceSelected: "witness",
+      moment: "strain",
+      intent: "companion",
+      topicHint: "relationship",
+      nowMs: 1000,
+    });
+    expect(burst.tier).toBe("T3");
+    expect(burst.burstWasStarted).toBe(true);
+    expect(burst.burstRemainingBefore).toBe(0);
+    expect(burst.burstRemainingAfter).toBe(1);
+  });
+
+  await runTest("second peak turn same event uses T3 and reaches remaining 0", () => {
+    const first = applyT3BurstRouting({
+      baseTier: "T2",
+      baseReason: "stance_witness",
+      burstState: { activeId: null, remaining: 0, lastUsedAt: 0 },
+      stanceSelected: "witness",
+      moment: "strain",
+      intent: "companion",
+      topicHint: "relationship",
+      nowMs: 1000,
+    });
+    const second = applyT3BurstRouting({
+      baseTier: "T2",
+      baseReason: "stance_witness",
+      burstState: first.burstState,
+      stanceSelected: "witness",
+      moment: "strain",
+      intent: "companion",
+      topicHint: "relationship",
+      nowMs: 2000,
+    });
+    expect(second.tier).toBe("T3");
+    expect(second.burstRemainingBefore).toBe(1);
+    expect(second.burstRemainingAfter).toBe(0);
+  });
+
+  await runTest("third turn same peak event is capped and forced to T2", () => {
+    const capped = applyT3BurstRouting({
+      baseTier: "T2",
+      baseReason: "stance_witness",
+      burstState: {
+        activeId: "stance:witness|intent:companion|topic:relationship",
+        remaining: 0,
+        lastUsedAt: 2000,
+      },
+      stanceSelected: "witness",
+      moment: "strain",
+      intent: "companion",
+      topicHint: "relationship",
+      nowMs: 3000,
+    });
+    expect(capped.tier).toBe("T2");
+    expect(capped.routingReason).toBe("burst_capped_force_t2");
+  });
+
+  await runTest("new peak event starts a new burst and re-escalates to T3", () => {
+    const next = applyT3BurstRouting({
+      baseTier: "T2",
+      baseReason: "stance_witness",
+      burstState: {
+        activeId: "stance:witness|intent:companion|topic:relationship",
+        remaining: 0,
+        lastUsedAt: 3000,
+      },
+      stanceSelected: "repair_and_forward",
+      moment: "relationship_rupture",
+      intent: "companion",
+      topicHint: "relationship",
+      nowMs: 4000,
+    });
+    expect(next.tier).toBe("T3");
+    expect(next.burstWasStarted).toBe(true);
+    expect(next.burstRemainingAfter).toBe(1);
+  });
+
+  await runTest("non-peak turn does not start burst and keeps base tier", () => {
+    const nonPeak = applyT3BurstRouting({
+      baseTier: "T1",
+      baseReason: "intent_output_task",
+      burstState: { activeId: null, remaining: 0, lastUsedAt: 0 },
+      stanceSelected: "none",
+      moment: null,
+      intent: "output_task",
+      topicHint: "work",
+      nowMs: 5000,
+    });
+    expect(nonPeak.tier).toBe("T1");
+    expect(nonPeak.burstEventId).toBe(null);
+    expect(nonPeak.burstWasStarted).toBe(false);
   });
 
   const failed = results.filter((result) => !result.passed);

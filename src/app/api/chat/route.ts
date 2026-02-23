@@ -31,9 +31,12 @@ import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import {
   MODELS,
+  applyT3BurstRouting,
   getChatModelForGate,
   getChatModelForTurn,
   getTurnTierForSignals,
+  type TierBurstState,
+  type TurnTier,
   type RoutingMoment,
 } from "@/lib/providers/models";
 import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
@@ -339,6 +342,30 @@ function deriveRoutingMoment(params: {
   return null;
 }
 
+function deriveBurstTopicHint(params: {
+  transcript: string;
+  overlayTopicKey?: string | null;
+}) {
+  if (params.overlayTopicKey) {
+    return normalizeTopicKey(params.overlayTopicKey);
+  }
+  const lowered = normalizeWhitespace(params.transcript).toLowerCase();
+  if (!lowered) return "general";
+  if (/\b(partner|girlfriend|boyfriend|wife|husband|friend|mom|mum|dad|daughter|son)\b/i.test(lowered)) {
+    return "relationship";
+  }
+  if (/\b(work|project|ship|deploy|release|task|deadline|focus)\b/i.test(lowered)) {
+    return "work";
+  }
+  if (/\b(health|sleep|steps|walk|gym|run|tired|exhausted)\b/i.test(lowered)) {
+    return "health";
+  }
+  if (/\b(stress|anxious|overwhelm|frustrated|angry|sad|grief|shame)\b/i.test(lowered)) {
+    return "emotion";
+  }
+  return "general";
+}
+
 function keyFromDeferredProfileLine(line: string) {
   const lowered = line.toLowerCase();
   if (lowered.startsWith("daily anchors:")) return "synapse:daily_anchors";
@@ -629,6 +656,7 @@ type OverlayState = {
   recentOverlayKeys?: string[];
   stanceActive?: StanceOverlayType | null;
   stanceTurnsRemaining?: number;
+  tierBurst?: TierBurstState;
   endearmentCooldownTurns?: number;
   user?: OverlayUserState;
 };
@@ -3098,6 +3126,11 @@ export async function POST(request: NextRequest) {
     let recentOverlayKeys = overlayState.recentOverlayKeys ?? [];
     let stanceActive = overlayState.stanceActive ?? null;
     let stanceTurnsRemaining = overlayState.stanceTurnsRemaining ?? 0;
+    let tierBurst: TierBurstState = overlayState.tierBurst ?? {
+      activeId: null,
+      remaining: 0,
+      lastUsedAt: 0,
+    };
     let endearmentCooldownTurns = overlayState.endearmentCooldownTurns ?? 0;
     const overlayUser = overlayState.user ?? {};
     // Trajectory rituals are day/week scoped to the user's configured local zone.
@@ -3126,6 +3159,7 @@ export async function POST(request: NextRequest) {
       recentOverlayKeys = [];
       stanceActive = null;
       stanceTurnsRemaining = 0;
+      tierBurst = { activeId: null, remaining: 0, lastUsedAt: 0 };
       endearmentCooldownTurns = 0;
     }
     if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
@@ -3656,6 +3690,10 @@ export async function POST(request: NextRequest) {
     const routingMoment: RoutingMoment | null =
       inferredRoutingMoment ??
       (stanceOverlayType === "witness" && pressure === "HIGH" ? "grief" : null);
+    const burstTopicHint = deriveBurstTopicHint({
+      transcript: sttResult.transcript,
+      overlayTopicKey: overlayTopicKey ?? null,
+    });
     const tierDecision = getTurnTierForSignals({
       riskLevel,
       posture,
@@ -3671,11 +3709,40 @@ export async function POST(request: NextRequest) {
       gate: { risk_level: riskLevel },
     });
     const safetyModelOverride = safetyModel === MODELS.CHAT.SAFETY;
-    const tierSelected = safetyModelOverride ? "SAFETY" : tierDecision.tier;
-    const routingReason = safetyModelOverride ? "risk_high_or_crisis" : tierDecision.reason;
+    const burstRemainingBefore = Math.max(0, tierBurst.remaining ?? 0);
+    let burstEventId: string | null = null;
+    let burstWasStarted = false;
+    let burstRemainingAfter = burstRemainingBefore;
+    let tierForModel: TurnTier = tierDecision.tier;
+    let tierSelected: "SAFETY" | TurnTier = tierDecision.tier;
+    let routingReason = tierDecision.reason;
+
+    if (safetyModelOverride) {
+      tierSelected = "SAFETY";
+      routingReason = "risk_high_or_crisis";
+    } else {
+      const burstDecision = applyT3BurstRouting({
+        baseTier: tierDecision.tier,
+        baseReason: tierDecision.reason,
+        burstState: tierBurst,
+        stanceSelected: stanceOverlayType,
+        moment: routingMoment,
+        intent: overlayIntent,
+        topicHint: burstTopicHint,
+        nowMs: now.getTime(),
+      });
+      tierBurst = burstDecision.burstState;
+      tierForModel = burstDecision.tier;
+      tierSelected = burstDecision.tier;
+      routingReason = burstDecision.routingReason;
+      burstEventId = burstDecision.burstEventId;
+      burstWasStarted = burstDecision.burstWasStarted;
+      burstRemainingAfter = burstDecision.burstRemainingAfter;
+    }
+
     const model = safetyModelOverride
       ? safetyModel
-      : getChatModelForTurn({ tier: tierDecision.tier });
+      : getChatModelForTurn({ tier: tierForModel });
 
     await writeOverlayState(user.id, personaId, {
       overlayUsed,
@@ -3697,6 +3764,7 @@ export async function POST(request: NextRequest) {
       recentOverlayKeys,
       stanceActive,
       stanceTurnsRemaining,
+      tierBurst,
       endearmentCooldownTurns,
       lastSessionId: session.id,
       user: overlayUser,
@@ -3833,6 +3901,11 @@ export async function POST(request: NextRequest) {
             chosenModel: model,
             tierSelected,
             routingReason,
+            burstActiveId: tierBurst.activeId,
+            burstRemainingBefore,
+            burstRemainingAfter,
+            burstEventId,
+            burstWasStarted,
             risk_level: riskLevel,
             intent: overlayIntent,
             stanceSelected: stanceOverlayType,

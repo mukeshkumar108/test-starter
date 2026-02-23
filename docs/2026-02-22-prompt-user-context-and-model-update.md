@@ -175,3 +175,56 @@ This batch wires deferred user context into prompt assembly, expands user-model 
   - repair_and_forward => `T3`
   - output_task => `T1`
   - risk HIGH => safety model override remains intact
+
+---
+
+## 2026-02-23 Addendum: T3 Burst Routing
+
+### Scope
+- Added minimal burst control so premium tier (`T3`) is used for peak moments only, capped at 2 turns per event.
+- Safety override remains absolute and unchanged.
+
+### Code changes
+- Added burst state and logic in model provider:
+  - `TierBurstState { activeId, remaining, lastUsedAt }`
+  - `buildBurstEventId(...)` (stance-dominant deterministic ID)
+  - `applyT3BurstRouting(...)`
+  - File: `src/lib/providers/models.ts`
+
+- Integrated burst routing in chat route:
+  - Stores `tierBurst` in existing session-local `overlayState` (no DB schema change).
+  - Derives coarse deterministic topic hint (`relationship|work|health|emotion|general`) for event ID stability.
+  - Applies burst only on non-safety turns, after base tier selection.
+  - File: `src/app/api/chat/route.ts`
+
+- Prompt packet trace extension (JSON-only, no migration):
+  - `memoryQuery.burstActiveId`
+  - `memoryQuery.burstRemainingBefore`
+  - `memoryQuery.burstRemainingAfter`
+  - `memoryQuery.burstEventId`
+  - `memoryQuery.burstWasStarted`
+  - File: `src/app/api/chat/route.ts`
+
+### Burst behavior
+- Peak if:
+  - `stanceSelected` in `{witness, excavator, repair_and_forward, high_standards_friend}`
+  - OR `moment` in `{grief, relationship_rupture, comeback, strain}`
+- On new peak event:
+  - start burst (`remaining=2`) and route `T3`, then decrement.
+- On same event:
+  - while `remaining>0`, route `T3` and decrement.
+  - when `remaining==0`, force `T2`.
+- Non-peak:
+  - no burst start; base tier logic applies.
+- Re-escalation:
+  - new event ID starts new 2-turn burst.
+- Safety override:
+  - `risk_level in {HIGH, CRISIS}` always routes safety model and bypasses burst.
+
+### Tests updated
+- `src/lib/providers/__tests__/models.test.ts`
+  - peak turn starts burst => `T3`
+  - second same-event peak => `T3`, remaining reaches 0
+  - third same-event peak => forced `T2`
+  - new peak event => new burst => `T3`
+  - risk HIGH safety override remains intact
