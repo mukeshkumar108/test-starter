@@ -51,18 +51,30 @@ async function main() {
   });
 
   await runTest("momentum guard block includes late-night softening", () => {
-    const block = __test__buildMomentumGuardBlock({ intent: "momentum", localHour: 1 });
+    const block = __test__buildMomentumGuardBlock({
+      intent: "momentum",
+      posture: "MOMENTUM",
+      localHour: 1,
+    });
     expect(block ?? "").toContain("Late-night mode");
     expect(block ?? "").toContain("do not repeat the same setup/check question");
   });
 
   await runTest("non-momentum intent does not inject momentum guard", () => {
-    const block = __test__buildMomentumGuardBlock({ intent: "companion", localHour: 1 });
+    const block = __test__buildMomentumGuardBlock({
+      intent: "companion",
+      posture: "COMPANION",
+      localHour: 1,
+    });
     expect(block).toBe(null);
   });
 
   await runTest("buildChatMessages inserts momentum guard after posture", () => {
-    const block = __test__buildMomentumGuardBlock({ intent: "momentum", localHour: 1 });
+    const block = __test__buildMomentumGuardBlock({
+      intent: "momentum",
+      posture: "MOMENTUM",
+      localHour: 1,
+    });
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
       momentumGuardBlock: block,

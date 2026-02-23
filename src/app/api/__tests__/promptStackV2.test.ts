@@ -65,7 +65,7 @@ async function main() {
   await runTest("style kernel reflection template no longer mandates a question fork", async () => {
     const style = await readFile(join(process.cwd(), "prompts/40_style_kernel.md"), "utf-8");
     expect(style).toContain("Avoid generic interview questions; if you ask, make it narrow and consequential.");
-    expect(style).toContain("- Optional: ask ONE specific question only if it changes what you’d say or do next; otherwise stop.");
+    expect(style).toContain("- Optional: ask ONE specific question only if it changes what you'd say or do next; otherwise stop.");
     expect(style).notToContain("Optionally ask one choice question.");
     expect(style).notToContain("Want to stay with that for a second, or take one tiny next step?");
   });
