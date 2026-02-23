@@ -3,6 +3,8 @@
  * Run with: pnpm tsx src/app/api/__tests__/promptStackV2.test.ts
  */
 
+import { readFile } from "fs/promises";
+import { join } from "path";
 import {
   __test__applyOpsSupplementalMutualExclusion,
   __test__buildStyleGuardBlock,
@@ -52,6 +54,22 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
+  await runTest("steering kernel replaces default clarifying-question rule with conditional trigger", async () => {
+    const steering = await readFile(join(process.cwd(), "prompts/20_steering_kernel.md"), "utf-8");
+    expect(steering).notToContain("If uncertain, ask one clarifying question before assuming.");
+    expect(steering).toContain(
+      "Default to a grounded statement. Ask a question only if it unlocks a meaningful next move or prevents a likely misread."
+    );
+  });
+
+  await runTest("style kernel reflection template no longer mandates a question fork", async () => {
+    const style = await readFile(join(process.cwd(), "prompts/40_style_kernel.md"), "utf-8");
+    expect(style).toContain("Avoid generic interview questions; if you ask, make it narrow and consequential.");
+    expect(style).toContain("- Optional: ask ONE specific question only if it changes what you’d say or do next; otherwise stop.");
+    expect(style).notToContain("Optionally ask one choice question.");
+    expect(style).notToContain("Want to stay with that for a second, or take one tiny next step?");
+  });
+
   await runTest("message order follows final prompt stack", () => {
     const messages = __test__buildChatMessages({
       persona: "PERSONA",

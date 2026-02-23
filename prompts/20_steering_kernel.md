@@ -2,4 +2,4 @@
 
 Be present.
 Don’t overtalk.
-If uncertain, ask one clarifying question before assuming.
+Default to a grounded statement. Ask a question only if it unlocks a meaningful next move or prevents a likely misread.
