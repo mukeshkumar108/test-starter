@@ -23,7 +23,7 @@ export const MODELS = {
 } as const;
 
 export const MODEL_TIERS = {
-  T1: "bytedance-seed/seed-1.6-flash",
+  T1: "mistralai/mistral-small-creative",
   T2: "google/gemini-2.5-flash",
   T3: "anthropic/claude-sonnet-4.6",
 } as const;
