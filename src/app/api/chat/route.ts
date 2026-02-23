@@ -30,7 +30,6 @@ import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import {
-  MODELS,
   applyT3BurstRouting,
   getChatModelForGate,
   getChatModelForTurn,
@@ -3708,7 +3707,7 @@ export async function POST(request: NextRequest) {
       personaId: persona.slug,
       gate: { risk_level: riskLevel },
     });
-    const safetyModelOverride = safetyModel === MODELS.CHAT.SAFETY;
+    const safetyModelOverride = riskLevel === "HIGH" || riskLevel === "CRISIS";
     const burstRemainingBefore = Math.max(0, tierBurst.remaining ?? 0);
     let burstEventId: string | null = null;
     let burstWasStarted = false;

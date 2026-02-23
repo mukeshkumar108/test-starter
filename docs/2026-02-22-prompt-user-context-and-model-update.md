@@ -228,3 +228,9 @@ This batch wires deferred user context into prompt assembly, expands user-model 
   - third same-event peak => forced `T2`
   - new peak event => new burst => `T3`
   - risk HIGH safety override remains intact
+
+### Follow-up fix (2026-02-23)
+- Fixed safety override detection in chat route:
+  - Previously, safety path detection compared model IDs and could misclassify LOW-risk turns when persona and safety model IDs matched.
+  - Now, safety override is keyed strictly on `risk_level in {HIGH, CRISIS}`.
+  - File: `src/app/api/chat/route.ts`
