@@ -218,6 +218,17 @@ export function applyT3BurstRouting(params: {
     }
   }
 
+  // Relational stance floor: these stances should never run on T1.
+  if (
+    (params.stanceSelected === "witness" ||
+      params.stanceSelected === "repair_and_forward" ||
+      params.stanceSelected === "excavator") &&
+    selectedTier === "T1"
+  ) {
+    selectedTier = "T2";
+    routingReason = "stance_floor_t2";
+  }
+
   return {
     tier: selectedTier,
     routingReason,

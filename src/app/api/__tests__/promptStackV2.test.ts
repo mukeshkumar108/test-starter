@@ -16,6 +16,7 @@ import {
   __test__resolveEffectiveOverlaySignals,
   __test__shouldHoldWitnessOnContinuation,
   __test__buildBouncerAuthorityTraceFields,
+  __test__buildMomentumGuardBlock,
 } from "../chat/route";
 
 type TestResult = { name: string; passed: boolean; error?: string };
@@ -66,6 +67,7 @@ async function main() {
     const contents = messages.map((message) => message.content);
     expect(contents[0]).toBe("PERSONA");
     expect(contents[1].startsWith("[CONVERSATION_POSTURE]")).toBe(true);
+    expect(contents[1]).notToContain("Lean:");
     expect(contents[2].startsWith("[USER_CONTEXT]")).toBe(true);
     expect(contents[3].startsWith("[OVERLAY]")).toBe(true);
     expect(contents[4]).toBe("BRIDGE");
@@ -270,6 +272,25 @@ async function main() {
     });
     const joined = selected.map((item) => item.line).join("\n").toLowerCase();
     expect(joined).notToContain("are you still with me");
+  });
+
+  await runTest("user context rejects short local echo lines under 40 chars", () => {
+    const selected = __test__selectUserContextCandidates({
+      transcript: "Sophie are you there",
+      deferredProfileLines: [],
+      recentInjectedContextKeys: [],
+    });
+    const local = selected.find((item) => item.key.startsWith("local:"));
+    expect(Boolean(local)).toBe(false);
+  });
+
+  await runTest("momentum guard is absent on COMPANION posture", () => {
+    const block = __test__buildMomentumGuardBlock({
+      intent: "momentum",
+      posture: "COMPANION",
+      localHour: 10,
+    });
+    expect(block).toBe(null);
   });
 
   await runTest("trajectory candidate drops duplicate segments", () => {

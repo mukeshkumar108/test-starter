@@ -156,7 +156,9 @@ function hasDuplicateTrajectorySegments(line: string) {
 
 function isGoodContextLine(params: { line: string; userText: string; key: string }) {
   const line = params.line.trim();
-  if (line.length < 18) return { ok: false as const, reason: "too_short" };
+  const isLocalCandidate = params.key.startsWith("local:");
+  const minLength = isLocalCandidate ? 40 : 18;
+  if (line.length < minLength) return { ok: false as const, reason: "too_short" };
   const lowered = line.toLowerCase();
   if (BANNED_CONTEXT_SUBSTRINGS.some((part) => lowered.includes(part))) {
     return { ok: false as const, reason: "banned_substring" };
@@ -178,7 +180,8 @@ function isGoodContextLine(params: { line: string; userText: string; key: string
   const stopwordRatio = lineTokens.length === 0 ? 1 : (lineTokens.length - nonStopwords.length) / lineTokens.length;
   if (stopwordRatio >= 0.55) return { ok: false as const, reason: "high_stopword_ratio" };
   const overlap = jaccardOverlap(lineTokens, userTokens);
-  if (overlap >= 0.6) return { ok: false as const, reason: "echo_overlap" };
+  const overlapThreshold = isLocalCandidate ? 0.45 : 0.6;
+  if (overlap >= overlapThreshold) return { ok: false as const, reason: "echo_overlap" };
 
   return { ok: true as const };
 }
@@ -1381,6 +1384,10 @@ async function runMemoryGate(params: {
   timeoutMs: number;
 }) {
   const { transcript, lastTurns, timeoutMs } = params;
+  console.info("[memory.gate] entry", {
+    called: true,
+    timeoutMs,
+  });
   const gatePrompt = `You are a Memory Gate. Decide if we should query memory.
 
 Return ONLY valid JSON:
@@ -1420,7 +1427,23 @@ ${lastTurns}
 Current user message:
 ${transcript}`;
 
-  const result = await callOpenRouterJson(gatePrompt, "meta-llama/llama-3.1-8b-instruct", timeoutMs);
+  let result: Record<string, unknown> | null = null;
+  try {
+    result = await callOpenRouterJson(
+      gatePrompt,
+      "meta-llama/llama-3.1-8b-instruct",
+      timeoutMs
+    );
+    if (!result) throw new Error("model call returned null");
+  } catch (error) {
+    console.warn("[memory.gate] model call failed", { message: error instanceof Error ? error.message : String(error), timeoutMs });
+    return null;
+  }
+  console.info("[memory.gate] exit", {
+    called: true,
+    modelCallSucceeded: result !== null,
+    rawResult: result,
+  });
   if (!result) return null;
   const action = result.action === "memory_query" ? "memory_query" : "none";
   const confidence =
@@ -1936,8 +1959,7 @@ function buildChatMessages(params: {
 }) {
   const posture = params.posture ?? DEFAULT_POSTURE;
   const pressure = params.pressure ?? DEFAULT_PRESSURE;
-  const guidance = POSTURE_GUIDANCE[posture] ?? POSTURE_GUIDANCE[DEFAULT_POSTURE];
-  const postureLines = [`[CONVERSATION_POSTURE]`, `Mode: ${posture} (pressure: ${pressure})`, `Lean: ${guidance}`];
+  const postureLines = [`[CONVERSATION_POSTURE]`, `Mode: ${posture} (pressure: ${pressure})`];
   if (params.momentumGuardBlock) {
     postureLines.push("", params.momentumGuardBlock);
   }
@@ -2051,9 +2073,15 @@ function isLateNightMomentumWindow(hour: number) {
 
 function buildMomentumGuardBlock(params: {
   intent: OverlayIntent;
+  posture: ConversationPosture;
   localHour: number;
 }) {
   if (params.intent !== "momentum") return null;
+  const postureAllows =
+    params.posture === "MOMENTUM" ||
+    params.posture === "IDEATION" ||
+    params.posture === "PRACTICAL";
+  if (!postureAllows) return null;
   const lines = [
     "[MOMENTUM_GUARD]",
     "- Stay action-oriented, but do not repeat the same setup/check question on consecutive turns.",
@@ -2521,7 +2549,7 @@ function buildStartbriefInjection(params: {
     };
   }
   const handover =
-    typeof packet.handover_text === "string" ? packet.handover_text.trim() : "";
+    typeof packet.handover_text === "string" ? sanitizeHandoverText(packet.handover_text) : "";
   if (!handover) {
     return {
       bridgeBlock: null as string | null,
@@ -2757,9 +2785,10 @@ function buildStyleGuardBlock(params: {
   endearmentCooldownTurns: number;
 }) {
   const lines = ["[STYLE_GUARD]"];
+  lines.push('- Ban robotic phrases: "you shared that", "tentative glimmer", "want to name one small thing".');
   if (params.stance === "witness") {
     lines.push("- No endearments in this turn.");
-    lines.push('- Ban phrases: "must feel", "that must feel", "that sounds", "all ears", "so heavy", "so jumbled".');
+    lines.push('- Ban phrases: "must feel", "that must feel", "that sounds", "all ears", "so heavy", "so jumbled", "you shared that", "tentative glimmer".');
     return lines.join("\n");
   }
   if (params.endearmentCooldownTurns > 0) {
@@ -2768,6 +2797,22 @@ function buildStyleGuardBlock(params: {
   }
   lines.push("- If used, allow at most one endearment this turn.");
   return lines.join("\n");
+}
+
+function sanitizeHandoverText(input: string) {
+  const normalized = normalizeWhitespace(input);
+  if (!normalized) return "";
+  let text = normalized
+    .replace(/\bThe user massive\b/gi, "The user made massive")
+    .replace(/\bpositiv\b/gi, "positive")
+    .replace(/\s+([,.!?;:])/g, "$1");
+  text = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter((sentence) => !/\b(and|or|but|with)\.?$/i.test(sentence))
+    .join(" ");
+  return text.trim();
 }
 
 function nextEndearmentCooldownTurns(current: number, stance: StanceOverlayType | "none") {
@@ -3797,6 +3842,7 @@ export async function POST(request: NextRequest) {
       persona: context.persona,
       momentumGuardBlock: buildMomentumGuardBlock({
         intent: overlayIntent,
+        posture,
         localHour: zoned.hour,
       }),
       styleGuardBlock,
