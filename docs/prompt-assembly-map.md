@@ -5,13 +5,16 @@ The prompt is intentionally small and ordered.
 ## Current Order
 1. **Persona (Identity Anchor)**
 2. **CONVERSATION_POSTURE** (neutral labels; may include momentum guard hints)
-3. **OVERLAY** (optional deterministic module)
-4. **bridgeBlock** (optional; turn 1 only when startbrief resume says `use_bridge=true`)
-5. **handoverBlock** (optional; startbrief-v2 rules, verbatim text)
-6. **opsSnippetBlock** (optional; deterministic gating, one sentence)
-7. **SUPPLEMENTAL_CONTEXT** (Recall Sheet from `/memory/query`, optional)
-8. **Recent Messages** (last 8 messages, session-scoped)
-9. **Current User Message**
+3. **STYLE_GUARD** (optional; witness/endearment guardrails)
+4. **USER_CONTEXT** (optional; deterministic profile/local lines)
+5. **STANCE_OVERLAY** (optional deterministic stance block)
+6. **OVERLAY** (optional deterministic tactic module)
+7. **bridgeBlock** (optional; turn 1 only when startbrief resume says `use_bridge=true`)
+8. **handoverBlock** (optional; startbrief-v2 rules, verbatim text)
+9. **opsSnippetBlock** (optional; deterministic gating, one sentence)
+10. **SUPPLEMENTAL_CONTEXT** (Recall Sheet from `/memory/query`, optional)
+11. **Recent Messages** (last 8 messages, session-scoped)
+12. **Current User Message**
 
 ## Notes
 - On session start, context uses Synapse `/session/startbrief` and stores it in session state for reuse.
@@ -31,3 +34,6 @@ The prompt is intentionally small and ordered.
 - Loop continuity is user-scoped; Sophie does not assume persona-partitioned loop memory.
 - Librarian recall uses `/memory/query` in semantic mode (`includeContext=false`).
 - Product kernel guidance comes from compiled prompt kernels (no duplicate runtime product block).
+- Bouncer authority remap is feature-flagged:
+  - `FEATURE_BOUNCER_AUTHORITY_REMAP_V1` toggles effective signal remap for overlay policy/selector inputs.
+  - `FEATURE_BOUNCER_AUTHORITY_SHADOW_LOG` controls prompt-packet shadow fields (`gate_confidence`, `posture_confidence`, `state_confidence`, plus raw/effective signal mirrors).

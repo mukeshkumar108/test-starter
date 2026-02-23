@@ -1509,6 +1509,7 @@ async function runLibrarianReflex(params: {
   gateExplicit: boolean;
   gateExplicitTopicShift: boolean;
   postureConfidence: number;
+  stateConfidence: number;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -1532,6 +1533,7 @@ async function runLibrarianReflex(params: {
     gateExplicit: false,
     gateExplicitTopicShift: false,
     postureConfidence: 0,
+    stateConfidence: 0,
   };
   if (remaining() <= 0) {
     return {
@@ -1569,6 +1571,8 @@ async function runLibrarianReflex(params: {
     gateExplicitTopicShift: Boolean(gateResult.explicit_topic_shift),
     postureConfidence:
       typeof gateResult.posture_confidence === "number" ? gateResult.posture_confidence : 0,
+    stateConfidence:
+      typeof gateResult.state_confidence === "number" ? gateResult.state_confidence : 0,
   };
 
   const postureSuggestion = normalizePosture(gateResult.posture);
@@ -2522,6 +2526,124 @@ function updateRecentOverlayKeys(previous: string[], nextKeys: string[]) {
   return next.slice(-6);
 }
 
+type DerivedTurnConstraints = {
+  isUrgentDerived: boolean;
+  isDirectRequestDerived: boolean;
+  explicitTopicShiftDerived: boolean;
+};
+
+type EffectiveOverlaySignals = {
+  isUrgent: boolean;
+  isDirectRequest: boolean;
+  explicitTopicShift: boolean;
+  explicitTopicShiftFromHighConfidence: boolean;
+  authorityMode: "raw" | "remap_v1";
+};
+
+function isBouncerAuthorityRemapEnabled() {
+  return env.FEATURE_BOUNCER_AUTHORITY_REMAP_V1 === "true";
+}
+
+function isBouncerAuthorityShadowLogEnabled() {
+  return env.FEATURE_BOUNCER_AUTHORITY_SHADOW_LOG !== "false";
+}
+
+function deriveTurnConstraintsFromTranscript(
+  transcript: string,
+  lastTurns?: string[]
+): DerivedTurnConstraints {
+  const normalized = normalizeWhitespace(transcript).toLowerCase();
+  const recent = Array.isArray(lastTurns)
+    ? lastTurns.map((item) => normalizeWhitespace(item).toLowerCase()).join(" ")
+    : "";
+
+  const isUrgentDerived = /\b(urgent|asap|right now|immediately|emergency|can't breathe|panic attack|help now)\b/i.test(
+    normalized
+  );
+  const isDirectRequestDerived = /\b(help me|what should i do|give me|draft|write|fix|summari[sz]e|plan|steps?|todo|to-do)\b/i.test(
+    normalized
+  );
+  const explicitTopicShiftDerived =
+    /\b(anyway|new topic|switching gears|different thing|on another note|separate point)\b/i.test(
+      normalized
+    ) || (recent.length > 0 && /\bactually\b/i.test(normalized) && /\b(earlier|before)\b/i.test(recent));
+
+  return {
+    isUrgentDerived,
+    isDirectRequestDerived,
+    explicitTopicShiftDerived,
+  };
+}
+
+function resolveEffectiveOverlaySignals(params: {
+  authorityRemapEnabled: boolean;
+  transcript: string;
+  lastTurns?: string[];
+  gateConfidence: number;
+  postureConfidence: number;
+  rawIsUrgent: boolean;
+  rawIsDirectRequest: boolean;
+  rawExplicitTopicShift: boolean;
+}): EffectiveOverlaySignals {
+  if (!params.authorityRemapEnabled) {
+    return {
+      isUrgent: params.rawIsUrgent,
+      isDirectRequest: params.rawIsDirectRequest,
+      explicitTopicShift: params.rawExplicitTopicShift,
+      explicitTopicShiftFromHighConfidence: params.rawExplicitTopicShift,
+      authorityMode: "raw",
+    };
+  }
+  const derived = deriveTurnConstraintsFromTranscript(params.transcript, params.lastTurns);
+  const useUrgentFromBouncer = params.gateConfidence >= 0.7;
+  const useDirectFromBouncer = params.gateConfidence >= 0.7;
+  const explicitTopicShiftFromHighConfidence =
+    params.postureConfidence >= 0.8 ||
+    (params.gateConfidence >= 0.8 && params.rawExplicitTopicShift);
+  return {
+    isUrgent: useUrgentFromBouncer ? params.rawIsUrgent : derived.isUrgentDerived,
+    isDirectRequest: useDirectFromBouncer
+      ? params.rawIsDirectRequest
+      : derived.isDirectRequestDerived,
+    explicitTopicShift: explicitTopicShiftFromHighConfidence
+      ? params.rawExplicitTopicShift
+      : derived.explicitTopicShiftDerived,
+    explicitTopicShiftFromHighConfidence,
+    authorityMode: "remap_v1",
+  };
+}
+
+function buildBouncerAuthorityTraceFields(params: {
+  shadowLogEnabled: boolean;
+  authorityRemapEnabled: boolean;
+  raw: {
+    is_urgent: boolean;
+    is_direct_request: boolean;
+    explicit_topic_shift: boolean;
+    confidence: number;
+    posture_confidence: number;
+    state_confidence: number;
+  };
+  effective: {
+    isUrgent: boolean;
+    isDirectRequest: boolean;
+    explicitTopicShift: boolean;
+  };
+}) {
+  if (!params.shadowLogEnabled) return {};
+  return {
+    gate_confidence: params.raw.confidence,
+    posture_confidence: params.raw.posture_confidence,
+    state_confidence: params.raw.state_confidence,
+    is_urgent: params.raw.is_urgent,
+    is_direct_request: params.raw.is_direct_request,
+    explicit_topic_shift: params.raw.explicit_topic_shift,
+    authority_mode: params.authorityRemapEnabled ? "remap_v1" : "raw",
+    bouncer_raw: params.raw,
+    effective_signals: params.effective,
+  };
+}
+
 function userRequestedActionPlan(text: string) {
   const lowered = normalizeWhitespace(text).toLowerCase();
   return /\b(tell me what to do|give me a plan|draft message|draft a message|next steps|what should i do)\b/i.test(lowered);
@@ -2549,6 +2671,27 @@ function nextWitnessHysteresisTurns(params: {
   return 0;
 }
 
+function shouldHoldWitnessOnContinuation(params: {
+  enabled: boolean;
+  previousStance: StanceOverlayType | "none";
+  selectedStance: StanceOverlayType | "none";
+  transcript: string;
+  explicitTopicShiftFromHighConfidence: boolean;
+  effectiveIsDirectRequest: boolean;
+}) {
+  if (!params.enabled) return false;
+  if (params.previousStance !== "witness") return false;
+  if (params.selectedStance !== "none") return false;
+  const lowered = normalizeWhitespace(params.transcript).toLowerCase();
+  const griefOrRepairContinuation = /\b(miss her|grief|guilt|shame|estranged|falling out|made me cry|i cried|tears|broke down|funeral|lost my|how do i fix|fix this|repair|apology|reconcile|daughter)\b/i.test(
+    lowered
+  );
+  if (!griefOrRepairContinuation) return false;
+  if (params.explicitTopicShiftFromHighConfidence) return false;
+  if (userRequestedActionPlan(params.transcript) && params.effectiveIsDirectRequest) return false;
+  return true;
+}
+
 function buildStyleGuardBlock(params: {
   stance: StanceOverlayType | "none";
   endearmentCooldownTurns: number;
@@ -2556,7 +2699,7 @@ function buildStyleGuardBlock(params: {
   const lines = ["[STYLE_GUARD]"];
   if (params.stance === "witness") {
     lines.push("- No endearments in this turn.");
-    lines.push('- Ban phrases: "must feel", "that sounds", "all ears", "so heavy", "so jumbled".');
+    lines.push('- Ban phrases: "must feel", "that must feel", "that sounds", "all ears", "so heavy", "so jumbled".');
     return lines.join("\n");
   }
   if (params.endearmentCooldownTurns > 0) {
@@ -2574,7 +2717,7 @@ function nextEndearmentCooldownTurns(current: number, stance: StanceOverlayType 
   if (current > 0) {
     return current - 1;
   }
-  return 8;
+  return 10;
 }
 
 function shouldSuppressByOverlayRepetition(params: {
@@ -2872,7 +3015,22 @@ export async function POST(request: NextRequest) {
     const gateExplicit = librarianResult?.gateExplicit ?? false;
     const gateExplicitTopicShift = librarianResult?.gateExplicitTopicShift ?? false;
     const postureConfidence = librarianResult?.postureConfidence ?? 0;
+    const stateConfidence = librarianResult?.stateConfidence ?? 0;
     const avoidanceOrDrift = librarianResult?.avoidanceOrDrift ?? false;
+    const authorityRemapEnabled = isBouncerAuthorityRemapEnabled();
+    const effectiveSignals = resolveEffectiveOverlaySignals({
+      authorityRemapEnabled,
+      transcript: sttResult.transcript,
+      lastTurns: context.recentMessages
+        .slice(-4)
+        .map((entry) => entry.content)
+        .filter((entry) => typeof entry === "string" && entry.trim().length > 0),
+      gateConfidence,
+      postureConfidence,
+      rawIsUrgent: overlayIsUrgent,
+      rawIsDirectRequest: overlayIsDirectRequest,
+      rawExplicitTopicShift: gateExplicitTopicShift,
+    });
     const correctionSignal = isExplicitAssistantCorrection(sttResult.transcript);
     const frictionSignal = hasCorrectionFrictionSignal(sttResult.transcript);
     if (frictionSignal) {
@@ -3059,8 +3217,8 @@ export async function POST(request: NextRequest) {
     let overlayTopicKey: string | undefined;
     const baseOverlayPolicy = shouldSkipOverlaySelection({
       intent: overlayIntent,
-      isUrgent: overlayIsUrgent,
-      isDirectRequest: overlayIsDirectRequest,
+      isUrgent: effectiveSignals.isUrgent,
+      isDirectRequest: effectiveSignals.isDirectRequest,
     });
     correctionOverlayCooldownTurns = nextCorrectionOverlayCooldownTurns(
       correctionOverlayCooldownTurns,
@@ -3077,8 +3235,8 @@ export async function POST(request: NextRequest) {
       isSessionStart: context.isSessionStart,
       recentMessageCount: context.recentMessages.length,
       intent: overlayIntent,
-      isUrgent: overlayIsUrgent,
-      isDirectRequest: overlayIsDirectRequest,
+      isUrgent: effectiveSignals.isUrgent,
+      isDirectRequest: effectiveSignals.isDirectRequest,
     });
     const overlayPolicy =
       frictionSignal || correctionOverlayCooldownTurns > 0
@@ -3186,7 +3344,7 @@ export async function POST(request: NextRequest) {
         transcript: sttResult.transcript,
         posture,
         intent: overlayIntent,
-        explicitTopicShift: gateExplicitTopicShift,
+        explicitTopicShift: effectiveSignals.explicitTopicShift,
         avoidanceOrDrift,
         openLoops: context.overlayContext?.openLoops,
         commitments: context.overlayContext?.commitments,
@@ -3258,6 +3416,20 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
       pressure,
     });
+    const holdWitnessContinuation = shouldHoldWitnessOnContinuation({
+      enabled: authorityRemapEnabled,
+      previousStance,
+      selectedStance: stanceOverlayType,
+      transcript: sttResult.transcript,
+      explicitTopicShiftFromHighConfidence: effectiveSignals.explicitTopicShiftFromHighConfidence,
+      effectiveIsDirectRequest: effectiveSignals.isDirectRequest,
+    });
+    if (holdWitnessContinuation) {
+      stanceOverlayType = "witness";
+      overlaySuppressionReason = overlaySuppressionReason ?? "witness_continuation_hold";
+      overlayTriggerReason =
+        overlayTriggerReason === "none" ? "witness_continuation_hold" : overlayTriggerReason;
+    }
     if (stanceOverlayType === "none" && previousStance === "witness" && witnessCarryTurns > 0) {
       stanceOverlayType = "witness";
       overlaySuppressionReason = overlaySuppressionReason ?? "witness_hysteresis";
@@ -3289,7 +3461,7 @@ export async function POST(request: NextRequest) {
         transcript: sttResult.transcript,
         posture,
         intent: overlayIntent,
-        explicitTopicShift: gateExplicitTopicShift,
+        explicitTopicShift: effectiveSignals.explicitTopicShift,
         avoidanceOrDrift,
         openLoops: context.overlayContext?.openLoops,
         commitments: context.overlayContext?.commitments,
@@ -3327,7 +3499,7 @@ export async function POST(request: NextRequest) {
         shouldSuppressByOverlayRepetition({
           key: stanceKey,
           recentOverlayKeys,
-          explicitTopicShift: gateExplicitTopicShift,
+          explicitTopicShift: effectiveSignals.explicitTopicShift,
           pressure,
           riskLevel,
         })
@@ -3342,7 +3514,7 @@ export async function POST(request: NextRequest) {
         shouldSuppressByOverlayRepetition({
           key: tacticKey,
           recentOverlayKeys,
-          explicitTopicShift: gateExplicitTopicShift,
+          explicitTopicShift: effectiveSignals.explicitTopicShift,
           pressure,
           riskLevel,
         })
@@ -3615,6 +3787,23 @@ export async function POST(request: NextRequest) {
             startbrief_fallback: context.startBrief?.fallback ?? null,
             startbrief_items_count: context.startBrief?.itemsCount ?? 0,
             bridgeText_chars: context.startBrief?.bridgeTextChars ?? 0,
+            ...buildBouncerAuthorityTraceFields({
+              shadowLogEnabled: isBouncerAuthorityShadowLogEnabled(),
+              authorityRemapEnabled,
+              raw: {
+                is_urgent: overlayIsUrgent,
+                is_direct_request: overlayIsDirectRequest,
+                explicit_topic_shift: gateExplicitTopicShift,
+                confidence: gateConfidence,
+                posture_confidence: postureConfidence,
+                state_confidence: stateConfidence,
+              },
+              effective: {
+                isUrgent: effectiveSignals.isUrgent,
+                isDirectRequest: effectiveSignals.isDirectRequest,
+                explicitTopicShift: effectiveSignals.explicitTopicShift,
+              },
+            }),
           },
           memoryResponse: {
             messages,
@@ -3901,6 +4090,10 @@ export const __test__nextEndearmentCooldownTurns = nextEndearmentCooldownTurns;
 export const __test__buildStartbriefInjection = buildStartbriefInjection;
 export const __test__shouldInjectOpsSnippet = shouldInjectOpsSnippet;
 export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalMutualExclusion;
+export const __test__deriveTurnConstraintsFromTranscript = deriveTurnConstraintsFromTranscript;
+export const __test__resolveEffectiveOverlaySignals = resolveEffectiveOverlaySignals;
+export const __test__shouldHoldWitnessOnContinuation = shouldHoldWitnessOnContinuation;
+export const __test__buildBouncerAuthorityTraceFields = buildBouncerAuthorityTraceFields;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
 };

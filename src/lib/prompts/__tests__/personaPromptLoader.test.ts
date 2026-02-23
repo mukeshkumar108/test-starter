@@ -23,6 +23,11 @@ function expect<T>(actual: T) {
         throw new Error(`Expected string to contain ${JSON.stringify(expected)}`);
       }
     },
+    notToContain(expected: string) {
+      if (typeof actual === "string" && actual.includes(expected)) {
+        throw new Error(`Expected string not to contain ${JSON.stringify(expected)}`);
+      }
+    },
   };
 }
 
@@ -76,6 +81,16 @@ async function main() {
       throw new Error("Expected kernel blocks to be compiled in 00,10,20,30,40 order");
     }
     expect(prompt).toBe(expected);
+  });
+
+  await runTest("style kernel avoids explicit endearment list and keeps rarity rule", async () => {
+    clearPersonaPromptCache();
+    const prompt = await loadPersonaPrompt({
+      slug: "creative",
+      promptPath: "/prompts/persona-creative.md",
+    });
+    expect(prompt).toContain("Terms of endearment are rare");
+    expect(prompt).notToContain("\"babes\", \"babe\", \"buddy\"");
   });
 
   const failed = results.filter((r) => !r.passed);

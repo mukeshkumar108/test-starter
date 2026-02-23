@@ -59,3 +59,68 @@ This batch wires deferred user context into prompt assembly, expands user-model 
 - `docs/needle-backlog.md`
 - `prompts/__orig-10_identity_kernel-w-soul.md`
 - `prompts/__test-10_identity_kernel.md`
+
+---
+
+## 2026-02-23 Addendum: Authority Remap + Style/Steering Hardening
+
+### Scope
+- Reduce low-confidence bouncer authority in overlay policy/selector inputs.
+- Increase stance stability for grief/repair continuation turns.
+- Add confidence shadow telemetry into prompt-packet traces.
+- Reduce therapy-loop and endearment spam pressure from kernels/guards.
+
+### Code changes
+- Added deterministic per-turn derived constraints and confidence-gated effective signal remap:
+  - `deriveTurnConstraintsFromTranscript(...)`
+  - `resolveEffectiveOverlaySignals(...)`
+  - `shouldHoldWitnessOnContinuation(...)`
+  - `buildBouncerAuthorityTraceFields(...)`
+  - File: `src/app/api/chat/route.ts`
+
+- Wired overlay policy + selector to `effectiveSignals` (feature-flagged):
+  - `isUrgent`, `isDirectRequest`, `explicitTopicShift` now route through confidence gates.
+  - Recall and risk paths remain unchanged.
+  - File: `src/app/api/chat/route.ts`
+
+- Prompt packet trace shadow fields (no DB migration):
+  - `gate_confidence`, `posture_confidence`, `state_confidence`
+  - `is_urgent`, `is_direct_request`, `explicit_topic_shift`
+  - plus `bouncer_raw`, `effective_signals`, `authority_mode`
+  - File: `src/app/api/chat/route.ts`
+
+- Added env flags:
+  - `FEATURE_BOUNCER_AUTHORITY_REMAP_V1=false`
+  - `FEATURE_BOUNCER_AUTHORITY_SHADOW_LOG=true`
+  - Files: `src/env.ts`, `.env.example`
+
+- Added confidence analysis script:
+  - `scripts/admin/gate-confidence-report.ts`
+  - Reads trace rows and outputs histograms/breakdowns/sample rows.
+
+- Prompt-kernel updates:
+  - `CONVERSATION STEERING` reduced to 3 lines.
+  - Style removed explicit endearment list and now states rarity/non-stacking + grief/repair restriction.
+  - Added explicit ban phrase: `"that must feel"`.
+  - Files: `prompts/20_steering_kernel.md`, `prompts/40_style_kernel.md`
+
+- Runtime style guard alignment:
+  - witness banned phrase list includes `"that must feel"`.
+  - endearment cadence increased from 8 turns to 10 turns.
+  - File: `src/app/api/chat/route.ts`
+
+### Tests updated
+- `src/app/api/__tests__/promptStackV2.test.ts`
+  - Added effective-signal fallback tests.
+  - Added witness continuation hold/release tests.
+  - Added trace authority field helper test.
+  - Updated endearment cadence expectation (10 turns).
+  - Extended witness style guard phrase assertions.
+
+- `src/lib/prompts/__tests__/personaPromptLoader.test.ts`
+  - Added assertion that compiled creative prompt does not include explicit `"babes", "babe", "buddy"` list.
+
+### Operational note
+- Existing DB snapshots may have sparse `gate` traces if librarian trace was not enabled on all turns.
+- Once shadow logging is enabled, use:
+  - `pnpm tsx scripts/admin/gate-confidence-report.ts --userId=<userId> --limit=2000`

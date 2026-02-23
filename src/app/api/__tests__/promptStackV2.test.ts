@@ -13,6 +13,9 @@ import {
   __test__selectUserContextCandidates,
   __test__updateRecentInjectedContextKeys,
   __test__buildStartbriefInjection,
+  __test__resolveEffectiveOverlaySignals,
+  __test__shouldHoldWitnessOnContinuation,
+  __test__buildBouncerAuthorityTraceFields,
 } from "../chat/route";
 
 type TestResult = { name: string; passed: boolean; error?: string };
@@ -294,18 +297,108 @@ async function main() {
       endearmentCooldownTurns: 3,
     });
     expect(block).toContain("must feel");
+    expect(block).toContain("that must feel");
     expect(block).toContain("No endearments");
+    expect(block).notToContain("buddy");
+    expect(block).notToContain("babe");
   });
 
-  await runTest("endearment throttle enforces one allowance per 8 turns", () => {
+  await runTest("endearment throttle enforces one allowance per 10 turns", () => {
     let cooldown = 0;
     const sequence: number[] = [];
-    for (let i = 0; i < 9; i += 1) {
+    for (let i = 0; i < 11; i += 1) {
       cooldown = __test__nextEndearmentCooldownTurns(cooldown, "none");
       sequence.push(cooldown);
     }
-    expect(sequence[0]).toBe(8);
-    expect(sequence[8]).toBe(0);
+    expect(sequence[0]).toBe(10);
+    expect(sequence[10]).toBe(0);
+  });
+
+  await runTest("effective signals fall back to derived when confidence is low", () => {
+    const effective = __test__resolveEffectiveOverlaySignals({
+      authorityRemapEnabled: true,
+      transcript: "can you give me steps? anyway, new topic",
+      lastTurns: ["we were talking about jasmine"],
+      gateConfidence: 0.4,
+      postureConfidence: 0.5,
+      rawIsUrgent: false,
+      rawIsDirectRequest: false,
+      rawExplicitTopicShift: false,
+    });
+    expect(effective.isDirectRequest).toBe(true);
+    expect(effective.explicitTopicShift).toBe(true);
+  });
+
+  await runTest("effective explicit topic shift requires high confidence gate", () => {
+    const lowConfidence = __test__resolveEffectiveOverlaySignals({
+      authorityRemapEnabled: true,
+      transcript: "quick check in",
+      gateConfidence: 0.6,
+      postureConfidence: 0.6,
+      rawIsUrgent: false,
+      rawIsDirectRequest: false,
+      rawExplicitTopicShift: true,
+    });
+    expect(lowConfidence.explicitTopicShift).toBe(false);
+
+    const highConfidence = __test__resolveEffectiveOverlaySignals({
+      authorityRemapEnabled: true,
+      transcript: "quick check in",
+      gateConfidence: 0.85,
+      postureConfidence: 0.6,
+      rawIsUrgent: false,
+      rawIsDirectRequest: false,
+      rawExplicitTopicShift: true,
+    });
+    expect(highConfidence.explicitTopicShift).toBe(true);
+    expect(highConfidence.explicitTopicShiftFromHighConfidence).toBe(true);
+  });
+
+  await runTest("witness not dropped on adjacent grief continuation when effective shift is false", () => {
+    const keep = __test__shouldHoldWitnessOnContinuation({
+      enabled: true,
+      previousStance: "witness",
+      selectedStance: "none",
+      transcript: "I still miss her and the grief is heavy",
+      explicitTopicShiftFromHighConfidence: false,
+      effectiveIsDirectRequest: false,
+    });
+    expect(keep).toBe(true);
+  });
+
+  await runTest("witness can be released on explicit action request with effective direct request", () => {
+    const keep = __test__shouldHoldWitnessOnContinuation({
+      enabled: true,
+      previousStance: "witness",
+      selectedStance: "none",
+      transcript: "what should i do next, give me steps",
+      explicitTopicShiftFromHighConfidence: false,
+      effectiveIsDirectRequest: true,
+    });
+    expect(keep).toBe(false);
+  });
+
+  await runTest("trace authority fields include raw and effective signals when enabled", () => {
+    const fields = __test__buildBouncerAuthorityTraceFields({
+      shadowLogEnabled: true,
+      authorityRemapEnabled: true,
+      raw: {
+        is_urgent: false,
+        is_direct_request: false,
+        explicit_topic_shift: true,
+        confidence: 0.81,
+        posture_confidence: 0.82,
+        state_confidence: 0.71,
+      },
+      effective: {
+        isUrgent: false,
+        isDirectRequest: true,
+        explicitTopicShift: true,
+      },
+    }) as Record<string, unknown>;
+    expect(String(fields.authority_mode)).toBe("remap_v1");
+    expect(Boolean(fields.bouncer_raw)).toBe(true);
+    expect(Boolean(fields.effective_signals)).toBe(true);
   });
 
   await runTest("handover is injected verbatim", () => {

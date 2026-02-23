@@ -54,3 +54,18 @@ This validates required keys and basic types for:
 - bridge turn-1-only rule
 - turn-2/turn-3 handover rules
 - ops vs supplemental mutual exclusion
+- bouncer effective-signal fallback behavior (confidence-gated)
+- witness continuation hold/release guardrails for grief/repair turns
+- style guard banned-phrase coverage (`that must feel`) and endearment cadence
+
+## Bouncer Confidence Distribution Report
+For confidence telemetry from traces (no DB migration required):
+```bash
+pnpm tsx scripts/admin/gate-confidence-report.ts --userId=<userId> --limit=2000
+```
+
+Outputs:
+- 0.1 bucket histograms for `confidence`, `posture_confidence`, `state_confidence`
+- breakdown by posture
+- grief/repair vs normal turn split
+- sample rows with transcript snippets + confidence values
