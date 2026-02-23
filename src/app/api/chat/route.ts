@@ -1951,6 +1951,7 @@ function buildChatMessages(params: {
   handoverBlock?: string | null;
   opsSnippetBlock?: string | null;
   supplementalContext?: string | null;
+  rollingSummary?: string | null;
   recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
   transcript: string;
   posture?: ConversationPosture;
@@ -1964,6 +1965,21 @@ function buildChatMessages(params: {
     postureLines.push("", params.momentumGuardBlock);
   }
   const postureBlock = postureLines.join("\n");
+  const trimmedRollingSummary = (params.rollingSummary ?? "").trim();
+  const cappedRollingSummary =
+    trimmedRollingSummary.length > 800
+      ? `${trimmedRollingSummary.slice(0, 800)}...`
+      : trimmedRollingSummary;
+  const historyTurns = params.recentMessages
+    .map((message) => `${message.role}: ${message.content}`)
+    .join("\n");
+  const conversationHistoryBlock =
+    cappedRollingSummary && historyTurns
+      ? `[CONVERSATION_HISTORY]\n${cappedRollingSummary}\n---\n${historyTurns}`
+      : cappedRollingSummary
+        ? `[CONVERSATION_HISTORY]\n${cappedRollingSummary}`
+        : null;
+
   return [
     { role: "system" as const, content: params.persona },
     { role: "system" as const, content: postureBlock },
@@ -1983,7 +1999,9 @@ function buildChatMessages(params: {
           },
         ]
       : []),
-    ...params.recentMessages,
+    ...(conversationHistoryBlock
+      ? [{ role: "system" as const, content: conversationHistoryBlock }]
+      : params.recentMessages),
     { role: "user" as const, content: params.transcript },
   ];
 }
@@ -3853,6 +3871,7 @@ export async function POST(request: NextRequest) {
       handoverBlock,
       opsSnippetBlock,
       supplementalContext,
+      rollingSummary,
       recentMessages: context.recentMessages,
       transcript: sttResult.transcript,
       posture,
@@ -3928,6 +3947,7 @@ export async function POST(request: NextRequest) {
       ...(handoverBlock ? ["handover"] : []),
       ...(opsSnippetBlock ? ["ops"] : []),
       ...(supplementalContext ? ["supplemental"] : []),
+      ...(rollingSummary ? ["conversation_history"] : []),
     ];
 
     const llmResponse = await generateResponse(messages, persona.slug, model);

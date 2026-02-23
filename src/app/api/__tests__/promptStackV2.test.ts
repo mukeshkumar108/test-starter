@@ -96,6 +96,44 @@ async function main() {
     expect(contents[9]).toBe("current user turn");
   });
 
+  await runTest("conversation history block combines rolling summary and raw turns", () => {
+    const longSummary = `S${"x".repeat(850)}`;
+    const messages = __test__buildChatMessages({
+      persona: "PERSONA",
+      rollingSummary: longSummary,
+      recentMessages: [
+        { role: "user", content: "u1" },
+        { role: "assistant", content: "a1" },
+      ],
+      transcript: "current user turn",
+    });
+    const contents = messages.map((message) => message.content);
+    expect(contents[2].startsWith("[CONVERSATION_HISTORY]")).toBe(true);
+    expect(contents[2]).toContain("\n---\n");
+    expect(contents[2]).toContain("user: u1");
+    expect(contents[2]).toContain("assistant: a1");
+    const summaryLine = contents[2].split("\n")[1] ?? "";
+    expect(summaryLine.length).toBe(803);
+    expect(summaryLine.endsWith("...")).toBe(true);
+  });
+
+  await runTest("falls back to raw recent turns when rolling summary is empty", () => {
+    const messages = __test__buildChatMessages({
+      persona: "PERSONA",
+      rollingSummary: "   ",
+      recentMessages: [
+        { role: "assistant", content: "prev" },
+        { role: "user", content: "older user" },
+      ],
+      transcript: "current user turn",
+    });
+    const contents = messages.map((message) => message.content);
+    const joined = contents.join("\n");
+    expect(joined).notToContain("[CONVERSATION_HISTORY]");
+    expect(contents[2]).toBe("prev");
+    expect(contents[3]).toBe("older user");
+  });
+
   await runTest("legacy orientation blocks never appear in composed messages", () => {
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
