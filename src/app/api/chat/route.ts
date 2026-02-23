@@ -1361,7 +1361,7 @@ async function callOpenRouterJson(
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 120,
+        max_tokens: 350,
         temperature: 0,
         response_format: { type: "json_object" },
       }),

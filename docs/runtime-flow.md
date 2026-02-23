@@ -49,11 +49,18 @@ Two paths run in parallel:
 9. **Model routing + LLM call**
    - Safety override remains unchanged via `getChatModelForGate({ gate: { risk_level } })`.
    - Non-safety turns use tier router (`getTurnTierForSignals` -> `getChatModelForTurn`).
-   - Tier precedence: `risk > stance > moment > pressure > intent`.
+   - Tier precedence: `risk > stance > moment > intent > depth > direct/urgent > default`.
    - Tier models:
      - `T1`: `bytedance-seed/seed-1.6-flash`
      - `T2`: `google/gemini-2.5-flash`
      - `T3`: `anthropic/claude-sonnet-4.6`
+   - Depth routing:
+     - If posture is `RELATIONSHIP|RECOVERY|REFLECTION`, route to `T2` with reason `companion_depth`.
+     - If pressure is `MED|HIGH`, route to `T2` with reason `companion_depth`.
+   - Direct/urgent routing:
+     - If `isDirectRequest` or `isUrgent`, route to `T2` with reason `direct_or_urgent_support`.
+   - Default fallback:
+     - Route to `T1` with reason `default_balanced`.
    - `moment` is derived before tier selection from selected user-context moment keys + transcript heuristics, with fallback: `stance=witness && pressure=HIGH` => `moment=grief`.
    - T3 uses burst routing in session-local state:
      - Peak event starts a 2-turn T3 burst (`remaining=2` then decrement each use).

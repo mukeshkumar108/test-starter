@@ -78,7 +78,7 @@ export function getTurnTierForSignals(params: {
   isDirectRequest?: boolean;
   isUrgent?: boolean;
 }): { tier: TurnTier; reason: string } {
-  // Precedence: risk > stance > moment > pressure > intent.
+  // Precedence: risk > stance > moment > intent > depth > direct/urgent > default.
   if (params.riskLevel === "HIGH" || params.riskLevel === "CRISIS") {
     return { tier: "T3", reason: "risk_high_or_crisis" };
   }
@@ -115,19 +115,25 @@ export function getTurnTierForSignals(params: {
     return { tier: "T2", reason: `moment_${moment}` };
   }
 
-  if ((params.posture ?? "COMPANION") === "COMPANION" && pressure === "HIGH") {
-    return { tier: "T2", reason: "companion_high_pressure" };
-  }
-
   if (params.intent === "output_task" || params.intent === "momentum") {
     return { tier: "T1", reason: `intent_${params.intent}` };
+  }
+
+  if (
+    params.posture === "RELATIONSHIP" ||
+    params.posture === "RECOVERY" ||
+    params.posture === "REFLECTION" ||
+    pressure === "MED" ||
+    pressure === "HIGH"
+  ) {
+    return { tier: "T2", reason: "companion_depth" };
   }
 
   if (params.isDirectRequest || params.isUrgent) {
     return { tier: "T2", reason: "direct_or_urgent_support" };
   }
 
-  return { tier: "T2", reason: "default_balanced" };
+  return { tier: "T1", reason: "default_balanced" };
 }
 
 export function getChatModelForTurn(params: {

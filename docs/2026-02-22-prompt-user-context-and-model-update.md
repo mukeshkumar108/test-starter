@@ -156,7 +156,7 @@ This batch wires deferred user context into prompt assembly, expands user-model 
   - File: `src/app/api/chat/route.ts`
 
 ### Tier precedence/rules
-- Precedence: `risk > stance > moment > pressure > intent`
+- Precedence: `risk > stance > moment > intent > depth > direct/urgent > default`
 - Required mappings:
   - `repair_and_forward` -> `T3`
   - `witness` -> `T2`; escalates to `T3` for high pressure or grief/relationship rupture moments
@@ -165,8 +165,11 @@ This batch wires deferred user context into prompt assembly, expands user-model 
   - Moments:
     - `{grief, relationship_rupture, deep_strain, shame}` -> `T3`
     - `{strain, win, comeback}` -> `T2`
-  - `posture=COMPANION && pressure=HIGH` -> at least `T2`
-  - `intent=output_task|momentum` -> `T1` unless overridden above
+  - `intent=output_task|momentum` -> `T1`
+  - Depth signal -> `T2` (`companion_depth`):
+    - posture in `{RELATIONSHIP, RECOVERY, REFLECTION}` OR pressure in `{MED, HIGH}`
+  - Direct/urgent (`isDirectRequest|isUrgent`) -> `T2` (`direct_or_urgent_support`)
+  - Default fallback -> `T1` (`default_balanced`)
 
 ### Tests updated
 - `src/lib/providers/__tests__/models.test.ts`

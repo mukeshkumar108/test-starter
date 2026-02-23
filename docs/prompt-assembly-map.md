@@ -43,7 +43,14 @@ The prompt is intentionally small and ordered.
     - `T1` -> `bytedance-seed/seed-1.6-flash`
     - `T2` -> `google/gemini-2.5-flash`
     - `T3` -> `anthropic/claude-sonnet-4.6`
-  - Precedence: `risk > stance > moment > pressure > intent`.
+  - Precedence: `risk > stance > moment > intent > depth > direct/urgent > default`.
+  - Depth routing:
+    - posture in `RELATIONSHIP|RECOVERY|REFLECTION` -> `T2` (`companion_depth`)
+    - pressure in `MED|HIGH` -> `T2` (`companion_depth`)
+  - Direct/urgent routing:
+    - `isDirectRequest` or `isUrgent` -> `T2` (`direct_or_urgent_support`)
+  - Default fallback:
+    - `T1` (`default_balanced`)
   - T3 is burst-limited in session state:
     - peak events get max 2 T3 turns per stable event id
     - then forced fallback to T2 until a new event id appears

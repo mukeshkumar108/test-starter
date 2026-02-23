@@ -120,6 +120,34 @@ async function main() {
     expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T1);
   });
 
+  await runTest("depth signal routes to T2 with companion_depth reason", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "RELATIONSHIP",
+      pressure: "LOW",
+      stanceSelected: "none",
+      moment: null,
+      intent: "companion",
+    });
+    expect(decision.tier).toBe("T2");
+    expect(decision.reason).toBe("companion_depth");
+  });
+
+  await runTest("default fallback routes to T1 when no depth/direct signals", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "IDEATION",
+      pressure: "LOW",
+      stanceSelected: "none",
+      moment: null,
+      intent: "companion",
+      isDirectRequest: false,
+      isUrgent: false,
+    });
+    expect(decision.tier).toBe("T1");
+    expect(decision.reason).toBe("default_balanced");
+  });
+
   await runTest("risk HIGH keeps safety model regardless of stance", () => {
     const safetyModel = getChatModelForGate({
       personaId: "mentor",
