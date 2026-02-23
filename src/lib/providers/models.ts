@@ -23,7 +23,7 @@ export const MODELS = {
 } as const;
 
 export const MODEL_TIERS = {
-  T1: "mistralai/mistral-small-creative",
+  T1: "meta-llama/llama-4-maverick",
   T2: "google/gemini-2.5-flash",
   T3: "anthropic/claude-sonnet-4.6",
 } as const;
