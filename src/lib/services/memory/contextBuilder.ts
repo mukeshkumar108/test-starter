@@ -624,6 +624,28 @@ function getStartBriefForSession(state: unknown, sessionId: string) {
   return raw as SynapseStartBriefResponse;
 }
 
+function getStartBriefSummaryContentQuality(
+  startBrief: SynapseStartBriefResponse | null | undefined
+) {
+  const value = startBrief?.evidence?.summary_content_quality;
+  return typeof value === "string" ? value : null;
+}
+
+function isUsableStartBrief(startBrief: SynapseStartBriefResponse | null | undefined) {
+  if (!startBrief) return false;
+  const summaryContentQuality = getStartBriefSummaryContentQuality(startBrief);
+  const isWeakSummary =
+    summaryContentQuality === "none_fetched" ||
+    summaryContentQuality === "empty_after_normalization";
+  if (!isWeakSummary) return true;
+  const handoverText =
+    typeof startBrief.handover_text === "string" ? startBrief.handover_text.trim() : "";
+  const items = Array.isArray(startBrief.items) ? startBrief.items : [];
+  const resumeBridgeText =
+    typeof startBrief.resume?.bridge_text === "string" ? startBrief.resume.bridge_text.trim() : "";
+  return !(!handoverText && items.length === 0 && !resumeBridgeText);
+}
+
 function withStartBriefForSession(
   state: unknown,
   sessionId: string,
@@ -1209,11 +1231,13 @@ export async function buildContextFromSynapse(
   const cachedUserModel = getUserModelForSession(sessionState?.state, sessionId);
   const cachedDailyAnalysis = getDailyAnalysisForSession(sessionState?.state, sessionId);
   const deferredProfileContext = toDeferredProfileContext(cachedUserModel);
+  let rejectedSummaryContentQuality: string | null = null;
 
-  if (cachedStartBrief) {
+  if (cachedStartBrief && isUsableStartBrief(cachedStartBrief)) {
     const cachedItemsCount = Array.isArray(cachedStartBrief.items) ? cachedStartBrief.items.length : 0;
     const cachedBridgeTextChars =
       typeof cachedStartBrief.bridgeText === "string" ? cachedStartBrief.bridgeText.trim().length : 0;
+    const cachedSummaryContentQuality = getStartBriefSummaryContentQuality(cachedStartBrief);
     if (env.FEATURE_LIBRARIAN_TRACE === "true") {
       void prisma.librarianTrace.create({
         data: {
@@ -1227,6 +1251,8 @@ export async function buildContextFromSynapse(
             startbrief_fallback: null,
             startbrief_items_count: cachedItemsCount,
             bridgeText_chars: cachedBridgeTextChars,
+            startbrief_quality: "usable",
+            summary_content_quality: cachedSummaryContentQuality,
             source: "session_cache",
           },
           brief: cachedStartBrief as any,
@@ -1270,6 +1296,8 @@ export async function buildContextFromSynapse(
         .reverse(),
       isSessionStart,
     };
+  } else if (cachedStartBrief) {
+    rejectedSummaryContentQuality = getStartBriefSummaryContentQuality(cachedStartBrief);
   }
 
   if (isSessionStart) {
@@ -1287,7 +1315,7 @@ export async function buildContextFromSynapse(
       now: new Date().toISOString(),
     });
 
-    if (startBrief) {
+    if (startBrief && isUsableStartBrief(startBrief)) {
       const [userModelResult, dailyAnalysisResult] = await Promise.all([
         getSynapseUserModel()<{
           tenantId?: string;
@@ -1320,6 +1348,7 @@ export async function buildContextFromSynapse(
       const startItemsCount = Array.isArray(startBrief.items) ? startBrief.items.length : 0;
       const startBridgeTextChars =
         typeof startBrief.bridgeText === "string" ? startBrief.bridgeText.trim().length : 0;
+      const startSummaryContentQuality = getStartBriefSummaryContentQuality(startBrief);
       if (env.FEATURE_LIBRARIAN_TRACE === "true") {
         void prisma.librarianTrace.create({
           data: {
@@ -1333,6 +1362,8 @@ export async function buildContextFromSynapse(
               startbrief_fallback: null,
               startbrief_items_count: startItemsCount,
               bridgeText_chars: startBridgeTextChars,
+              startbrief_quality: "usable",
+              summary_content_quality: startSummaryContentQuality,
               source: "synapse_startbrief",
             },
             brief: startBrief as any,
@@ -1375,6 +1406,8 @@ export async function buildContextFromSynapse(
           .reverse(),
         isSessionStart,
       };
+    } else if (startBrief) {
+      rejectedSummaryContentQuality = getStartBriefSummaryContentQuality(startBrief);
     }
   }
 
@@ -1489,6 +1522,8 @@ export async function buildContextFromSynapse(
             startbrief_fallback: "session/brief",
             startbrief_items_count: 0,
             bridgeText_chars: 0,
+            startbrief_quality: "weak_rejected",
+            summary_content_quality: rejectedSummaryContentQuality,
             source: "session_brief_cache",
           },
         },
@@ -1571,6 +1606,8 @@ export async function buildContextFromSynapse(
           startbrief_fallback: "session/brief",
           startbrief_items_count: 0,
           bridgeText_chars: 0,
+          startbrief_quality: "weak_rejected",
+          summary_content_quality: rejectedSummaryContentQuality,
           source: "session_brief_fetch",
         },
       },

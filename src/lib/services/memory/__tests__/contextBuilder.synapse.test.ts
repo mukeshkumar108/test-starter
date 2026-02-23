@@ -252,6 +252,61 @@ async function main() {
   expect(context.recentMessages.length).toBe(2);
   });
 
+  await runTest("buildContextFromSynapse falls back to session brief when startbrief is weak-empty", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-startbrief-weak.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.sessionState.findUnique as any) = async () => null;
+  (prisma.sessionState.upsert as any) = async () => ({ id: "state-startbrief-weak-1" });
+
+  let sessionBriefCalled = 0;
+  (globalThis as any).__synapseStartBriefOverride = async () => ({
+    handover_text: "   ",
+    resume: { use_bridge: true, bridge_text: " " },
+    items: [],
+    evidence: {
+      summary_content_quality: "none_fetched",
+    },
+  });
+  (globalThis as any).__synapseBriefOverride = async () => {
+    sessionBriefCalled += 1;
+    return {
+      facts: ["User asked for memory-aware follow-up"],
+      openLoops: ["Follow up on implementation details"],
+      commitments: [],
+      currentFocus: "Ship prompt/context changes",
+    };
+  };
+
+  const context = await buildContextFromSynapse(
+    "user-startbrief-weak-1",
+    "persona-startbrief-weak-1",
+    "hello",
+    "session-startbrief-weak-1",
+    true
+  );
+
+  delete (globalThis as any).__synapseStartBriefOverride;
+  delete (globalThis as any).__synapseBriefOverride;
+
+  expect(sessionBriefCalled).toBe(1);
+  if (!context) throw new Error("Expected context, got null");
+  expect(context.startBrief?.used ?? null).toBe(false);
+  expect(context.startBrief?.fallback ?? null).toBe("session/brief");
+  expect(context.startbriefPacket ?? null).toBe(null);
+  });
+
   await runTest("buildContextFromSynapse appends daily analysis when bridge text missing", async () => {
   const { prisma } = await import("../../../prisma");
   const { buildContextFromSynapse } = await import("../contextBuilder");

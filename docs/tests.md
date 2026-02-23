@@ -44,6 +44,23 @@ This validates required keys and basic types for:
 - `GET /session/startbrief`
 - `POST /memory/query`
 
+## Session Ingest + Startbrief Smoke Harness (local)
+Deterministic local smoke (no external Synapse required):
+```bash
+pnpm tsx scripts/smoke-synapse-session-startbrief.ts
+```
+Expected markers:
+- `SMOKE:STEP1_CLOSE_TRIGGERED`
+- `SMOKE:STEP1_RETRY_WRITTEN`
+- `SMOKE:STEP2_RETRY_FIRED`
+- `SMOKE:STEP3_STARTBRIEF_WEAK_FALLBACK`
+- `SMOKE:TRACE:startbrief_quality=weak_rejected`
+- `SMOKE:TRACE:summary_content_quality=none_fetched`
+- `SMOKE:PASS`
+
+Checklist doc:
+- `docs/smoke-checklist-synapse-session-startbrief.md`
+
 ## Prompt stack assertions
 `src/app/api/__tests__/promptStackV2.test.ts` locks:
 - final message order

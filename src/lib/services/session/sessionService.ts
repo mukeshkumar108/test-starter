@@ -7,6 +7,9 @@ const DEFAULT_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
 const ROLLING_SUMMARY_TURN_INTERVAL = 4;
 const ROLLING_SUMMARY_RECENT_MESSAGES = 8;
 const ROLLING_SUMMARY_SESSION_KEY = "rollingSummarySessionId";
+const SYNAPSE_SESSION_RETRY_KEY = "synapseSessionIngestRetry";
+const SYNAPSE_SESSION_RETRY_MAX_ATTEMPTS = 3;
+const SYNAPSE_SESSION_RETRY_BACKOFF_MS = 60_000;
 
 function isRollingSummaryEnabled() {
   return env.FEATURE_ROLLING_SUMMARY !== "false";
@@ -40,6 +43,247 @@ function withRollingSummarySessionId(state: unknown, sessionId: string) {
 function getRollingSummarySessionId(state: unknown) {
   const value = asStateRecord(state)[ROLLING_SUMMARY_SESSION_KEY];
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+type PendingSynapseSessionIngest = {
+  sessionId: string;
+  startedAt: string;
+  endedAt: string;
+  attempts: number;
+  nextRetryAt: string | null;
+  lastError: string | null;
+  lastAttemptAt: string;
+};
+
+type SynapseSessionRetryState = {
+  pending: PendingSynapseSessionIngest[];
+  lastOk: boolean | null;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+};
+
+function readSynapseSessionRetryState(state: unknown): SynapseSessionRetryState {
+  const raw = asStateRecord(asStateRecord(state)[SYNAPSE_SESSION_RETRY_KEY]);
+  const pendingRaw = Array.isArray(raw.pending) ? raw.pending : [];
+  const pending = pendingRaw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const row = entry as Record<string, unknown>;
+      const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
+      const startedAt = typeof row.startedAt === "string" ? row.startedAt : "";
+      const endedAt = typeof row.endedAt === "string" ? row.endedAt : "";
+      if (!sessionId || !startedAt || !endedAt) return null;
+      const attempts =
+        typeof row.attempts === "number" && Number.isFinite(row.attempts)
+          ? Math.max(0, Math.floor(row.attempts))
+          : 0;
+      return {
+        sessionId,
+        startedAt,
+        endedAt,
+        attempts,
+        nextRetryAt: typeof row.nextRetryAt === "string" ? row.nextRetryAt : null,
+        lastError: typeof row.lastError === "string" ? row.lastError : null,
+        lastAttemptAt: typeof row.lastAttemptAt === "string" ? row.lastAttemptAt : "",
+      } satisfies PendingSynapseSessionIngest;
+    })
+    .filter((entry): entry is PendingSynapseSessionIngest => Boolean(entry))
+    .slice(0, 20);
+
+  return {
+    pending,
+    lastOk: typeof raw.lastOk === "boolean" ? raw.lastOk : null,
+    lastError: typeof raw.lastError === "string" ? raw.lastError : null,
+    lastAttemptAt: typeof raw.lastAttemptAt === "string" ? raw.lastAttemptAt : null,
+  };
+}
+
+function withSynapseSessionRetryState(state: unknown, next: SynapseSessionRetryState) {
+  const base = asStateRecord(state);
+  return {
+    ...base,
+    [SYNAPSE_SESSION_RETRY_KEY]: {
+      pending: next.pending,
+      lastOk: next.lastOk,
+      lastError: next.lastError,
+      lastAttemptAt: next.lastAttemptAt,
+    },
+  };
+}
+
+function parseIsoToMs(value: string | null | undefined) {
+  if (!value) return Number.NaN;
+  return Date.parse(value);
+}
+
+function nextRetryIso(now: Date, attempts: number) {
+  const delayMs = attempts * SYNAPSE_SESSION_RETRY_BACKOFF_MS;
+  return new Date(now.getTime() + delayMs).toISOString();
+}
+
+async function enqueueSynapseSessionIngestRetry(params: {
+  userId: string;
+  personaId: string;
+  sessionId: string;
+  startedAt: Date;
+  endedAt: Date;
+  error: string;
+}) {
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    select: { state: true },
+  });
+  const retryState = readSynapseSessionRetryState(existing?.state);
+  const now = new Date();
+  const prior = retryState.pending.find((row) => row.sessionId === params.sessionId);
+  const attempts = Math.min(
+    SYNAPSE_SESSION_RETRY_MAX_ATTEMPTS,
+    (prior?.attempts ?? 0) + 1
+  );
+  const nextEntry: PendingSynapseSessionIngest = {
+    sessionId: params.sessionId,
+    startedAt: params.startedAt.toISOString(),
+    endedAt: params.endedAt.toISOString(),
+    attempts,
+    nextRetryAt:
+      attempts >= SYNAPSE_SESSION_RETRY_MAX_ATTEMPTS ? null : nextRetryIso(now, attempts),
+    lastError: params.error,
+    lastAttemptAt: now.toISOString(),
+  };
+  const pending = retryState.pending
+    .filter((row) => row.sessionId !== params.sessionId)
+    .concat(nextEntry)
+    .slice(-20);
+  const nextState = withSynapseSessionRetryState(existing?.state, {
+    pending,
+    lastOk: false,
+    lastError: params.error,
+    lastAttemptAt: now.toISOString(),
+  });
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    update: { state: nextState as any, updatedAt: now },
+    create: { userId: params.userId, personaId: params.personaId, state: nextState as any },
+  });
+}
+
+async function processPendingSynapseSessionIngestRetries(params: {
+  userId: string;
+  personaId: string;
+  now: Date;
+}) {
+  if (env.FEATURE_SYNAPSE_SESSION_INGEST !== "true") return;
+  const existing = await prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    select: { state: true },
+  });
+  const retryState = readSynapseSessionRetryState(existing?.state);
+  if (retryState.pending.length === 0) return;
+
+  const due = retryState.pending.find((entry) => {
+    if (entry.attempts >= SYNAPSE_SESSION_RETRY_MAX_ATTEMPTS) return false;
+    const nextMs = parseIsoToMs(entry.nextRetryAt);
+    return !Number.isFinite(nextMs) || nextMs <= params.now.getTime();
+  });
+  if (!due) return;
+
+  const startedAt = new Date(due.startedAt);
+  const endedAt = new Date(due.endedAt);
+  if (Number.isNaN(startedAt.getTime()) || Number.isNaN(endedAt.getTime())) return;
+
+  const messages = await prisma.message.findMany({
+    where: {
+      userId: params.userId,
+      personaId: params.personaId,
+      createdAt: {
+        gte: startedAt,
+        lte: endedAt,
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, content: true, createdAt: true },
+  });
+
+  const result = await getSynapseSessionIngestWithMeta()({
+    tenantId: env.SYNAPSE_TENANT_ID,
+    userId: params.userId,
+    personaId: params.personaId,
+    sessionId: due.sessionId,
+    startedAt: due.startedAt,
+    endedAt: due.endedAt,
+    messages: messages.map((message) => ({
+      role: message.role,
+      text: message.content,
+      timestamp: message.createdAt.toISOString(),
+    })),
+  });
+
+  const nowIso = params.now.toISOString();
+  if (result?.ok) {
+    const pending = retryState.pending.filter((entry) => entry.sessionId !== due.sessionId);
+    const nextState = withSynapseSessionRetryState(existing?.state, {
+      pending,
+      lastOk: true,
+      lastError: null,
+      lastAttemptAt: nowIso,
+    });
+    await prisma.sessionState.upsert({
+      where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+      update: { state: nextState as any, updatedAt: params.now },
+      create: { userId: params.userId, personaId: params.personaId, state: nextState as any },
+    });
+    await prisma.synapseIngestTrace.create({
+      data: {
+        userId: params.userId,
+        personaId: params.personaId,
+        sessionId: due.sessionId,
+        role: "session_retry",
+        status: result.status,
+        ms: result.ms,
+        ok: true,
+        error: null,
+      },
+    });
+    return;
+  }
+
+  const reason = result?.errorBody ?? result?.reason ?? "retry_failed";
+  const attempts = Math.min(SYNAPSE_SESSION_RETRY_MAX_ATTEMPTS, due.attempts + 1);
+  const updatedEntry: PendingSynapseSessionIngest = {
+    ...due,
+    attempts,
+    lastError: reason,
+    lastAttemptAt: nowIso,
+    nextRetryAt:
+      attempts >= SYNAPSE_SESSION_RETRY_MAX_ATTEMPTS ? null : nextRetryIso(params.now, attempts),
+  };
+  const pending = retryState.pending
+    .filter((entry) => entry.sessionId !== due.sessionId)
+    .concat(updatedEntry)
+    .slice(-20);
+  const nextState = withSynapseSessionRetryState(existing?.state, {
+    pending,
+    lastOk: false,
+    lastError: reason,
+    lastAttemptAt: nowIso,
+  });
+  await prisma.sessionState.upsert({
+    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+    update: { state: nextState as any, updatedAt: params.now },
+    create: { userId: params.userId, personaId: params.personaId, state: nextState as any },
+  });
+  await prisma.synapseIngestTrace.create({
+    data: {
+      userId: params.userId,
+      personaId: params.personaId,
+      sessionId: due.sessionId,
+      role: "session_retry",
+      status: result?.status ?? null,
+      ms: result?.ms ?? null,
+      ok: false,
+      error: reason,
+    },
+  });
 }
 
 async function resetRollingSummaryForSession(params: {
@@ -181,6 +425,16 @@ async function fireAndForgetSynapseSessionIngest(session: {
             error: ok ? null : errorBody || "session_ingest_failed",
           },
         });
+        if (!ok) {
+          await enqueueSynapseSessionIngestRetry({
+            userId: session.userId,
+            personaId: session.personaId,
+            sessionId: session.id,
+            startedAt: session.startedAt,
+            endedAt: session.endedAt,
+            error: errorBody || "session_ingest_failed",
+          });
+        }
 
         const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const failedCount = await prisma.synapseIngestTrace.count({
@@ -200,6 +454,7 @@ async function fireAndForgetSynapseSessionIngest(session: {
       }
     }).catch((error) => {
       const ms = Date.now() - start;
+      const errorText = String(error);
       console.warn("[synapse.session.ingest.error]", {
         sessionId: session.id,
         error,
@@ -213,14 +468,40 @@ async function fireAndForgetSynapseSessionIngest(session: {
           status: null,
           ms,
           ok: false,
-          error: String(error),
+          error: errorText,
         },
       }).catch((traceError) => {
         console.warn("[synapse.session.ingest.trace.error]", { traceError });
       });
+      void enqueueSynapseSessionIngestRetry({
+        userId: session.userId,
+        personaId: session.personaId,
+        sessionId: session.id,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        error: errorText,
+      }).catch((enqueueError) => {
+        console.warn("[synapse.session.ingest.retry.enqueue.error]", {
+          sessionId: session.id,
+          enqueueError,
+        });
+      });
     });
   } catch (error) {
     console.warn("[synapse.session.ingest.error]", { sessionId: session.id, error });
+    void enqueueSynapseSessionIngestRetry({
+      userId: session.userId,
+      personaId: session.personaId,
+      sessionId: session.id,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
+      error: String(error),
+    }).catch((enqueueError) => {
+      console.warn("[synapse.session.ingest.retry.enqueue.error]", {
+        sessionId: session.id,
+        enqueueError,
+      });
+    });
   }
 }
 
@@ -324,6 +605,9 @@ export async function ensureActiveSession(
   personaId: string,
   now: Date
 ) {
+  void processPendingSynapseSessionIngestRetries({ userId, personaId, now }).catch((error) => {
+    console.warn("[synapse.session.ingest.retry.error]", { userId, personaId, error });
+  });
   await closeStaleSessionIfAny(userId, personaId, now);
   const cutoff = new Date(now.getTime() - getActiveWindowMs());
   const lastUserMessage = await prisma.message.findFirst({

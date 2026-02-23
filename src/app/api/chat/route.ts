@@ -661,6 +661,8 @@ type OverlayState = {
   tierBurst?: TierBurstState;
   endearmentCooldownTurns?: number;
   user?: OverlayUserState;
+  synapseSessionIngestOk?: boolean | null;
+  synapseSessionIngestError?: string | null;
 };
 
 type ChatTimingSpans = {
@@ -715,6 +717,8 @@ function buildChatTrace(params: {
     supplementalContext: number;
     rollingSummary: number;
   };
+  synapseSessionIngestOk: boolean | null;
+  synapseSessionIngestError: string | null;
   timings: ChatTimingSpans;
 }) {
   return {
@@ -737,6 +741,8 @@ function buildChatTrace(params: {
     bridgeText_chars: params.startbrief.bridgeText_chars,
     startbrief_runtime: params.startbriefRuntime,
     system_blocks: params.systemBlocks,
+    synapse_session_ingest_ok: params.synapseSessionIngestOk,
+    synapse_session_ingest_error: params.synapseSessionIngestError,
     token_usage: null,
     counts: params.counts,
     timings: params.timings,
@@ -875,9 +881,19 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
   });
   const state = sessionState?.state;
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const retryStateRaw = (state as Record<string, unknown>).synapseSessionIngestRetry;
+  const retryState =
+    retryStateRaw && typeof retryStateRaw === "object" && !Array.isArray(retryStateRaw)
+      ? (retryStateRaw as Record<string, unknown>)
+      : null;
   const overlayState = (state as Record<string, unknown>).overlayState;
   if (!overlayState || typeof overlayState !== "object" || Array.isArray(overlayState)) {
-    return null;
+    return {
+      synapseSessionIngestOk:
+        typeof retryState?.lastOk === "boolean" ? retryState.lastOk : null,
+      synapseSessionIngestError:
+        typeof retryState?.lastError === "string" ? retryState.lastError : null,
+    };
   }
   const raw = overlayState as Record<string, unknown>;
   return {
@@ -962,6 +978,10 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
             : undefined,
         }
       : undefined,
+    synapseSessionIngestOk:
+      typeof retryState?.lastOk === "boolean" ? retryState.lastOk : null,
+    synapseSessionIngestError:
+      typeof retryState?.lastError === "string" ? retryState.lastError : null,
   };
 }
 
@@ -3194,6 +3214,8 @@ export async function POST(request: NextRequest) {
       lastUsedAt: 0,
     };
     let endearmentCooldownTurns = overlayState.endearmentCooldownTurns ?? 0;
+    const synapseSessionIngestOk = overlayState.synapseSessionIngestOk ?? null;
+    const synapseSessionIngestError = overlayState.synapseSessionIngestError ?? null;
     const overlayUser = overlayState.user ?? {};
     // Trajectory rituals are day/week scoped to the user's configured local zone.
     const timeZone = "Europe/Zagreb";
@@ -4131,6 +4153,8 @@ export async function POST(request: NextRequest) {
         supplementalContext: supplementalContext ? 1 : 0,
         rollingSummary: rollingSummary ? 1 : 0,
       },
+      synapseSessionIngestOk,
+      synapseSessionIngestError,
       timings,
     });
     console.log(

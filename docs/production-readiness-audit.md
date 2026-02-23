@@ -12,6 +12,8 @@ This is a living checklist based on the latest audit. It tracks what we have don
 - Session boundary is based on last user message (default 5 minutes, configurable)
 - Admin read endpoints for traces and messages (guarded by `ADMIN_API_KEY`)
 - Synapse session ingest trace logging with 24h failure count
+- Durable retry queue for Synapse session ingest (non-blocking retry on next active session; capped attempts + last error)
+- Startbrief usability gate with `/session/brief` fallback on weak-empty startbrief payloads
 - Unified test runner (`pnpm test`) with curated suite + optional integration
 
 ## Still To Do (High Priority)
@@ -19,7 +21,7 @@ This is a living checklist based on the latest audit. It tracks what we have don
 - Make LLM fallback logs include actual model used
 - Store `sessionId` on messages to simplify debug and querying
 - Add rate limiting to admin endpoints
-- Move session ingest to a true background task (`waitUntil`) or queue
+- Move session ingest retry processing to dedicated worker/queue (currently piggybacks on next `ensureActiveSession`)
 
 ## Still To Do (Medium Priority)
 - Remove legacy memory pipeline (shadow judge, curator, summary spine)

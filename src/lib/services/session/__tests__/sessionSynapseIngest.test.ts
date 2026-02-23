@@ -147,6 +147,68 @@ async function main() {
     expect(called).toBe(0);
   });
 
+  await runTest("session ingest failure enqueues durable retry record", async () => {
+    seedEnv(true);
+    const { env } = await import("../../../../env");
+    (env as any).FEATURE_SYNAPSE_SESSION_INGEST = "true";
+    const { prisma } = await import("../../../prisma");
+    const { closeStaleSessionIfAny } = await import("../sessionService");
+
+    const session = {
+      id: "sess-retry-1",
+      userId: "user-retry",
+      personaId: "persona-retry",
+      startedAt: new Date("2026-02-04T18:00:00Z"),
+      lastActivityAt: new Date("2026-02-04T18:10:00Z"),
+      endedAt: null,
+    };
+
+    (prisma.session.findFirst as any) = async () => session;
+    (prisma.session.update as any) = async () => ({
+      ...session,
+      endedAt: new Date("2026-02-04T18:10:00Z"),
+    });
+    (prisma.message.findFirst as any) = async () => ({
+      createdAt: new Date("2026-02-04T18:10:00Z"),
+    });
+    (prisma.message.findMany as any) = async () => [
+      {
+        role: "user",
+        content: "hello",
+        createdAt: new Date("2026-02-04T18:00:01Z"),
+      },
+    ];
+    (prisma.synapseIngestTrace.create as any) = async () => null;
+    (prisma.synapseIngestTrace.count as any) = async () => 0;
+
+    let sessionState: any = { state: {} };
+    (prisma.sessionState.findUnique as any) = async () => sessionState;
+    (prisma.sessionState.upsert as any) = async (args: any) => {
+      sessionState = { state: args.update?.state ?? args.create?.state ?? {} };
+      return sessionState;
+    };
+
+    (globalThis as any).__synapseSessionIngestWithMetaOverride = async () => ({
+      ok: false,
+      status: 500,
+      ms: 2,
+      url: "https://synapse.test/session/ingest",
+      data: null,
+      errorBody: "ingest failed",
+      reason: "non_ok",
+    });
+
+    await closeStaleSessionIfAny("user-retry", "persona-retry", new Date("2026-02-04T19:00:00Z"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    delete (globalThis as any).__synapseSessionIngestWithMetaOverride;
+
+    const retryState = sessionState.state?.synapseSessionIngestRetry;
+    expect(Array.isArray(retryState?.pending) ? retryState.pending.length : 0).toBe(1);
+    expect(retryState?.lastOk).toBe(false);
+    expect(retryState?.lastError).toBe("ingest failed");
+  });
+
   const failed = results.filter((r) => !r.passed);
   if (failed.length > 0) {
     console.error("Test failures:");

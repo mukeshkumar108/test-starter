@@ -72,6 +72,9 @@ Two paths run in parallel:
   - Triggered when a session closes
   - Sends full transcript
   - Fire‑and‑forget
+  - Non-OK/exception writes durable retry state in `sessionState.state.synapseSessionIngestRetry`
+  - Retry runs non-blocking on next `ensureActiveSession` pass
+  - Retry attempts are capped at 3 with `lastError` and `lastAttemptAt`
 
 Optional legacy path (feature‑flagged):
 - Shadow Judge + local Todo/Memory extraction
@@ -99,6 +102,12 @@ Order is fixed:
 - Synapse `/session/startbrief` is the primary session-start continuity source.
 - Startbrief loop items and `/memory/loops` are treated as user-scoped canonical loop memory.
 - `/session/brief` is a fallback path.
+- Startbrief usability gate rejects only when all are true:
+  - `evidence.summary_content_quality` is `none_fetched` or `empty_after_normalization`
+  - `handover_text` is empty
+  - `items` is empty
+  - `resume.bridge_text` is empty
+  - Rejected startbrief falls through to `/session/brief`
 - Product-kernel trajectory guidance is loaded from compiled prompt kernels (not duplicated at runtime).
 - Session boundaries are based on **last user message**, not assistant activity.
 - Recent messages are session-scoped: no carryover from previous session.
@@ -128,6 +137,11 @@ Order is fixed:
     - `startbrief_fetch`
     - `reinjection_used`
   - `system_blocks` (final system block order for that turn)
+  - `synapse_session_ingest_ok`
+  - `synapse_session_ingest_error`
+- `[librarian.trace]` with `kind=startbrief` includes:
+  - `startbrief_quality` (`usable` | `weak_rejected`)
+  - `summary_content_quality`
 - Daily analysis behavior:
   - Steering from `/analysis/daily` is included only when confidence is high.
   - Low-confidence daily analysis (`needs_review` / `insufficient_data`) is not surfaced in model-facing orientation text.
