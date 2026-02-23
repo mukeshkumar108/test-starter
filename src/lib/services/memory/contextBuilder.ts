@@ -106,6 +106,10 @@ type SignalsPackRuntime = {
   block: string | null;
 };
 
+type CachedSignalsPack = Omit<SynapseSignalsPackResponse, "debug"> & {
+  debug: null;
+};
+
 function createEmptySignalsPackCounts(): SignalsPackEmittedCounts {
   return {
     identity: 0,
@@ -710,7 +714,7 @@ function getSignalsPackForSession(state: unknown, sessionId: string) {
   if (typeof scoped !== "string" || scoped !== sessionId) return null;
   const raw = asStateRecord(state)[SIGNAL_PACK_DATA_KEY];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  return raw as SynapseSignalsPackResponse;
+  return raw as CachedSignalsPack;
 }
 
 function withSignalsPackForSession(
@@ -719,10 +723,17 @@ function withSignalsPackForSession(
   pack: SynapseSignalsPackResponse
 ) {
   const base = asStateRecord(state);
+  // Persist a JSON-safe cache payload; signal-pack runtime does not rely on debug internals.
+  const cachedPack: CachedSignalsPack = {
+    generated_at: pack.generated_at,
+    session_id: pack.session_id,
+    classes: pack.classes,
+    debug: null,
+  };
   return {
     ...base,
     [SIGNAL_PACK_SESSION_KEY]: sessionId,
-    [SIGNAL_PACK_DATA_KEY]: pack,
+    [SIGNAL_PACK_DATA_KEY]: cachedPack,
   };
 }
 
