@@ -3,7 +3,14 @@
  * Run with: pnpm tsx src/lib/providers/__tests__/models.test.ts
  */
 
-import { MODELS, getChatModelForGate, getChatModelForPersona } from "../models";
+import {
+  MODELS,
+  MODEL_TIERS,
+  getChatModelForGate,
+  getChatModelForPersona,
+  getChatModelForTurn,
+  getTurnTierForSignals,
+} from "../models";
 
 type TestResult = { name: string; passed: boolean; error?: string };
 const results: TestResult[] = [];
@@ -58,6 +65,75 @@ async function main() {
       gate: { risk_level: "LOW" },
     });
     expect(model).toBe(MODELS.CHAT.MENTOR);
+  });
+
+  await runTest("witness maps to T2 by default", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "COMPANION",
+      pressure: "MED",
+      stanceSelected: "witness",
+      moment: null,
+      intent: "companion",
+    });
+    expect(decision.tier).toBe("T2");
+    expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T2);
+  });
+
+  await runTest("witness maps to T3 at high pressure", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "COMPANION",
+      pressure: "HIGH",
+      stanceSelected: "witness",
+      moment: "strain",
+      intent: "companion",
+    });
+    expect(decision.tier).toBe("T3");
+    expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T3);
+  });
+
+  await runTest("repair_and_forward maps to T3", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "COMPANION",
+      pressure: "MED",
+      stanceSelected: "repair_and_forward",
+      moment: null,
+      intent: "companion",
+    });
+    expect(decision.tier).toBe("T3");
+    expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T3);
+  });
+
+  await runTest("output_task defaults to T1", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "MOMENTUM",
+      pressure: "LOW",
+      stanceSelected: "none",
+      moment: null,
+      intent: "output_task",
+    });
+    expect(decision.tier).toBe("T1");
+    expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T1);
+  });
+
+  await runTest("risk HIGH keeps safety model regardless of stance", () => {
+    const safetyModel = getChatModelForGate({
+      personaId: "mentor",
+      gate: { risk_level: "HIGH" },
+    });
+    const tierDecision = getTurnTierForSignals({
+      riskLevel: "HIGH",
+      posture: "COMPANION",
+      pressure: "LOW",
+      stanceSelected: "witness",
+      moment: "win",
+      intent: "output_task",
+    });
+    expect(safetyModel).toBe(MODELS.CHAT.SAFETY);
+    expect(tierDecision.tier).toBe("T3");
   });
 
   const failed = results.filter((result) => !result.passed);

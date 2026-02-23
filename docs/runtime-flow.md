@@ -37,7 +37,7 @@ Two paths run in parallel:
    - `/memory/query` request explicitly sets `includeContext=false`
    - `/memory/query` parsing accepts both `facts: string[]` and `facts: {text}[]`
 8. **Prompt assembly** (`route.ts`)
-  - Persona → CONVERSATION_POSTURE → OVERLAY (optional) → bridge (optional) → handover (optional) → ops snippet (optional) → SUPPLEMENTAL_CONTEXT (optional) → Last 8 messages → User msg
+  - Persona → CONVERSATION_POSTURE → STYLE_GUARD (optional) → USER_CONTEXT (optional) → STANCE_OVERLAY (optional) → OVERLAY (optional) → bridge (optional) → handover (optional) → ops snippet (optional) → SUPPLEMENTAL_CONTEXT (optional) → Last 8 messages → User msg
   - Startbrief-v2 is now the only orientation path. Legacy orientation blocks are removed from prompt injection.
   - Overlay loop inputs are sourced from Synapse `/memory/loops` on session start (fallback to startbrief loop items)
   - Loop continuity is user-scoped (not persona-partitioned)
@@ -46,7 +46,16 @@ Two paths run in parallel:
     - Turn 2: handover only if depth is `yesterday|multi_day`, or `gap_minutes>=120`, or first user message is low-signal
     - Turn 3+: no handover/bridge, except one semantic reinjection path
   - Ops snippet is suppressed when SUPPLEMENTAL_CONTEXT exists (mutual exclusion to prevent duplication).
-9. **LLM call** (OpenRouter primary → fallback, then OpenAI emergency)
+9. **Model routing + LLM call**
+   - Safety override remains unchanged via `getChatModelForGate({ gate: { risk_level } })`.
+   - Non-safety turns use tier router (`getTurnTierForSignals` -> `getChatModelForTurn`).
+   - Tier precedence: `risk > stance > moment > pressure > intent`.
+   - Tier models:
+     - `T1`: `bytedance-seed/seed-1.6-flash`
+     - `T2`: `google/gemini-2.5-flash`
+     - `T3`: `anthropic/claude-sonnet-4.6`
+   - `moment` is derived before tier selection from selected user-context moment keys + transcript heuristics, with fallback: `stance=witness && pressure=HIGH` => `moment=grief`.
+   - Final call: OpenRouter primary → fallback, then OpenAI emergency.
 10. **TTS** (ElevenLabs)
 11. **Store messages** (user + assistant)
 12. **Return response**
@@ -68,13 +77,16 @@ Optional legacy path (feature‑flagged):
 Order is fixed:
 1. Persona (compiled kernel)
 2. CONVERSATION_POSTURE (with momentum guard when applicable)
-3. OVERLAY (optional)
-4. bridge block (optional, turn-1 only when `resume.use_bridge=true`)
-5. handover block (optional, startbrief-v2 rules; verbatim text)
-6. ops snippet block (optional, deterministic gating)
-7. SUPPLEMENTAL_CONTEXT (optional Recall Sheet)
-8. Last 8 messages (session-scoped)
-9. Current user message
+3. STYLE_GUARD (optional)
+4. USER_CONTEXT (optional)
+5. STANCE_OVERLAY (optional)
+6. OVERLAY (optional)
+7. bridge block (optional, turn-1 only when `resume.use_bridge=true`)
+8. handover block (optional, startbrief-v2 rules; verbatim text)
+9. ops snippet block (optional, deterministic gating)
+10. SUPPLEMENTAL_CONTEXT (optional Recall Sheet)
+11. Last 8 messages (session-scoped)
+12. Current user message
 
 ---
 
@@ -89,6 +101,9 @@ Order is fixed:
 
 ## Debug & Trace
 - `[chat.trace]` includes:
+  - `chosenModel`
+  - `tierSelected` (prompt-packet trace `memoryQuery`)
+  - `routingReason` (prompt-packet trace `memoryQuery`)
   - `startbrief_used`
   - `startbrief_fallback`
   - `startbrief_items_count`

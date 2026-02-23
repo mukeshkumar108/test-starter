@@ -37,3 +37,11 @@ The prompt is intentionally small and ordered.
 - Bouncer authority remap is feature-flagged:
   - `FEATURE_BOUNCER_AUTHORITY_REMAP_V1` toggles effective signal remap for overlay policy/selector inputs.
   - `FEATURE_BOUNCER_AUTHORITY_SHADOW_LOG` controls prompt-packet shadow fields (`gate_confidence`, `posture_confidence`, `state_confidence`, plus raw/effective signal mirrors).
+- Chat model routing is tiered per turn (after stance + user-context moment signals):
+  - Safety override (unchanged): `risk_level in {HIGH, CRISIS}` -> `MODELS.CHAT.SAFETY`.
+  - Non-safety tier mapping:
+    - `T1` -> `bytedance-seed/seed-1.6-flash`
+    - `T2` -> `google/gemini-2.5-flash`
+    - `T3` -> `anthropic/claude-sonnet-4.6`
+  - Precedence: `risk > stance > moment > pressure > intent`.
+  - Prompt-packet trace includes `tierSelected` and `routingReason` in `memoryQuery`.

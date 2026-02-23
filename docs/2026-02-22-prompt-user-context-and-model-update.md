@@ -124,3 +124,54 @@ This batch wires deferred user context into prompt assembly, expands user-model 
 - Existing DB snapshots may have sparse `gate` traces if librarian trace was not enabled on all turns.
 - Once shadow logging is enabled, use:
   - `pnpm tsx scripts/admin/gate-confidence-report.ts --userId=<userId> --limit=2000`
+
+---
+
+## 2026-02-23 Addendum: Tiered Turn Model Routing
+
+### Scope
+- Added minimal 3-tier per-turn model routing, driven by existing runtime signals.
+- Kept safety model routing behavior unchanged.
+
+### Code changes
+- Added model-tier config and turn router helpers:
+  - `MODEL_TIERS`:
+    - `T1`: `bytedance-seed/seed-1.6-flash`
+    - `T2`: `google/gemini-2.5-flash`
+    - `T3`: `anthropic/claude-sonnet-4.6`
+  - `getTurnTierForSignals(...)`
+  - `getChatModelForTurn(...)`
+  - File: `src/lib/providers/models.ts`
+
+- Integrated tier routing in chat flow after bouncer + stance + user-context moment:
+  - `deriveRoutingMoment(...)` computes routing moment from selected user-context moment keys and transcript heuristics.
+  - Safety override remains from `getChatModelForGate(...)`.
+  - Non-safety turns route by tier.
+  - Fallback guard added: if routing moment is null and `stanceSelected=witness` with `pressure=HIGH`, force routing moment to `grief`.
+  - File: `src/app/api/chat/route.ts`
+
+- Prompt packet trace payload extended (JSON only, no migration):
+  - `memoryQuery.tierSelected`
+  - `memoryQuery.routingReason`
+  - File: `src/app/api/chat/route.ts`
+
+### Tier precedence/rules
+- Precedence: `risk > stance > moment > pressure > intent`
+- Required mappings:
+  - `repair_and_forward` -> `T3`
+  - `witness` -> `T2`; escalates to `T3` for high pressure or grief/relationship rupture moments
+  - `excavator` -> `T2`
+  - `high_standards_friend` -> `T2`
+  - Moments:
+    - `{grief, relationship_rupture, deep_strain, shame}` -> `T3`
+    - `{strain, win, comeback}` -> `T2`
+  - `posture=COMPANION && pressure=HIGH` -> at least `T2`
+  - `intent=output_task|momentum` -> `T1` unless overridden above
+
+### Tests updated
+- `src/lib/providers/__tests__/models.test.ts`
+  - witness => `T2`
+  - witness + high pressure => `T3`
+  - repair_and_forward => `T3`
+  - output_task => `T1`
+  - risk HIGH => safety model override remains intact

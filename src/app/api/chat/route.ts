@@ -29,7 +29,13 @@ import { processShadowPath } from "@/lib/services/memory/shadowJudge";
 import { autoCurateMaybe } from "@/lib/services/memory/memoryCurator";
 import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
-import { getChatModelForGate } from "@/lib/providers/models";
+import {
+  MODELS,
+  getChatModelForGate,
+  getChatModelForTurn,
+  getTurnTierForSignals,
+  type RoutingMoment,
+} from "@/lib/providers/models";
 import { closeSessionOnExplicitEnd, closeStaleSessionIfAny, ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
 import type { SynapseStartBriefResponse } from "@/lib/services/synapseClient";
@@ -302,6 +308,33 @@ function extractMagicMomentLine(transcript: string) {
       key: "moment:comeback",
       line: "Moment (salient): user is making a comeback attempt.",
     };
+  }
+  return null;
+}
+
+function deriveRoutingMoment(params: {
+  transcript: string;
+  selectedUserContext: UserContextCandidate[];
+}): RoutingMoment | null {
+  const selectedMomentKey = params.selectedUserContext.find((item) => item.key.startsWith("moment:"))?.key;
+  if (selectedMomentKey === "moment:relationship_rupture") return "relationship_rupture";
+  if (selectedMomentKey === "moment:strain") return "strain";
+  if (selectedMomentKey === "moment:win") return "win";
+  if (selectedMomentKey === "moment:comeback") return "comeback";
+
+  const lowered = normalizeWhitespace(params.transcript).toLowerCase();
+  if (!lowered) return null;
+  if (/\b(grief|funeral|died|lost my|miss her|miss him|miss them|bereave|mourning)\b/i.test(lowered)) {
+    return "grief";
+  }
+  if (/\b(estranged|falling out|rupture|fight|fallout|argued)\b/i.test(lowered)) {
+    return "relationship_rupture";
+  }
+  if (/\b(shame|guilt|embarrass|regret)\b/i.test(lowered)) {
+    return "shame";
+  }
+  if (/\b(burnt out|burned out|overwhelmed|can't cope|breaking down)\b/i.test(lowered)) {
+    return "deep_strain";
   }
   return null;
 }
@@ -3044,10 +3077,6 @@ export async function POST(request: NextRequest) {
         console.warn("[startbrief.invalidate.err]", { userId: user.id, personaId, sessionId: session.id, error });
       });
     }
-    const model = getChatModelForGate({
-      personaId: persona.slug,
-      gate: { risk_level: riskLevel },
-    });
     const overlayStart = Date.now();
     const overlayState = (await readOverlayState(user.id, personaId)) ?? {};
     let overlayUsed: OverlayUsed = overlayState.overlayUsed ?? {};
@@ -3620,6 +3649,33 @@ export async function POST(request: NextRequest) {
       userContextLines.length > 0
         ? `[USER_CONTEXT]\n${userContextLines.map((line) => `- ${line}`).join("\n")}`
         : null;
+    const inferredRoutingMoment = deriveRoutingMoment({
+      transcript: sttResult.transcript,
+      selectedUserContext,
+    });
+    const routingMoment: RoutingMoment | null =
+      inferredRoutingMoment ??
+      (stanceOverlayType === "witness" && pressure === "HIGH" ? "grief" : null);
+    const tierDecision = getTurnTierForSignals({
+      riskLevel,
+      posture,
+      pressure,
+      stanceSelected: stanceOverlayType,
+      moment: routingMoment,
+      intent: overlayIntent,
+      isDirectRequest: effectiveSignals.isDirectRequest,
+      isUrgent: effectiveSignals.isUrgent,
+    });
+    const safetyModel = getChatModelForGate({
+      personaId: persona.slug,
+      gate: { risk_level: riskLevel },
+    });
+    const safetyModelOverride = safetyModel === MODELS.CHAT.SAFETY;
+    const tierSelected = safetyModelOverride ? "SAFETY" : tierDecision.tier;
+    const routingReason = safetyModelOverride ? "risk_high_or_crisis" : tierDecision.reason;
+    const model = safetyModelOverride
+      ? safetyModel
+      : getChatModelForTurn({ tier: tierDecision.tier });
 
     await writeOverlayState(user.id, personaId, {
       overlayUsed,
@@ -3775,6 +3831,8 @@ export async function POST(request: NextRequest) {
           transcript: sttResult.transcript,
           memoryQuery: {
             chosenModel: model,
+            tierSelected,
+            routingReason,
             risk_level: riskLevel,
             intent: overlayIntent,
             stanceSelected: stanceOverlayType,

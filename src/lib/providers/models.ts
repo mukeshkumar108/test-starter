@@ -22,8 +22,26 @@ export const MODELS = {
   EMBEDDINGS: "text-embedding-3-small",
 } as const;
 
+export const MODEL_TIERS = {
+  T1: "bytedance-seed/seed-1.6-flash",
+  T2: "google/gemini-2.5-flash",
+  T3: "anthropic/claude-sonnet-4.6",
+} as const;
+
+export type TurnTier = keyof typeof MODEL_TIERS;
+export type RoutingMoment =
+  | "grief"
+  | "relationship_rupture"
+  | "deep_strain"
+  | "shame"
+  | "strain"
+  | "win"
+  | "comeback";
+
 // Type helpers
-export type ChatModel = typeof MODELS.CHAT[keyof typeof MODELS.CHAT];
+export type ChatModel =
+  | typeof MODELS.CHAT[keyof typeof MODELS.CHAT]
+  | typeof MODEL_TIERS[keyof typeof MODEL_TIERS];
 export type JudgeModel = typeof MODELS.JUDGE;
 export type SummaryModel = typeof MODELS.SUMMARY;
 export type EmbeddingsModel = typeof MODELS.EMBEDDINGS;
@@ -43,4 +61,72 @@ export function getChatModelForGate(params: {
     return MODELS.CHAT.SAFETY;
   }
   return getChatModelForPersona(params.personaId);
+}
+
+export function getTurnTierForSignals(params: {
+  riskLevel?: "LOW" | "MED" | "HIGH" | "CRISIS" | null;
+  posture?: "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL" | null;
+  pressure?: "LOW" | "MED" | "HIGH" | null;
+  stanceSelected?: "witness" | "excavator" | "repair_and_forward" | "high_standards_friend" | "none" | null;
+  moment?: RoutingMoment | null;
+  intent?: "companion" | "momentum" | "output_task" | "learning" | null;
+  isDirectRequest?: boolean;
+  isUrgent?: boolean;
+}): { tier: TurnTier; reason: string } {
+  // Precedence: risk > stance > moment > pressure > intent.
+  if (params.riskLevel === "HIGH" || params.riskLevel === "CRISIS") {
+    return { tier: "T3", reason: "risk_high_or_crisis" };
+  }
+
+  const stance = params.stanceSelected ?? "none";
+  const pressure = params.pressure ?? "MED";
+  const moment = params.moment ?? null;
+
+  if (stance === "repair_and_forward") {
+    return { tier: "T3", reason: "stance_repair_and_forward" };
+  }
+  if (stance === "witness") {
+    if (pressure === "HIGH" || moment === "grief" || moment === "relationship_rupture") {
+      return { tier: "T3", reason: "stance_witness_high_pressure_or_grief_rupture" };
+    }
+    return { tier: "T2", reason: "stance_witness" };
+  }
+  if (stance === "excavator") {
+    return { tier: "T2", reason: "stance_excavator" };
+  }
+  if (stance === "high_standards_friend") {
+    return { tier: "T2", reason: "stance_high_standards_friend" };
+  }
+
+  if (
+    moment === "grief" ||
+    moment === "relationship_rupture" ||
+    moment === "deep_strain" ||
+    moment === "shame"
+  ) {
+    return { tier: "T3", reason: `moment_${moment}` };
+  }
+  if (moment === "strain" || moment === "win" || moment === "comeback") {
+    return { tier: "T2", reason: `moment_${moment}` };
+  }
+
+  if ((params.posture ?? "COMPANION") === "COMPANION" && pressure === "HIGH") {
+    return { tier: "T2", reason: "companion_high_pressure" };
+  }
+
+  if (params.intent === "output_task" || params.intent === "momentum") {
+    return { tier: "T1", reason: `intent_${params.intent}` };
+  }
+
+  if (params.isDirectRequest || params.isUrgent) {
+    return { tier: "T2", reason: "direct_or_urgent_support" };
+  }
+
+  return { tier: "T2", reason: "default_balanced" };
+}
+
+export function getChatModelForTurn(params: {
+  tier: TurnTier;
+}): ChatModel {
+  return MODEL_TIERS[params.tier];
 }
