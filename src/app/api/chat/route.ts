@@ -1435,16 +1435,30 @@ async function callOpenRouterJsonDetailed(params: {
         result: null as Record<string, unknown> | null,
         failureCause: `http_status_${response.status}`,
         latencyMs: Date.now() - startedAt,
+        rawContent: null as string | null,
       };
     }
+    let rawBody = "";
+    try {
+      rawBody = await response.text();
+    } catch {
+      return {
+        result: null as Record<string, unknown> | null,
+        failureCause: "response_read_error",
+        latencyMs: Date.now() - startedAt,
+        rawContent: null as string | null,
+      };
+    }
+
     let data: unknown = null;
     try {
-      data = await response.json();
+      data = JSON.parse(rawBody);
     } catch {
       return {
         result: null as Record<string, unknown> | null,
         failureCause: "response_json_invalid",
         latencyMs: Date.now() - startedAt,
+        rawContent: rawBody.trim().slice(0, 2000),
       };
     }
     const content = String((data as any)?.choices?.[0]?.message?.content ?? "").trim();
@@ -1453,6 +1467,7 @@ async function callOpenRouterJsonDetailed(params: {
         result: null as Record<string, unknown> | null,
         failureCause: "empty_content",
         latencyMs: Date.now() - startedAt,
+        rawContent: null as string | null,
       };
     }
     try {
@@ -1460,12 +1475,14 @@ async function callOpenRouterJsonDetailed(params: {
         result: JSON.parse(content) as Record<string, unknown>,
         failureCause: null as string | null,
         latencyMs: Date.now() - startedAt,
+        rawContent: content,
       };
     } catch {
       return {
         result: null as Record<string, unknown> | null,
         failureCause: "parse_error",
         latencyMs: Date.now() - startedAt,
+        rawContent: content,
       };
     }
   } catch (error) {
@@ -1475,6 +1492,7 @@ async function callOpenRouterJsonDetailed(params: {
       result: null as Record<string, unknown> | null,
       failureCause,
       latencyMs: Date.now() - startedAt,
+      rawContent: null as string | null,
     };
   } finally {
     clearTimeout(timeoutId);
@@ -1623,6 +1641,17 @@ function normalizeTriageForRouting(params: {
   }
 
   return normalized;
+}
+
+function extractFirstJsonObjectBlock(text: string): string | null {
+  const match = text.match(/\{[\s\S]*\}/);
+  return match ? match[0] : null;
+}
+
+function shapePreview(text: string): string {
+  return text
+    .slice(0, 600)
+    .replace(/[A-Za-z0-9]/g, "x");
 }
 
 function parseLegacyGateAsTriage(result: Record<string, unknown>): TriageGateResult | null {
@@ -1795,7 +1824,42 @@ ${transcript}`;
     model: TRIAGE_PRIMARY_MODEL,
     timeoutMs: triageTimeoutMs,
   });
-  if (!call.result) {
+  let triageRawResult: Record<string, unknown> | null = call.result;
+  if (!triageRawResult && call.rawContent) {
+    const extracted = extractFirstJsonObjectBlock(call.rawContent);
+    if (!extracted) {
+      console.warn("[triage] json extraction failed (no object block)", {
+        failureCause: call.failureCause,
+        model: TRIAGE_PRIMARY_MODEL,
+        contentShape: shapePreview(call.rawContent),
+      });
+    } else {
+      try {
+        const extractedParsed = JSON.parse(extracted);
+        if (
+          extractedParsed &&
+          typeof extractedParsed === "object" &&
+          !Array.isArray(extractedParsed)
+        ) {
+          triageRawResult = extractedParsed as Record<string, unknown>;
+        } else {
+          console.warn("[triage] json extraction failed (non-object)", {
+            failureCause: call.failureCause,
+            model: TRIAGE_PRIMARY_MODEL,
+            contentShape: shapePreview(call.rawContent),
+          });
+        }
+      } catch {
+        console.warn("[triage] json extraction failed (parse)", {
+          failureCause: call.failureCause,
+          model: TRIAGE_PRIMARY_MODEL,
+          contentShape: shapePreview(call.rawContent),
+        });
+      }
+    }
+  }
+
+  if (!triageRawResult) {
     return {
       triage: conservativeTriageFallback(),
       triageSource: "fallback" as TriageSource,
@@ -1807,7 +1871,7 @@ ${transcript}`;
       rawResult: null,
     };
   }
-  const parsed = parseTriageGateResponse(call.result) ?? parseLegacyGateAsTriage(call.result);
+  const parsed = parseTriageGateResponse(triageRawResult) ?? parseLegacyGateAsTriage(triageRawResult);
   if (!parsed) {
     return {
       triage: conservativeTriageFallback(),
@@ -1817,7 +1881,7 @@ ${transcript}`;
       modelFallbackReason: "parse_error_no_fallback",
       primaryFailureCause: "parse_error",
       fallbackFailureCause: "no_fallback_configured",
-      rawResult: call.result,
+      rawResult: triageRawResult,
     };
   }
   return {
@@ -1828,7 +1892,7 @@ ${transcript}`;
     modelFallbackReason: null,
     primaryFailureCause: null,
     fallbackFailureCause: "no_fallback_configured",
-    rawResult: call.result,
+    rawResult: triageRawResult,
   };
 }
 
