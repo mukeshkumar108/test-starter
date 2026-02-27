@@ -1528,7 +1528,7 @@ function parseConfidence(value: unknown): number | null {
 function conservativeTriageFallback(): TriageGateResult {
   return {
     risk_level: "MED",
-    pressure: "MED",
+    pressure: "LOW",
     capacity: "LOW",
     permission: "NONE",
     tactic_appetite: "NONE",
@@ -1587,6 +1587,42 @@ function parseTriageGateResponse(result: Record<string, unknown>): TriageGateRes
     harm_if_wrong,
     reason,
   };
+}
+
+function isAmbiguitySensitiveTurn(transcript: string): boolean {
+  const lowered = normalizeWhitespace(transcript).toLowerCase();
+  if (!lowered) return false;
+  return (
+    /\b(why|how|not sure|confused|mixed|stuck|unpack|figure out|work through)\b/i.test(lowered) ||
+    /\b(feel|feeling|worried|anxious|overwhelmed|guilt|shame|relationship|argue|repair)\b/i.test(lowered)
+  );
+}
+
+function normalizeTriageForRouting(params: {
+  triage: TriageGateResult;
+  transcript: string;
+}): TriageGateResult {
+  const { triage, transcript } = params;
+  const normalized: TriageGateResult = { ...triage };
+
+  // Explicit asks usually imply at least minimal receptiveness to guided structure.
+  if (normalized.permission === "EXPLICIT" && normalized.tactic_appetite === "NONE") {
+    normalized.tactic_appetite = "LOW";
+  }
+
+  // Allow router on clear high-runway turns only when the user's ask appears semantically ambiguous.
+  if (
+    normalized.capacity === "HIGH" &&
+    normalized.pressure === "LOW" &&
+    normalized.permission !== "NONE" &&
+    normalized.confidence >= 0.7 &&
+    !normalized.should_run_router &&
+    isAmbiguitySensitiveTurn(transcript)
+  ) {
+    normalized.should_run_router = true;
+  }
+
+  return normalized;
 }
 
 function parseLegacyGateAsTriage(result: Record<string, unknown>): TriageGateResult | null {
@@ -1708,7 +1744,10 @@ async function runTriageGate(params: {
   timeoutMs: number;
 }) {
   const { transcript, lastTurns, timeoutMs } = params;
-  const prompt = `You are Memory Gate TRIAGE. Return ONLY valid JSON.
+  const prompt = `You are Memory Gate TRIAGE.
+You must respond with ONLY a JSON object.
+No explanation, no prose, no markdown, no code fences, no extra text.
+If uncertain, still return a valid JSON object matching the schema exactly.
 
 Schema:
 {
@@ -1729,8 +1768,20 @@ Schema:
 Guidance:
 - Conservative under uncertainty.
 - If fragile, prefer capacity=LOW, permission=NONE, harm_if_wrong=HIGH.
+- capacity LOW means the user is distressed, overloaded, or clearly low-runway; capacity MED means neutral or mixed runway; capacity HIGH means engaged, energized, or explicitly asking for guidance/planning.
+- should_run_router=true when nuanced interpretation is likely to improve quality (mixed signals, relational context, implicit/emotional ambiguity, or unpacking requests). should_run_router=false for clear/simple operational turns.
+- permission and tactic_appetite should be coherent: if permission=EXPLICIT then tactic_appetite is usually at least LOW unless the user is explicitly resisting guidance.
 - rupture should capture semantic resistance/correction interaction quality, not exact phrase matching.
 - Do not infer self-harm unless clearly present.
+
+Example output (format only; do not copy values blindly):
+{"risk_level":"MED","pressure":"LOW","capacity":"LOW","permission":"NONE","tactic_appetite":"NONE","rupture":"NONE","rupture_confidence":0.2,"should_run_router":false,"memory_query_eligible":false,"confidence":0.4,"harm_if_wrong":"HIGH","reason":"brief reason"}
+Example output (neutral operational turn):
+{"risk_level":"LOW","pressure":"LOW","capacity":"MED","permission":"IMPLICIT","tactic_appetite":"LOW","rupture":"NONE","rupture_confidence":0.0,"should_run_router":false,"memory_query_eligible":false,"confidence":0.8,"harm_if_wrong":"LOW","reason":"clear operational update"}
+Example output (ambiguous emotional turn):
+{"risk_level":"LOW","pressure":"MED","capacity":"MED","permission":"IMPLICIT","tactic_appetite":"LOW","rupture":"NONE","rupture_confidence":0.1,"should_run_router":true,"memory_query_eligible":true,"confidence":0.75,"harm_if_wrong":"MED","reason":"needs nuanced posture/intent"}
+Example output (explicit unpack request):
+{"risk_level":"LOW","pressure":"LOW","capacity":"HIGH","permission":"EXPLICIT","tactic_appetite":"MED","rupture":"NONE","rupture_confidence":0.0,"should_run_router":true,"memory_query_eligible":true,"confidence":0.9,"harm_if_wrong":"LOW","reason":"explicit request to unpack"}
 
 Recent conversation:
 ${lastTurns}
@@ -2024,7 +2075,10 @@ async function runLibrarianReflex(params: {
     lastTurns,
     timeoutMs: Math.max(120, remaining()),
   });
-  const triage = triageExecution.triage;
+  const triage = normalizeTriageForRouting({
+    triage: triageExecution.triage,
+    transcript,
+  });
   const shouldRunRouterFromTriage =
     triage.should_run_router &&
     triage.risk_level !== "HIGH" &&
