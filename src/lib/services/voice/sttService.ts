@@ -34,6 +34,7 @@ export async function transcribeAudio(
     const language = preferredLanguage || "en";
     formData.append("model", model);
     formData.append("language", language);
+    formData.append("prompt", "Sophie");
     
     const response = await fetch("https://api.lemonfox.ai/v1/audio/transcriptions", {
       method: "POST",

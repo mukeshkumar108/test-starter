@@ -54,7 +54,8 @@
     }
   ],
   "models": [
-    "bytedance-seed/seed-1.6-flash",
-    "bytedance-seed/seed-1.6"
+    "x-ai/grok-4.1-fast",
+    "bytedance-seed/seed-2.0-mini",
+    "bytedance-seed/seed-1.6-flash"
   ]
 }
