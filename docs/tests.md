@@ -44,6 +44,13 @@ This validates required keys and basic types for:
 - `GET /session/startbrief`
 - `POST /memory/query`
 
+## Librarian Metrics Report
+Aggregate routing/overlay quality metrics from `LibrarianTrace`:
+```bash
+pnpm metrics:librarian --days 7 --maxRows 50000 --alert
+```
+See `docs/librarian-metrics-baseline.md` for metric definitions, denominators, CI, and alert thresholds.
+
 ## Session Ingest + Startbrief Smoke Harness (local)
 Deterministic local smoke (no external Synapse required):
 ```bash

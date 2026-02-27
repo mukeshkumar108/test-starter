@@ -19,6 +19,8 @@ const tests: TestDef[] = [
   { name: "ttsService", command: [...nodeWithTsx, "src/lib/services/voice/__tests__/ttsService.test.ts"] },
   { name: "librarian", command: [...nodeWithTsx, "src/synapse/librarian.test.ts"] },
   { name: "overlayInjection", command: [...nodeWithTsx, "src/app/api/__tests__/overlayInjection.test.ts"] },
+  { name: "chatCooldownIntegration", command: [...nodeWithTsx, "src/app/api/__tests__/chat.cooldown.integration.test.ts"] },
+  { name: "chatRouterFallbackProbingGuardIntegration", command: [...nodeWithTsx, "src/app/api/__tests__/chat.router-fallback-probing-guard.integration.test.ts"] },
   { name: "promptStackV2", command: [...nodeWithTsx, "src/app/api/__tests__/promptStackV2.test.ts"] },
   { name: "overlayWarmupPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/overlayWarmupPolicy.test.ts"] },
   { name: "momentumGuardPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/momentumGuardPolicy.test.ts"] },

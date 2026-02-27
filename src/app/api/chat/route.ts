@@ -4153,6 +4153,8 @@ export async function POST(request: NextRequest) {
       "none";
     let overlayTopicKey: string | undefined;
     let tacticEligibility: TacticEligibilityResult = { allowed: true, vetoReasons: [] };
+    let curiosityContinuationAttempted = false;
+    let curiosityContinuationBlockedByEligibility = false;
     const baseOverlayPolicy = shouldSkipOverlaySelection({
       intent: overlayIntent,
       isUrgent: effectiveSignals.isUrgent,
@@ -4382,12 +4384,14 @@ export async function POST(request: NextRequest) {
     }
 
     if (!overlayPolicy.skip && overlayTypeActive === "curiosity_spiral") {
+      curiosityContinuationAttempted = true;
       const continuationEligibility = evaluateTacticEligibility({
         tactic: "curiosity_spiral",
         triage,
         cooldownTurnsRemaining,
       });
       if (!continuationEligibility.allowed) {
+        curiosityContinuationBlockedByEligibility = true;
         tacticEligibility = continuationEligibility;
         overlaySuppressionReason = continuationEligibility.vetoReasons.join(",");
         overlayExitReason = "policy";
@@ -4703,6 +4707,9 @@ export async function POST(request: NextRequest) {
             cooldown_activated_reason: cooldownActivatedReason,
             tactic_eligibility_allowed: tacticEligibility.allowed,
             tactic_eligibility_veto_reasons: tacticEligibility.vetoReasons,
+            curiosity_continuation_attempted: curiosityContinuationAttempted,
+            curiosity_continuation_blocked_by_eligibility:
+              curiosityContinuationBlockedByEligibility,
           },
         },
       }).catch((error) => {
@@ -4890,6 +4897,9 @@ export async function POST(request: NextRequest) {
             tactic_eligibility_allowed: tacticEligibility.allowed,
             tactic_eligibility_veto_reasons: tacticEligibility.vetoReasons,
             tactic_regret_candidate: tacticRegretCandidate,
+            curiosity_continuation_attempted: curiosityContinuationAttempted,
+            curiosity_continuation_blocked_by_eligibility:
+              curiosityContinuationBlockedByEligibility,
             ...buildBouncerAuthorityTraceFields({
               shadowLogEnabled: isBouncerAuthorityShadowLogEnabled(),
               authorityRemapEnabled,
