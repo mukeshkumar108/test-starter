@@ -81,7 +81,7 @@ async function main() {
     expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T2);
   });
 
-  await runTest("witness maps to T3 at high pressure", () => {
+  await runTest("witness stays at T2 even at high pressure", () => {
     const decision = getTurnTierForSignals({
       riskLevel: "LOW",
       posture: "COMPANION",
@@ -90,8 +90,8 @@ async function main() {
       moment: "strain",
       intent: "companion",
     });
-    expect(decision.tier).toBe("T3");
-    expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T3);
+    expect(decision.tier).toBe("T2");
+    expect(getChatModelForTurn({ tier: decision.tier })).toBe(MODEL_TIERS.T2);
   });
 
   await runTest("repair_and_forward maps to T3", () => {
@@ -146,6 +146,34 @@ async function main() {
     });
     expect(decision.tier).toBe("T1");
     expect(decision.reason).toBe("default_balanced");
+  });
+
+  await runTest("pressure MED without depth signals now defaults to T1", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "COMPANION",
+      pressure: "MED",
+      stanceSelected: "none",
+      moment: null,
+      intent: "companion",
+      isDirectRequest: false,
+      isUrgent: false,
+    });
+    expect(decision.tier).toBe("T1");
+    expect(decision.reason).toBe("default_balanced");
+  });
+
+  await runTest("high strain moment maps to T2 in base routing", () => {
+    const decision = getTurnTierForSignals({
+      riskLevel: "LOW",
+      posture: "COMPANION",
+      pressure: "LOW",
+      stanceSelected: "none",
+      moment: "grief",
+      intent: "companion",
+    });
+    expect(decision.tier).toBe("T2");
+    expect(decision.reason).toBe("moment_grief");
   });
 
   await runTest("risk HIGH keeps safety model regardless of stance", () => {

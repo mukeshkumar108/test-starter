@@ -84,16 +84,13 @@ export function getTurnTierForSignals(params: {
   }
 
   const stance = params.stanceSelected ?? "none";
-  const pressure = params.pressure ?? "MED";
+  const pressure = params.pressure ?? "LOW";
   const moment = params.moment ?? null;
 
   if (stance === "repair_and_forward") {
     return { tier: "T3", reason: "stance_repair_and_forward" };
   }
   if (stance === "witness") {
-    if (pressure === "HIGH" || moment === "grief" || moment === "relationship_rupture") {
-      return { tier: "T3", reason: "stance_witness_high_pressure_or_grief_rupture" };
-    }
     return { tier: "T2", reason: "stance_witness" };
   }
   if (stance === "excavator") {
@@ -109,7 +106,7 @@ export function getTurnTierForSignals(params: {
     moment === "deep_strain" ||
     moment === "shame"
   ) {
-    return { tier: "T3", reason: `moment_${moment}` };
+    return { tier: "T2", reason: `moment_${moment}` };
   }
   if (moment === "strain" || moment === "win" || moment === "comeback") {
     return { tier: "T2", reason: `moment_${moment}` };
@@ -123,7 +120,6 @@ export function getTurnTierForSignals(params: {
     params.posture === "RELATIONSHIP" ||
     params.posture === "RECOVERY" ||
     params.posture === "REFLECTION" ||
-    pressure === "MED" ||
     pressure === "HIGH"
   ) {
     return { tier: "T2", reason: "companion_depth" };

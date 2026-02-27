@@ -1393,8 +1393,18 @@ async function callOpenRouterJson(
   model: string,
   timeoutMs: number
 ) {
+  const detailed = await callOpenRouterJsonDetailed({ prompt, model, timeoutMs });
+  return detailed.result;
+}
+
+async function callOpenRouterJsonDetailed(params: {
+  prompt: string;
+  model: string;
+  timeoutMs: number;
+}) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  const timeoutId = setTimeout(() => controller.abort(), params.timeoutMs);
   try {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
@@ -1411,8 +1421,8 @@ async function callOpenRouterJson(
       method: "POST",
       headers,
       body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
+        model: params.model,
+        messages: [{ role: "user", content: params.prompt }],
         max_tokens: 350,
         temperature: 0,
         response_format: { type: "json_object" },
@@ -1421,27 +1431,60 @@ async function callOpenRouterJson(
     });
 
     if (!response.ok) {
-      return null;
+      return {
+        result: null as Record<string, unknown> | null,
+        failureCause: `http_status_${response.status}`,
+        latencyMs: Date.now() - startedAt,
+      };
     }
-    const data = await response.json();
-    const content = String(data?.choices?.[0]?.message?.content ?? "").trim();
-    if (!content) return null;
+    let data: unknown = null;
     try {
-      return JSON.parse(content) as Record<string, unknown>;
+      data = await response.json();
     } catch {
-      return null;
+      return {
+        result: null as Record<string, unknown> | null,
+        failureCause: "response_json_invalid",
+        latencyMs: Date.now() - startedAt,
+      };
     }
-  } catch {
-    return null;
+    const content = String((data as any)?.choices?.[0]?.message?.content ?? "").trim();
+    if (!content) {
+      return {
+        result: null as Record<string, unknown> | null,
+        failureCause: "empty_content",
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+    try {
+      return {
+        result: JSON.parse(content) as Record<string, unknown>,
+        failureCause: null as string | null,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch {
+      return {
+        result: null as Record<string, unknown> | null,
+        failureCause: "parse_error",
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+  } catch (error) {
+    const failureCause =
+      error instanceof Error && error.name === "AbortError" ? "timeout" : "fetch_error";
+    return {
+      result: null as Record<string, unknown> | null,
+      failureCause,
+      latencyMs: Date.now() - startedAt,
+    };
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-const TRIAGE_PRIMARY_MODEL = "liquid/lfm2-8b-a1b";
+const TRIAGE_PRIMARY_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const ROUTER_PRIMARY_MODEL = "openai/gpt-oss-20b";
 const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
-const TRIAGE_MAX_TIMEOUT_MS = 250;
+const TRIAGE_MAX_TIMEOUT_MS = 400;
 const ROUTER_MAX_TIMEOUT_MS = 550;
 const ROUTER_MIN_BUDGET_MS = 350;
 
@@ -1607,17 +1650,19 @@ async function callOpenRouterJsonWithModelFallback(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
-  const primaryResult = await callOpenRouterJson(
-    params.prompt,
-    params.primaryModel,
-    params.timeoutMs
-  );
-  if (primaryResult) {
+  const primaryCall = await callOpenRouterJsonDetailed({
+    prompt: params.prompt,
+    model: params.primaryModel,
+    timeoutMs: params.timeoutMs,
+  });
+  if (primaryCall.result) {
     return {
-      result: primaryResult,
+      result: primaryCall.result,
       modelUsed: params.primaryModel,
       usedFallbackModel: false,
       primaryError: null as string | null,
+      primaryFailureCause: null as string | null,
+      fallbackFailureCause: null as string | null,
     };
   }
   const elapsed = Date.now() - startedAt;
@@ -1627,27 +1672,33 @@ async function callOpenRouterJsonWithModelFallback(params: {
       result: null,
       modelUsed: params.primaryModel,
       usedFallbackModel: false,
-      primaryError: "primary_failed_no_budget_for_fallback",
+      primaryError: `primary_failed_no_budget_for_fallback:${primaryCall.failureCause ?? "unknown"}`,
+      primaryFailureCause: primaryCall.failureCause ?? "unknown",
+      fallbackFailureCause: "no_budget_for_fallback",
     };
   }
-  const fallbackResult = await callOpenRouterJson(
-    params.prompt,
-    GATE_FALLBACK_MODEL,
-    remaining
-  );
-  if (!fallbackResult) {
+  const fallbackCall = await callOpenRouterJsonDetailed({
+    prompt: params.prompt,
+    model: GATE_FALLBACK_MODEL,
+    timeoutMs: remaining,
+  });
+  if (!fallbackCall.result) {
     return {
       result: null,
       modelUsed: GATE_FALLBACK_MODEL,
       usedFallbackModel: true,
-      primaryError: "primary_and_fallback_failed",
+      primaryError: `primary_and_fallback_failed:${primaryCall.failureCause ?? "unknown"}`,
+      primaryFailureCause: primaryCall.failureCause ?? "unknown",
+      fallbackFailureCause: fallbackCall.failureCause ?? "unknown",
     };
   }
   return {
-    result: fallbackResult,
+    result: fallbackCall.result,
     modelUsed: GATE_FALLBACK_MODEL,
     usedFallbackModel: true,
-    primaryError: "primary_failed_fallback_succeeded",
+    primaryError: `primary_failed_fallback_succeeded:${primaryCall.failureCause ?? "unknown"}`,
+    primaryFailureCause: primaryCall.failureCause ?? "unknown",
+    fallbackFailureCause: null as string | null,
   };
 }
 
@@ -1687,18 +1738,21 @@ ${lastTurns}
 Current user message:
 ${transcript}`;
 
-  const call = await callOpenRouterJsonWithModelFallback({
+  const triageTimeoutMs = Math.max(80, Math.min(timeoutMs, TRIAGE_MAX_TIMEOUT_MS));
+  const call = await callOpenRouterJsonDetailed({
     prompt,
-    primaryModel: TRIAGE_PRIMARY_MODEL,
-    timeoutMs: Math.max(80, Math.min(timeoutMs, TRIAGE_MAX_TIMEOUT_MS)),
+    model: TRIAGE_PRIMARY_MODEL,
+    timeoutMs: triageTimeoutMs,
   });
   if (!call.result) {
     return {
       triage: conservativeTriageFallback(),
       triageSource: "fallback" as TriageSource,
-      modelUsed: call.modelUsed,
-      usedFallbackModel: call.usedFallbackModel,
-      modelFallbackReason: call.primaryError,
+      modelUsed: TRIAGE_PRIMARY_MODEL,
+      usedFallbackModel: false,
+      modelFallbackReason: call.failureCause ? `primary_failed_no_fallback:${call.failureCause}` : null,
+      primaryFailureCause: call.failureCause,
+      fallbackFailureCause: "no_fallback_configured",
       rawResult: null,
     };
   }
@@ -1707,18 +1761,22 @@ ${transcript}`;
     return {
       triage: conservativeTriageFallback(),
       triageSource: "failed_parse" as TriageSource,
-      modelUsed: call.modelUsed,
-      usedFallbackModel: call.usedFallbackModel,
-      modelFallbackReason: call.primaryError,
+      modelUsed: TRIAGE_PRIMARY_MODEL,
+      usedFallbackModel: false,
+      modelFallbackReason: "parse_error_no_fallback",
+      primaryFailureCause: "parse_error",
+      fallbackFailureCause: "no_fallback_configured",
       rawResult: call.result,
     };
   }
   return {
     triage: parsed,
     triageSource: "model" as TriageSource,
-    modelUsed: call.modelUsed,
-    usedFallbackModel: call.usedFallbackModel,
-    modelFallbackReason: call.primaryError,
+    modelUsed: TRIAGE_PRIMARY_MODEL,
+    usedFallbackModel: false,
+    modelFallbackReason: null,
+    primaryFailureCause: null,
+    fallbackFailureCause: "no_fallback_configured",
     rawResult: call.result,
   };
 }
@@ -1765,6 +1823,8 @@ ${transcript}`;
       modelUsed: call.modelUsed,
       usedFallbackModel: call.usedFallbackModel,
       modelFallbackReason: call.primaryError,
+      primaryFailureCause: call.primaryFailureCause,
+      fallbackFailureCause: call.fallbackFailureCause,
       rawResult: null,
     };
   }
@@ -1775,6 +1835,8 @@ ${transcript}`;
       modelUsed: call.modelUsed,
       usedFallbackModel: call.usedFallbackModel,
       modelFallbackReason: call.primaryError,
+      primaryFailureCause: call.primaryFailureCause,
+      fallbackFailureCause: call.fallbackFailureCause,
       rawResult: call.result,
     };
   }
@@ -1783,6 +1845,8 @@ ${transcript}`;
     modelUsed: call.modelUsed,
     usedFallbackModel: call.usedFallbackModel,
     modelFallbackReason: call.primaryError,
+    primaryFailureCause: call.primaryFailureCause,
+    fallbackFailureCause: call.fallbackFailureCause,
     rawResult: call.result,
   };
 }
@@ -1897,9 +1961,13 @@ async function runLibrarianReflex(params: {
   triageModel: string;
   triageUsedFallbackModel: boolean;
   triageModelFallbackReason: string | null;
+  triagePrimaryFailureCause: string | null;
+  triageFallbackFailureCause: string | null;
   routerModel: string | null;
   routerUsedFallbackModel: boolean;
   routerModelFallbackReason: string | null;
+  routerPrimaryFailureCause: string | null;
+  routerFallbackFailureCause: string | null;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -1933,9 +2001,13 @@ async function runLibrarianReflex(params: {
     triageModel: TRIAGE_PRIMARY_MODEL,
     triageUsedFallbackModel: false,
     triageModelFallbackReason: "triage_not_called",
+    triagePrimaryFailureCause: null,
+    triageFallbackFailureCause: null,
     routerModel: null,
     routerUsedFallbackModel: false,
     routerModelFallbackReason: null,
+    routerPrimaryFailureCause: null,
+    routerFallbackFailureCause: null,
   };
   if (remaining() <= 0) {
     return {
@@ -1976,6 +2048,8 @@ async function runLibrarianReflex(params: {
   let routerModel: string | null = null;
   let routerUsedFallbackModel = false;
   let routerModelFallbackReason: string | null = null;
+  let routerPrimaryFailureCause: string | null = null;
+  let routerFallbackFailureCause: string | null = null;
   if (triageExecution.triageSource === "failed_parse") {
     routerRunReason = "triage_failed_parse";
   } else if (triage.risk_level === "HIGH" || triage.risk_level === "CRISIS") {
@@ -1998,6 +2072,8 @@ async function runLibrarianReflex(params: {
     routerModel = routerExecution.modelUsed;
     routerUsedFallbackModel = routerExecution.usedFallbackModel;
     routerModelFallbackReason = routerExecution.modelFallbackReason;
+    routerPrimaryFailureCause = routerExecution.primaryFailureCause ?? null;
+    routerFallbackFailureCause = routerExecution.fallbackFailureCause ?? null;
     if (shouldRunRouterFromTriage) {
       routerRunReason = "ran_should_run_router";
     } else if (shouldRunRouterFromHarm) {
@@ -2080,9 +2156,13 @@ async function runLibrarianReflex(params: {
     triageModel: triageExecution.modelUsed,
     triageUsedFallbackModel: triageExecution.usedFallbackModel,
     triageModelFallbackReason: triageExecution.modelFallbackReason,
+    triagePrimaryFailureCause: triageExecution.primaryFailureCause ?? null,
+    triageFallbackFailureCause: triageExecution.fallbackFailureCause ?? null,
     routerModel,
     routerUsedFallbackModel,
     routerModelFallbackReason,
+    routerPrimaryFailureCause,
+    routerFallbackFailureCause,
   };
 
   const postureResult = await resolvePostureWithHysteresis({
@@ -3920,9 +4000,13 @@ export async function POST(request: NextRequest) {
     const triageModel = librarianResult?.triageModel ?? TRIAGE_PRIMARY_MODEL;
     const triageUsedFallbackModel = librarianResult?.triageUsedFallbackModel ?? false;
     const triageModelFallbackReason = librarianResult?.triageModelFallbackReason ?? null;
+    const triagePrimaryFailureCause = librarianResult?.triagePrimaryFailureCause ?? null;
+    const triageFallbackFailureCause = librarianResult?.triageFallbackFailureCause ?? null;
     const routerModel = librarianResult?.routerModel ?? null;
     const routerUsedFallbackModel = librarianResult?.routerUsedFallbackModel ?? false;
     const routerModelFallbackReason = librarianResult?.routerModelFallbackReason ?? null;
+    const routerPrimaryFailureCause = librarianResult?.routerPrimaryFailureCause ?? null;
+    const routerFallbackFailureCause = librarianResult?.routerFallbackFailureCause ?? null;
     const overlayIntent = librarianResult?.intent ?? DEFAULT_GATE_INTENT;
     const overlayIsUrgent = librarianResult?.isUrgent ?? false;
     const overlayIsDirectRequest = librarianResult?.isDirectRequest ?? false;
@@ -4888,9 +4972,13 @@ export async function POST(request: NextRequest) {
             triage_model: triageModel,
             triage_used_fallback_model: triageUsedFallbackModel,
             triage_model_fallback_reason: triageModelFallbackReason,
+            triage_primary_failure_cause: triagePrimaryFailureCause,
+            triage_fallback_failure_cause: triageFallbackFailureCause,
             router_model: routerModel,
             router_used_fallback_model: routerUsedFallbackModel,
             router_model_fallback_reason: routerModelFallbackReason,
+            router_primary_failure_cause: routerPrimaryFailureCause,
+            router_fallback_failure_cause: routerFallbackFailureCause,
             cooldown_turns_remaining: cooldownTurnsRemaining,
             cooldown_last_reason: cooldownLastReason,
             cooldown_activated_reason: cooldownActivatedReason,
