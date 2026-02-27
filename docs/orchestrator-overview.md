@@ -92,12 +92,14 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 - Use `/session/brief` only as fallback
 
 ### 3) When do we fetch extra memory (Librarian Reflex)?
-- **Gate** decides if memory is needed (explicit vs ambient)
+- **TRIAGE gate** (always-on) sets coarse risk/pressure/capacity/permission/tactic appetite/rupture
+- **ROUTER gate** (conditional) sets posture/intent/mood/energy only when runway + time budget allow
+- Memory query uses TRIAGE `memory_query_eligible` + confidence threshold (explicit vs ambient)
 - **Spec** extracts entities/topics/time intent
 - **Relevance** checks if retrieved memory should be injected
 - If used, we format a Recall Sheet as `SUPPLEMENTAL_CONTEXT`
  - Entire reflex is capped by `LIBRARIAN_TIMEOUT_MS` (default 5s)
- - Gate also emits `risk_level` (LOW/MED/HIGH/CRISIS); HIGH/CRISIS routes to a more capable model.
+ - HIGH/CRISIS risk suppresses router and probing tactics.
 
 ### 4) What goes into the prompt?
 Blocks are in this order:
@@ -110,7 +112,12 @@ Blocks are in this order:
 - SUPPLEMENTAL_CONTEXT (Recall Sheet; top 3 facts/entities)
 - Last 8 messages
  
-Posture is computed in the Memory Gate call (no extra LLM calls). Hysteresis lives in `SessionState.state.postureState`.
+Posture is sourced from ROUTER when available, otherwise safe fallback posture is used. Hysteresis lives in `SessionState.state.postureState`.
+
+Cooldown + probing safety:
+- Cooldown is model-driven (`rupture` + confidence), plus a soft dampener on high `harm_if_wrong` with low/medium capacity.
+- Probing tactics must pass eligibility checks (capacity/permission/appetite/risk/pressure/cooldown).
+- Eligibility is enforced for both fresh selection and continuation re-arming.
 
 Mutual exclusion:
 - If `SUPPLEMENTAL_CONTEXT` is present, ops snippet is not injected on that turn.

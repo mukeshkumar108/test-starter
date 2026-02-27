@@ -60,17 +60,27 @@ Overlay prompts live in `prompts/overlays/`. They are injected as temporary syst
 
 Tune triggers and cooldowns in `src/lib/services/memory/overlaySelector.ts`.
 
+Route-level gating now adds extra guardrails before probing tactics are allowed:
+- two-pass classification (`TRIAGE` then conditional `ROUTER`)
+- model-driven rupture cooldown
+- soft cooldown when `harm_if_wrong=HIGH` and capacity is not high
+- continuation re-arming checks for `curiosity_spiral`
+
 ## prompt stack (Sophie)
 Current `/api/chat` model-facing order:
 1. persona (compiled kernels)
 2. conversation posture
-3. overlay (optional)
-4. startbrief bridge (optional)
-5. startbrief handover (optional, verbatim)
-6. ops snippet (optional)
-7. supplemental recall sheet (optional)
-8. recent session messages
-9. current user message
+3. style guard
+4. user context (optional)
+5. signal pack (optional)
+6. stance overlay (optional)
+7. tactic overlay (optional)
+8. startbrief bridge (optional)
+9. startbrief handover (optional, verbatim)
+10. ops snippet (optional)
+11. supplemental recall sheet (optional)
+12. recent session messages
+13. current user message
 
 Session orientation now comes from startbrief-v2 only (`bridge` + `handover`).
 

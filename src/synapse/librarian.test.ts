@@ -22,7 +22,10 @@ process.env.LIBRARIAN_TIMEOUT_MS = "5000";
 import {
   __test__runLibrarianReflex,
   __test__buildChatMessages,
+  __test__applyCooldownPolicy,
+  __test__evaluateTacticEligibility,
   __test__resetPostureStateCache,
+  __test__resetOverlayStateCache,
   __test__resetUserStateCache,
 } from "@/app/api/chat/route";
 
@@ -1158,6 +1161,94 @@ async function testUserStateResetsOnLongGapNewSession() {
     global.fetch = originalFetch;
   }
 }
+
+async function testRouterFailureUsesFallbackAndSuppressesProbingTactics() {
+  const originalFetch = global.fetch;
+  __test__resetPostureStateCache();
+  __test__resetUserStateCache();
+  __test__resetOverlayStateCache();
+
+  global.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const prompt = body?.messages?.[0]?.content ?? "";
+      if (prompt.includes("Memory Gate TRIAGE")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    risk_level: "LOW",
+                    pressure: "MED",
+                    capacity: "HIGH",
+                    permission: "IMPLICIT",
+                    tactic_appetite: "HIGH",
+                    rupture: "NONE",
+                    rupture_confidence: 0.2,
+                    should_run_router: true,
+                    memory_query_eligible: false,
+                    confidence: 0.9,
+                    harm_if_wrong: "LOW",
+                    reason: "needs_router",
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (prompt.includes("You are ROUTER")) {
+        return new Response("router failure", { status: 503 });
+      }
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await __test__runLibrarianReflex({
+      requestId: "req-router-fail",
+      userId: "user-router-fail",
+      personaId: "persona-router-fail",
+      sessionId: "session-router-fail",
+      transcript: "Can we unpack why I keep repeating this pattern?",
+      recentMessages: [],
+      now: new Date("2026-02-06T10:15:00Z"),
+      shouldTrace: false,
+    });
+
+    expect(Boolean(result), "Expected librarian result object");
+    expect(result?.postureSource === "fallback", "Expected fallback posture source when router fails");
+    expect(result?.routerOutput === null, "Expected null router output on router failure");
+    expect(
+      result?.routerRunReason === "ran_should_run_router",
+      `Expected router run reason to reflect attempted run, got ${result?.routerRunReason}`
+    );
+
+    const cooldown = __test__applyCooldownPolicy({
+      previousCooldownTurnsRemaining: 0,
+      previousCooldownLastReason: null,
+      triage: result!.triage,
+      routerRunReason: result!.routerRunReason,
+      routerOutput: result!.routerOutput,
+    });
+    expect(cooldown.cooldownTurnsRemaining > 0, "Expected cooldown to activate on router failure");
+    const eligibility = __test__evaluateTacticEligibility({
+      tactic: "curiosity_spiral",
+      triage: result!.triage,
+      cooldownTurnsRemaining: cooldown.cooldownTurnsRemaining,
+    });
+    expect(!eligibility.allowed, "Expected probing tactics to be suppressed during cooldown");
+    expect(
+      eligibility.vetoReasons.includes("cooldown_active"),
+      "Expected cooldown_active veto reason"
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
 async function run() {
   await test("Explicit recall triggers query and injects supplemental context", testExplicitRecall);
   await test("Ambient mention requires high confidence", testAmbientRequiresHighConfidence);
@@ -1173,6 +1264,10 @@ async function run() {
   await test("User state switches on high confidence", testUserStateSwitchesOnHighConfidence);
   await test("User state switches on repeated suggestion", testUserStateSwitchesOnRepeatedSuggestion);
   await test("User state resets on long gap + new session", testUserStateResetsOnLongGapNewSession);
+  await test(
+    "Router failure keeps fallback posture and suppresses probing tactics",
+    testRouterFailureUsesFallbackAndSuppressesProbingTactics
+  );
   console.log("All tests passed.");
 }
 

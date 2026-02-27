@@ -75,6 +75,11 @@ Checklist doc:
 - witness continuation hold/release guardrails for grief/repair turns
 - style guard banned-phrase coverage (`that must feel`) and endearment cadence
 
+`src/synapse/librarian.test.ts` also covers:
+- triage/router routing compatibility
+- router-failure fallback behavior
+- cooldown-driven probing tactic suppression.
+
 ## Bouncer Confidence Distribution Report
 For confidence telemetry from traces (no DB migration required):
 ```bash

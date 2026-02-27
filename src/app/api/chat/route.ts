@@ -535,26 +535,40 @@ function getSessionContext(sessionState?: any) {
   return `[SESSION STATE] Time Since Last Interaction: ${timeSince} Message Count: ${messageCount}`;
 }
 
-type MemoryGateResult = {
-  action: "memory_query" | "none";
+type TriageRiskLevel = "LOW" | "MED" | "HIGH" | "CRISIS";
+type TriagePressure = "LOW" | "MED" | "HIGH";
+type TriageCapacity = "LOW" | "MED" | "HIGH";
+type TriagePermission = "NONE" | "IMPLICIT" | "EXPLICIT";
+type TriageTacticAppetite = "NONE" | "LOW" | "MED" | "HIGH";
+type TriageRupture = "NONE" | "MILD" | "STRONG";
+type TriageHarmIfWrong = "LOW" | "MED" | "HIGH";
+type TriageSource = "model" | "fallback" | "failed_parse";
+type PostureSource = "router" | "fallback";
+
+type TriageGateResult = {
+  risk_level: TriageRiskLevel;
+  pressure: TriagePressure;
+  capacity: TriageCapacity;
+  permission: TriagePermission;
+  tactic_appetite: TriageTacticAppetite;
+  rupture: TriageRupture;
+  rupture_confidence: number;
+  should_run_router: boolean;
+  memory_query_eligible: boolean;
   confidence: number;
-  explicit: boolean;
+  harm_if_wrong: TriageHarmIfWrong;
   reason?: string | null;
-  intent?: OverlayIntent;
-  is_urgent?: boolean;
-  is_direct_request?: boolean;
-  posture?: "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
-  pressure?: "LOW" | "MED" | "HIGH";
-  posture_confidence?: number;
-  explicit_topic_shift?: boolean;
-  posture_reason?: string | null;
-  mood?: "CALM" | "NEUTRAL" | "LOW" | "UPBEAT" | "FRUSTRATED" | "OVERWHELMED" | "ANXIOUS";
-  energy?: "LOW" | "MED" | "HIGH";
-  tone?: "PLAYFUL" | "SERIOUS" | "TENDER" | "DIRECT";
-  state_confidence?: number;
-  explicit_state_shift?: boolean;
-  state_reason?: string | null;
-  risk_level?: "LOW" | "MED" | "HIGH" | "CRISIS";
+};
+
+type RouterGateResult = {
+  intent: OverlayIntent;
+  posture: "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
+  posture_confidence: number;
+  explicit_topic_shift: boolean;
+  mood: "CALM" | "NEUTRAL" | "LOW" | "UPBEAT" | "FRUSTRATED" | "OVERWHELMED" | "ANXIOUS";
+  energy: "LOW" | "MED" | "HIGH";
+  state_confidence: number;
+  reason?: string | null;
 };
 
 type MemoryQuerySpec = {
@@ -569,6 +583,16 @@ type RecallRelevanceResult = {
   confidence: number;
   reason?: string | null;
 };
+
+type RouterRunReason =
+  | "ran_should_run_router"
+  | "ran_harm_low_confidence"
+  | "ran_sensitive_boundary"
+  | "skipped_risk_high"
+  | "skipped_capacity_low"
+  | "skipped_time_budget"
+  | "skipped_triage_false"
+  | "triage_failed_parse";
 
 type ConversationPosture = "COMPANION" | "MOMENTUM" | "REFLECTION" | "RELATIONSHIP" | "IDEATION" | "RECOVERY" | "PRACTICAL";
 type ConversationPressure = "LOW" | "MED" | "HIGH";
@@ -649,6 +673,9 @@ type OverlayState = {
   stanceTurnsRemaining?: number;
   tierBurst?: TierBurstState;
   endearmentCooldownTurns?: number;
+  cooldownTurnsRemaining?: number;
+  cooldownLastReason?: "rupture_strong" | "rupture_mild" | null;
+  lastProbingTacticFired?: boolean;
   user?: OverlayUserState;
   synapseSessionIngestOk?: boolean | null;
   synapseSessionIngestError?: string | null;
@@ -972,6 +999,15 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
       typeof raw.endearmentCooldownTurns === "number" && Number.isFinite(raw.endearmentCooldownTurns)
         ? Math.max(0, raw.endearmentCooldownTurns)
         : 0,
+    cooldownTurnsRemaining:
+      typeof raw.cooldownTurnsRemaining === "number" && Number.isFinite(raw.cooldownTurnsRemaining)
+        ? Math.max(0, raw.cooldownTurnsRemaining)
+        : 0,
+    cooldownLastReason:
+      raw.cooldownLastReason === "rupture_strong" || raw.cooldownLastReason === "rupture_mild"
+        ? raw.cooldownLastReason
+        : null,
+    lastProbingTacticFired: raw.lastProbingTacticFired === true,
     user: typeof raw.user === "object" && raw.user && !Array.isArray(raw.user)
       ? {
           ...(raw.user as OverlayUserState),
@@ -1402,48 +1438,248 @@ async function callOpenRouterJson(
   }
 }
 
-async function runMemoryGate(params: {
+const TRIAGE_PRIMARY_MODEL = "liquid/lfm2-8b-a1b";
+const ROUTER_PRIMARY_MODEL = "openai/gpt-oss-20b";
+const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
+const TRIAGE_MAX_TIMEOUT_MS = 250;
+const ROUTER_MAX_TIMEOUT_MS = 550;
+const ROUTER_MIN_BUDGET_MS = 350;
+
+function parseTriageRisk(value: unknown): TriageRiskLevel | null {
+  return value === "LOW" || value === "MED" || value === "HIGH" || value === "CRISIS"
+    ? value
+    : null;
+}
+
+function parseTriagePressure(value: unknown): TriagePressure | null {
+  return value === "LOW" || value === "MED" || value === "HIGH" ? value : null;
+}
+
+function parseTriageCapacity(value: unknown): TriageCapacity | null {
+  return value === "LOW" || value === "MED" || value === "HIGH" ? value : null;
+}
+
+function parseTriagePermission(value: unknown): TriagePermission | null {
+  return value === "NONE" || value === "IMPLICIT" || value === "EXPLICIT" ? value : null;
+}
+
+function parseTriageTacticAppetite(value: unknown): TriageTacticAppetite | null {
+  return value === "NONE" || value === "LOW" || value === "MED" || value === "HIGH"
+    ? value
+    : null;
+}
+
+function parseTriageRupture(value: unknown): TriageRupture | null {
+  return value === "NONE" || value === "MILD" || value === "STRONG" ? value : null;
+}
+
+function parseTriageHarmIfWrong(value: unknown): TriageHarmIfWrong | null {
+  return value === "LOW" || value === "MED" || value === "HIGH" ? value : null;
+}
+
+function parseConfidence(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(1, value));
+}
+
+function conservativeTriageFallback(): TriageGateResult {
+  return {
+    risk_level: "MED",
+    pressure: "MED",
+    capacity: "LOW",
+    permission: "NONE",
+    tactic_appetite: "NONE",
+    rupture: "NONE",
+    rupture_confidence: 0,
+    should_run_router: false,
+    memory_query_eligible: false,
+    confidence: 0,
+    harm_if_wrong: "HIGH",
+    reason: "triage_fallback_conservative",
+  };
+}
+
+function parseTriageGateResponse(result: Record<string, unknown>): TriageGateResult | null {
+  const risk_level = parseTriageRisk(result.risk_level);
+  const pressure = parseTriagePressure(result.pressure);
+  const capacity = parseTriageCapacity(result.capacity);
+  const permission = parseTriagePermission(result.permission);
+  const tactic_appetite = parseTriageTacticAppetite(result.tactic_appetite);
+  const rupture = parseTriageRupture(result.rupture);
+  const rupture_confidence = parseConfidence(result.rupture_confidence);
+  const confidence = parseConfidence(result.confidence);
+  const harm_if_wrong = parseTriageHarmIfWrong(result.harm_if_wrong);
+  const should_run_router = typeof result.should_run_router === "boolean" ? result.should_run_router : null;
+  const memory_query_eligible =
+    typeof result.memory_query_eligible === "boolean" ? result.memory_query_eligible : null;
+  const reason = typeof result.reason === "string" ? result.reason : null;
+
+  if (
+    !risk_level ||
+    !pressure ||
+    !capacity ||
+    !permission ||
+    !tactic_appetite ||
+    !rupture ||
+    rupture_confidence === null ||
+    confidence === null ||
+    !harm_if_wrong ||
+    should_run_router === null ||
+    memory_query_eligible === null
+  ) {
+    return null;
+  }
+
+  return {
+    risk_level,
+    pressure,
+    capacity,
+    permission,
+    tactic_appetite,
+    rupture,
+    rupture_confidence,
+    should_run_router,
+    memory_query_eligible,
+    confidence,
+    harm_if_wrong,
+    reason,
+  };
+}
+
+function parseLegacyGateAsTriage(result: Record<string, unknown>): TriageGateResult | null {
+  // Backward-compatible parser for old Memory Gate shape used in existing tests.
+  if (!("action" in result) && !("posture" in result) && !("risk_level" in result)) return null;
+  const risk_level = parseTriageRisk(result.risk_level) ?? "MED";
+  const pressure = parseTriagePressure(result.pressure) ?? "MED";
+  const confidence = parseConfidence(result.confidence) ?? 0;
+  const capacity: TriageCapacity = pressure === "LOW" ? "MED" : "LOW";
+  const permission: TriagePermission =
+    result.is_direct_request === true ? "EXPLICIT" : "NONE";
+  const memory_query_eligible = result.action === "memory_query";
+  const reason = typeof result.reason === "string" ? result.reason : "legacy_gate_adapter";
+  const harm_if_wrong: TriageHarmIfWrong =
+    risk_level === "HIGH" || risk_level === "CRISIS" || pressure === "HIGH" ? "HIGH" : "MED";
+  return {
+    risk_level,
+    pressure,
+    capacity,
+    permission,
+    tactic_appetite: "LOW",
+    rupture: "NONE",
+    rupture_confidence: 0,
+    should_run_router: false,
+    memory_query_eligible,
+    confidence,
+    harm_if_wrong,
+    reason,
+  };
+}
+
+function parseRouterGateResponse(result: Record<string, unknown>): RouterGateResult | null {
+  const intent = normalizeGateIntent(typeof result.intent === "string" ? result.intent : null);
+  const posture = normalizePosture(typeof result.posture === "string" ? result.posture : null);
+  const posture_confidence = parseConfidence(result.posture_confidence);
+  const explicit_topic_shift =
+    typeof result.explicit_topic_shift === "boolean" ? result.explicit_topic_shift : null;
+  const mood = normalizeMood(typeof result.mood === "string" ? result.mood : null);
+  const energy = normalizeEnergy(typeof result.energy === "string" ? result.energy : null);
+  const state_confidence = parseConfidence(result.state_confidence);
+  const reason = typeof result.reason === "string" ? result.reason : null;
+
+  if (posture_confidence === null || explicit_topic_shift === null || state_confidence === null) {
+    return null;
+  }
+  return {
+    intent,
+    posture,
+    posture_confidence,
+    explicit_topic_shift,
+    mood,
+    energy,
+    state_confidence,
+    reason,
+  };
+}
+
+async function callOpenRouterJsonWithModelFallback(params: {
+  prompt: string;
+  primaryModel: string;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  const primaryResult = await callOpenRouterJson(
+    params.prompt,
+    params.primaryModel,
+    params.timeoutMs
+  );
+  if (primaryResult) {
+    return {
+      result: primaryResult,
+      modelUsed: params.primaryModel,
+      usedFallbackModel: false,
+      primaryError: null as string | null,
+    };
+  }
+  const elapsed = Date.now() - startedAt;
+  const remaining = Math.max(0, params.timeoutMs - elapsed);
+  if (remaining < 80) {
+    return {
+      result: null,
+      modelUsed: params.primaryModel,
+      usedFallbackModel: false,
+      primaryError: "primary_failed_no_budget_for_fallback",
+    };
+  }
+  const fallbackResult = await callOpenRouterJson(
+    params.prompt,
+    GATE_FALLBACK_MODEL,
+    remaining
+  );
+  if (!fallbackResult) {
+    return {
+      result: null,
+      modelUsed: GATE_FALLBACK_MODEL,
+      usedFallbackModel: true,
+      primaryError: "primary_and_fallback_failed",
+    };
+  }
+  return {
+    result: fallbackResult,
+    modelUsed: GATE_FALLBACK_MODEL,
+    usedFallbackModel: true,
+    primaryError: "primary_failed_fallback_succeeded",
+  };
+}
+
+async function runTriageGate(params: {
   transcript: string;
   lastTurns: string;
   timeoutMs: number;
 }) {
   const { transcript, lastTurns, timeoutMs } = params;
-  console.info("[memory.gate] entry", {
-    called: true,
-    timeoutMs,
-  });
-  const gatePrompt = `You are a Memory Gate. Decide if we should query memory.
+  const prompt = `You are Memory Gate TRIAGE. Return ONLY valid JSON.
 
-Return ONLY valid JSON:
-{"action":"memory_query"|"none","confidence":0-1,"explicit":true|false,"reason":"optional",
-"intent":"companion|momentum|output_task|learning",
-"is_urgent":true|false,
-"is_direct_request":true|false,
-"posture":"COMPANION|MOMENTUM|REFLECTION|RELATIONSHIP|IDEATION|RECOVERY|PRACTICAL",
-"pressure":"LOW|MED|HIGH",
-"posture_confidence":0-1,
-"explicit_topic_shift":true|false,
-"posture_reason":"optional",
-"mood":"CALM|NEUTRAL|LOW|UPBEAT|FRUSTRATED|OVERWHELMED|ANXIOUS",
-"energy":"LOW|MED|HIGH",
-"tone":"PLAYFUL|SERIOUS|TENDER|DIRECT",
-"state_confidence":0-1,
-"explicit_state_shift":true|false,
-"state_reason":"optional",
-"risk_level":"LOW|MED|HIGH|CRISIS"}
+Schema:
+{
+  "risk_level":"LOW|MED|HIGH|CRISIS",
+  "pressure":"LOW|MED|HIGH",
+  "capacity":"LOW|MED|HIGH",
+  "permission":"NONE|IMPLICIT|EXPLICIT",
+  "tactic_appetite":"NONE|LOW|MED|HIGH",
+  "rupture":"NONE|MILD|STRONG",
+  "rupture_confidence":0-1,
+  "should_run_router":true|false,
+  "memory_query_eligible":true|false,
+  "confidence":0-1,
+  "harm_if_wrong":"LOW|MED|HIGH",
+  "reason":"optional short"
+}
 
-Rules:
-- explicit=true if the user directly asks to recall past info.
-- action=memory_query if recall is needed.
-- action=none if the user is only chatting about present/future.
-- intent=output_task for explicit asks to produce/edit/fix/summarize output.
-- intent=momentum for planning/prioritizing/focus/next-step coaching.
-- intent=learning for explain/teach/understand requests.
-- intent=companion for personal processing, reflection, or relational conversation.
-- is_direct_request=true only when user explicitly asks for concrete output/work.
-- is_urgent=true only for immediate urgency/crisis/time-critical support needs.
-- posture must be exactly one of the allowed enums (never multiple values or pipes).
-- risk_level=LOW for routine chat, MED for meaningful personal topics, HIGH for intense conflict/grief/major decisions, CRISIS for self-harm/abuse/violence/emergency.
+Guidance:
+- Conservative under uncertainty.
+- If fragile, prefer capacity=LOW, permission=NONE, harm_if_wrong=HIGH.
+- rupture should capture semantic resistance/correction interaction quality, not exact phrase matching.
+- Do not infer self-harm unless clearly present.
 
 Recent conversation:
 ${lastTurns}
@@ -1451,85 +1687,121 @@ ${lastTurns}
 Current user message:
 ${transcript}`;
 
-  let result: Record<string, unknown> | null = null;
-  try {
-    result = await callOpenRouterJson(
-      gatePrompt,
-      "meta-llama/llama-3.1-8b-instruct",
-      timeoutMs
-    );
-    if (!result) throw new Error("model call returned null");
-  } catch (error) {
-    console.warn("[memory.gate] model call failed", { message: error instanceof Error ? error.message : String(error), timeoutMs });
-    return null;
-  }
-  console.info("[memory.gate] exit", {
-    called: true,
-    modelCallSucceeded: result !== null,
-    rawResult: result,
+  const call = await callOpenRouterJsonWithModelFallback({
+    prompt,
+    primaryModel: TRIAGE_PRIMARY_MODEL,
+    timeoutMs: Math.max(80, Math.min(timeoutMs, TRIAGE_MAX_TIMEOUT_MS)),
   });
-  if (!result) return null;
-  const action = result.action === "memory_query" ? "memory_query" : "none";
-  const confidence =
-    typeof result.confidence === "number" && Number.isFinite(result.confidence)
-      ? result.confidence
-      : 0;
-  const explicit = Boolean(result.explicit);
-  const reason = typeof result.reason === "string" ? result.reason : null;
-  const intent = typeof result.intent === "string" ? result.intent : undefined;
-  const is_urgent = Boolean(result.is_urgent);
-  const is_direct_request = Boolean(result.is_direct_request);
-  const posture = typeof result.posture === "string" ? result.posture : undefined;
-  const pressure = typeof result.pressure === "string" ? result.pressure : undefined;
-  const posture_confidence =
-    typeof result.posture_confidence === "number" && Number.isFinite(result.posture_confidence)
-      ? result.posture_confidence
-      : 0;
-  const explicit_topic_shift = Boolean(result.explicit_topic_shift);
-  const posture_reason =
-    typeof result.posture_reason === "string" ? result.posture_reason : null;
-  const mood = typeof result.mood === "string" ? result.mood : undefined;
-  const energy = typeof result.energy === "string" ? result.energy : undefined;
-  const tone = typeof result.tone === "string" ? result.tone : undefined;
-  const state_confidence =
-    typeof result.state_confidence === "number" && Number.isFinite(result.state_confidence)
-      ? result.state_confidence
-      : 0;
-  const explicit_state_shift = Boolean(result.explicit_state_shift);
-  const state_reason = typeof result.state_reason === "string" ? result.state_reason : null;
-  const risk_level = typeof result.risk_level === "string" ? result.risk_level : undefined;
+  if (!call.result) {
+    return {
+      triage: conservativeTriageFallback(),
+      triageSource: "fallback" as TriageSource,
+      modelUsed: call.modelUsed,
+      usedFallbackModel: call.usedFallbackModel,
+      modelFallbackReason: call.primaryError,
+      rawResult: null,
+    };
+  }
+  const parsed = parseTriageGateResponse(call.result) ?? parseLegacyGateAsTriage(call.result);
+  if (!parsed) {
+    return {
+      triage: conservativeTriageFallback(),
+      triageSource: "failed_parse" as TriageSource,
+      modelUsed: call.modelUsed,
+      usedFallbackModel: call.usedFallbackModel,
+      modelFallbackReason: call.primaryError,
+      rawResult: call.result,
+    };
+  }
   return {
-    action,
-    confidence,
-    explicit,
-    reason,
-    intent: normalizeGateIntent(intent),
-    is_urgent,
-    is_direct_request,
-    posture: posture as MemoryGateResult["posture"],
-    pressure: pressure as MemoryGateResult["pressure"],
-    posture_confidence,
-    explicit_topic_shift,
-    posture_reason,
-    mood: mood as MemoryGateResult["mood"],
-    energy: energy as MemoryGateResult["energy"],
-    tone: tone as MemoryGateResult["tone"],
-    state_confidence,
-    explicit_state_shift,
-    state_reason,
-    risk_level: normalizeRiskLevel(risk_level),
-  } satisfies MemoryGateResult;
+    triage: parsed,
+    triageSource: "model" as TriageSource,
+    modelUsed: call.modelUsed,
+    usedFallbackModel: call.usedFallbackModel,
+    modelFallbackReason: call.primaryError,
+    rawResult: call.result,
+  };
 }
 
-function detectAvoidanceOrDrift(gateResult: MemoryGateResult) {
-  const reasons = [gateResult.reason, gateResult.posture_reason, gateResult.state_reason]
+async function runRouterGate(params: {
+  transcript: string;
+  lastTurns: string;
+  timeoutMs: number;
+}) {
+  const { transcript, lastTurns, timeoutMs } = params;
+  const prompt = `You are ROUTER. Return ONLY valid JSON.
+
+Schema:
+{
+  "intent":"companion|momentum|output_task|learning",
+  "posture":"COMPANION|MOMENTUM|REFLECTION|RELATIONSHIP|IDEATION|RECOVERY|PRACTICAL",
+  "posture_confidence":0-1,
+  "explicit_topic_shift":true|false,
+  "mood":"CALM|NEUTRAL|LOW|UPBEAT|FRUSTRATED|OVERWHELMED|ANXIOUS",
+  "energy":"LOW|MED|HIGH",
+  "state_confidence":0-1,
+  "reason":"optional short"
+}
+
+Guidance:
+- Prefer RECOVERY when user appears strained, uncertain, or meaning-collapsed.
+- Conservative under uncertainty.
+- No extra keys.
+
+Recent conversation:
+${lastTurns}
+
+Current user message:
+${transcript}`;
+
+  const call = await callOpenRouterJsonWithModelFallback({
+    prompt,
+    primaryModel: ROUTER_PRIMARY_MODEL,
+    timeoutMs: Math.max(120, Math.min(timeoutMs, ROUTER_MAX_TIMEOUT_MS)),
+  });
+  if (!call.result) {
+    return {
+      router: null,
+      modelUsed: call.modelUsed,
+      usedFallbackModel: call.usedFallbackModel,
+      modelFallbackReason: call.primaryError,
+      rawResult: null,
+    };
+  }
+  const parsed = parseRouterGateResponse(call.result);
+  if (!parsed) {
+    return {
+      router: null,
+      modelUsed: call.modelUsed,
+      usedFallbackModel: call.usedFallbackModel,
+      modelFallbackReason: call.primaryError,
+      rawResult: call.result,
+    };
+  }
+  return {
+    router: parsed,
+    modelUsed: call.modelUsed,
+    usedFallbackModel: call.usedFallbackModel,
+    modelFallbackReason: call.primaryError,
+    rawResult: call.result,
+  };
+}
+
+function detectAvoidanceOrDrift(params: {
+  posture: ConversationPosture;
+  pressure: ConversationPressure;
+  isDirectRequest: boolean;
+  triageReason?: string | null;
+  routerReason?: string | null;
+}) {
+  const reasons = [params.triageReason, params.routerReason]
     .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     .join(" ")
     .toLowerCase();
   if (/\b(avoid|avoidance|drift|rationaliz|stall|procrastin|deflect)\b/.test(reasons)) {
     return true;
   }
-  return gateResult.posture === "MOMENTUM" && gateResult.pressure === "HIGH" && !gateResult.is_direct_request;
+  return params.posture === "MOMENTUM" && params.pressure === "HIGH" && !params.isDirectRequest;
 }
 
 async function runMemoryQuerySpec(params: {
@@ -1617,6 +1889,17 @@ async function runLibrarianReflex(params: {
   gateExplicitTopicShift: boolean;
   postureConfidence: number;
   stateConfidence: number;
+  triage: TriageGateResult;
+  triageSource: TriageSource;
+  postureSource: PostureSource;
+  routerRunReason: RouterRunReason;
+  routerOutput: RouterGateResult | null;
+  triageModel: string;
+  triageUsedFallbackModel: boolean;
+  triageModelFallbackReason: string | null;
+  routerModel: string | null;
+  routerUsedFallbackModel: boolean;
+  routerModelFallbackReason: string | null;
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
@@ -1630,6 +1913,7 @@ async function runLibrarianReflex(params: {
   const lastTurns = extractLastTwoTurns(recentMessages)
     .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
     .join("\n");
+  const fallbackTriage = conservativeTriageFallback();
   const defaultGateSignals = {
     intent: DEFAULT_GATE_INTENT,
     isUrgent: false,
@@ -1641,6 +1925,17 @@ async function runLibrarianReflex(params: {
     gateExplicitTopicShift: false,
     postureConfidence: 0,
     stateConfidence: 0,
+    triage: fallbackTriage,
+    triageSource: "fallback" as TriageSource,
+    postureSource: "fallback" as PostureSource,
+    routerRunReason: "triage_failed_parse" as RouterRunReason,
+    routerOutput: null,
+    triageModel: TRIAGE_PRIMARY_MODEL,
+    triageUsedFallbackModel: false,
+    triageModelFallbackReason: "triage_not_called",
+    routerModel: null,
+    routerUsedFallbackModel: false,
+    routerModelFallbackReason: null,
   };
   if (remaining() <= 0) {
     return {
@@ -1652,47 +1947,143 @@ async function runLibrarianReflex(params: {
       ...defaultGateSignals,
     };
   }
-  const gateResult = await runMemoryGate({
+  const triageExecution = await runTriageGate({
     transcript,
     lastTurns,
-    timeoutMs: remaining(),
+    timeoutMs: Math.max(120, remaining()),
   });
-  if (!gateResult) {
-    return {
-      supplementalContext: null,
-      posture: DEFAULT_POSTURE,
-      pressure: DEFAULT_PRESSURE,
-      userState: null,
-      riskLevel: DEFAULT_RISK,
-      ...defaultGateSignals,
-    };
+  const triage = triageExecution.triage;
+  const shouldRunRouterFromTriage =
+    triage.should_run_router &&
+    triage.risk_level !== "HIGH" &&
+    triage.risk_level !== "CRISIS" &&
+    triage.capacity !== "LOW";
+  const shouldRunRouterFromHarm =
+    triage.harm_if_wrong === "HIGH" &&
+    triage.confidence < 0.7 &&
+    triage.risk_level !== "HIGH" &&
+    triage.risk_level !== "CRISIS" &&
+    triage.capacity !== "LOW";
+  const shouldRunRouterFromSensitiveBoundary =
+    (triage.pressure === "MED" || triage.pressure === "HIGH" || triage.capacity === "MED") &&
+    triage.permission !== "EXPLICIT" &&
+    triage.confidence < 0.8 &&
+    triage.risk_level !== "HIGH" &&
+    triage.risk_level !== "CRISIS" &&
+    triage.capacity !== "LOW";
+  let routerRunReason: RouterRunReason = "skipped_triage_false";
+  let routerOutput: RouterGateResult | null = null;
+  let routerModel: string | null = null;
+  let routerUsedFallbackModel = false;
+  let routerModelFallbackReason: string | null = null;
+  if (triageExecution.triageSource === "failed_parse") {
+    routerRunReason = "triage_failed_parse";
+  } else if (triage.risk_level === "HIGH" || triage.risk_level === "CRISIS") {
+    routerRunReason = "skipped_risk_high";
+  } else if (triage.capacity === "LOW") {
+    routerRunReason = "skipped_capacity_low";
+  } else if (remaining() < ROUTER_MIN_BUDGET_MS) {
+    routerRunReason = "skipped_time_budget";
+  } else if (
+    shouldRunRouterFromTriage ||
+    shouldRunRouterFromHarm ||
+    shouldRunRouterFromSensitiveBoundary
+  ) {
+    const routerExecution = await runRouterGate({
+      transcript,
+      lastTurns,
+      timeoutMs: remaining(),
+    });
+    routerOutput = routerExecution.router;
+    routerModel = routerExecution.modelUsed;
+    routerUsedFallbackModel = routerExecution.usedFallbackModel;
+    routerModelFallbackReason = routerExecution.modelFallbackReason;
+    if (shouldRunRouterFromTriage) {
+      routerRunReason = "ran_should_run_router";
+    } else if (shouldRunRouterFromHarm) {
+      routerRunReason = "ran_harm_low_confidence";
+    } else {
+      routerRunReason = "ran_sensitive_boundary";
+    }
   }
+  const postureSource: PostureSource = routerOutput ? "router" : "fallback";
+  const legacyRawGate =
+    triageExecution.rawResult &&
+    typeof triageExecution.rawResult === "object" &&
+    !Array.isArray(triageExecution.rawResult)
+      ? (triageExecution.rawResult as Record<string, unknown>)
+      : null;
+  const legacyPosture =
+    legacyRawGate && typeof legacyRawGate.posture === "string"
+      ? normalizePosture(legacyRawGate.posture)
+      : null;
+  const legacyMood =
+    legacyRawGate && typeof legacyRawGate.mood === "string"
+      ? normalizeMood(legacyRawGate.mood)
+      : null;
+  const legacyEnergy =
+    legacyRawGate && typeof legacyRawGate.energy === "string"
+      ? normalizeEnergy(legacyRawGate.energy)
+      : null;
+  const legacyPostureConfidence =
+    legacyRawGate && typeof legacyRawGate.posture_confidence === "number"
+      ? parseConfidence(legacyRawGate.posture_confidence)
+      : null;
+  const legacyStateConfidence =
+    legacyRawGate && typeof legacyRawGate.state_confidence === "number"
+      ? parseConfidence(legacyRawGate.state_confidence)
+      : null;
+  const legacyExplicitTopicShift =
+    legacyRawGate && typeof legacyRawGate.explicit_topic_shift === "boolean"
+      ? legacyRawGate.explicit_topic_shift
+      : false;
+  const fallbackPosture: ConversationPosture =
+    triage.capacity === "LOW" ? "RECOVERY" : triage.pressure === "HIGH" ? "RECOVERY" : "COMPANION";
+  const postureSuggestion = normalizePosture(
+    routerOutput?.posture ?? legacyPosture ?? fallbackPosture
+  );
+  const pressureSuggestion = normalizePressure(triage.pressure);
+  const postureConfidence = routerOutput?.posture_confidence ?? legacyPostureConfidence ?? 0;
+  const explicitTopicShift = Boolean(routerOutput?.explicit_topic_shift ?? legacyExplicitTopicShift);
+  const moodSuggestion = normalizeMood(routerOutput?.mood ?? legacyMood ?? DEFAULT_MOOD);
+  const energySuggestion = normalizeEnergy(routerOutput?.energy ?? legacyEnergy ?? DEFAULT_ENERGY);
+  const toneSuggestion = DEFAULT_TONE;
+  const stateConfidence = routerOutput?.state_confidence ?? legacyStateConfidence ?? 0;
+  const explicitStateShift = false;
+  const isDirectRequest = triage.permission === "EXPLICIT";
+  const gateExplicit = triage.permission === "EXPLICIT";
+  const gateAction: "memory_query" | "none" = triage.memory_query_eligible ? "memory_query" : "none";
+  const isUrgent = triage.risk_level === "HIGH" || triage.risk_level === "CRISIS";
+  const intentSuggestion = routerOutput?.intent ?? DEFAULT_GATE_INTENT;
   const gateSignals = {
-    intent: gateResult.intent ?? DEFAULT_GATE_INTENT,
-    isUrgent: Boolean(gateResult.is_urgent),
-    isDirectRequest: Boolean(gateResult.is_direct_request),
-    avoidanceOrDrift: detectAvoidanceOrDrift(gateResult),
-    gateAction: gateResult.action,
-    gateConfidence: gateResult.confidence,
-    gateExplicit: Boolean(gateResult.explicit),
-    gateExplicitTopicShift: Boolean(gateResult.explicit_topic_shift),
-    postureConfidence:
-      typeof gateResult.posture_confidence === "number" ? gateResult.posture_confidence : 0,
-    stateConfidence:
-      typeof gateResult.state_confidence === "number" ? gateResult.state_confidence : 0,
+    intent: intentSuggestion,
+    isUrgent,
+    isDirectRequest,
+    avoidanceOrDrift: detectAvoidanceOrDrift({
+      posture: postureSuggestion,
+      pressure: pressureSuggestion,
+      isDirectRequest,
+      triageReason: triage.reason,
+      routerReason: routerOutput?.reason ?? null,
+    }),
+    gateAction,
+    gateConfidence: triage.confidence,
+    gateExplicit,
+    gateExplicitTopicShift: explicitTopicShift,
+    postureConfidence,
+    stateConfidence,
+    triage,
+    triageSource: triageExecution.triageSource,
+    postureSource,
+    routerRunReason,
+    routerOutput,
+    triageModel: triageExecution.modelUsed,
+    triageUsedFallbackModel: triageExecution.usedFallbackModel,
+    triageModelFallbackReason: triageExecution.modelFallbackReason,
+    routerModel,
+    routerUsedFallbackModel,
+    routerModelFallbackReason,
   };
-
-  const postureSuggestion = normalizePosture(gateResult.posture);
-  const pressureSuggestion = normalizePressure(gateResult.pressure);
-  const postureConfidence =
-    typeof gateResult.posture_confidence === "number" ? gateResult.posture_confidence : 0;
-  const explicitTopicShift = Boolean(gateResult.explicit_topic_shift);
-  const moodSuggestion = normalizeMood(gateResult.mood);
-  const energySuggestion = normalizeEnergy(gateResult.energy);
-  const toneSuggestion = normalizeTone(gateResult.tone);
-  const stateConfidence =
-    typeof gateResult.state_confidence === "number" ? gateResult.state_confidence : 0;
-  const explicitStateShift = Boolean(gateResult.explicit_state_shift);
 
   const postureResult = await resolvePostureWithHysteresis({
     userId,
@@ -1729,15 +2120,15 @@ async function runLibrarianReflex(params: {
   });
 
   const explicitSignal = isExplicitRecall(transcript);
-  const explicit = gateResult.explicit || explicitSignal;
+  const explicit = gateExplicit || explicitSignal;
   const threshold = explicit ? 0.55 : 0.8;
-  if (gateResult.action !== "memory_query" || gateResult.confidence < threshold) {
+  if (gateAction !== "memory_query" || triage.confidence < threshold) {
     return {
       supplementalContext: null,
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   }
@@ -1751,7 +2142,12 @@ async function runLibrarianReflex(params: {
         requestId,
         kind: "gate",
         transcript,
-        bouncer: gateResult,
+        bouncer: {
+          triage,
+          triage_source: triageExecution.triageSource,
+          router: routerOutput,
+          router_run_reason: routerRunReason,
+        },
       },
     }).catch((error) => {
       console.warn("[librarian.trace] failed to log gate", { error });
@@ -1764,7 +2160,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   }
@@ -1774,7 +2170,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   }
@@ -1789,7 +2185,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   }
@@ -1802,7 +2198,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   }
@@ -1812,7 +2208,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   }
@@ -1822,7 +2218,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   }
@@ -1853,7 +2249,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
-        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        riskLevel: triage.risk_level ?? DEFAULT_RISK,
         ...gateSignals,
       };
     }
@@ -1866,7 +2262,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
-        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        riskLevel: triage.risk_level ?? DEFAULT_RISK,
         ...gateSignals,
       };
     }
@@ -1877,7 +2273,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
-        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        riskLevel: triage.risk_level ?? DEFAULT_RISK,
         ...gateSignals,
       };
     }
@@ -1887,7 +2283,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
-        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        riskLevel: triage.risk_level ?? DEFAULT_RISK,
         ...gateSignals,
       };
     }
@@ -1903,7 +2299,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
-        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        riskLevel: triage.risk_level ?? DEFAULT_RISK,
         ...gateSignals,
       };
     }
@@ -1919,7 +2315,12 @@ async function runLibrarianReflex(params: {
           requestId,
           kind: "librarian",
           transcript,
-          bouncer: gateResult,
+          bouncer: {
+            triage,
+            triage_source: triageExecution.triageSource,
+            router: routerOutput,
+            router_run_reason: routerRunReason,
+          },
           memoryQuery: { query: sanitized, limit: 10, spec, relevance },
           memoryResponse: data,
           supplementalContext: supplemental,
@@ -1934,7 +2335,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   } catch (error) {
@@ -1945,7 +2346,7 @@ async function runLibrarianReflex(params: {
         posture: postureResult.posture,
         pressure: postureResult.pressure,
         userState: userStateResult,
-        riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+        riskLevel: triage.risk_level ?? DEFAULT_RISK,
         ...gateSignals,
       };
     }
@@ -1955,7 +2356,7 @@ async function runLibrarianReflex(params: {
       posture: postureResult.posture,
       pressure: postureResult.pressure,
       userState: userStateResult,
-      riskLevel: gateResult.risk_level ?? DEFAULT_RISK,
+      riskLevel: triage.risk_level ?? DEFAULT_RISK,
       ...gateSignals,
     };
   } finally {
@@ -3096,12 +3497,96 @@ function shouldHoldWitnessOnContinuation(params: {
   return true;
 }
 
+type TacticEligibilityResult = {
+  allowed: boolean;
+  vetoReasons: string[];
+};
+
+type CooldownActivationReason = "rupture_strong" | "rupture_mild" | "soft_harm_capacity" | null;
+
+function isProbingTactic(tactic: TacticOverlayType | "none") {
+  return tactic === "curiosity_spiral" || tactic === "accountability_tug";
+}
+
+function evaluateTacticEligibility(params: {
+  tactic: TacticOverlayType | "none";
+  triage: TriageGateResult;
+  cooldownTurnsRemaining: number;
+}) {
+  const { tactic, triage, cooldownTurnsRemaining } = params;
+  const vetoReasons: string[] = [];
+  if (tactic === "none") {
+    return { allowed: true, vetoReasons } satisfies TacticEligibilityResult;
+  }
+  if (!isProbingTactic(tactic)) {
+    return { allowed: true, vetoReasons } satisfies TacticEligibilityResult;
+  }
+  if (triage.capacity !== "HIGH") vetoReasons.push("capacity_not_high");
+  if (triage.permission === "NONE") vetoReasons.push("permission_none");
+  if (triage.tactic_appetite !== "HIGH") vetoReasons.push("appetite_not_high");
+  if (triage.risk_level !== "LOW") vetoReasons.push("risk_not_low");
+  if (triage.pressure === "HIGH") vetoReasons.push("pressure_high");
+  if (cooldownTurnsRemaining > 0) vetoReasons.push("cooldown_active");
+  return {
+    allowed: vetoReasons.length === 0,
+    vetoReasons,
+  } satisfies TacticEligibilityResult;
+}
+
+function applyCooldownPolicy(params: {
+  previousCooldownTurnsRemaining: number;
+  previousCooldownLastReason: "rupture_strong" | "rupture_mild" | null;
+  triage: TriageGateResult;
+  routerRunReason: RouterRunReason;
+  routerOutput: RouterGateResult | null;
+}) {
+  let cooldownTurnsRemaining = Math.max(0, params.previousCooldownTurnsRemaining);
+  let cooldownLastReason = params.previousCooldownLastReason;
+  let cooldownActivatedReason: CooldownActivationReason = null;
+  if (params.triage.rupture === "STRONG" && params.triage.rupture_confidence >= 0.7) {
+    cooldownTurnsRemaining = 3;
+    cooldownLastReason = "rupture_strong";
+    cooldownActivatedReason = "rupture_strong";
+  } else if (params.triage.rupture === "MILD" && params.triage.rupture_confidence >= 0.7) {
+    cooldownTurnsRemaining = Math.max(cooldownTurnsRemaining, 1);
+    cooldownLastReason = "rupture_mild";
+    cooldownActivatedReason = "rupture_mild";
+  } else if (params.triage.harm_if_wrong === "HIGH" && params.triage.capacity !== "HIGH") {
+    cooldownTurnsRemaining = Math.max(cooldownTurnsRemaining, 1);
+    cooldownActivatedReason = "soft_harm_capacity";
+  } else if (cooldownTurnsRemaining > 0) {
+    cooldownTurnsRemaining = Math.max(0, cooldownTurnsRemaining - 1);
+    if (cooldownTurnsRemaining === 0) {
+      cooldownLastReason = null;
+    }
+  }
+  const routerAttempted =
+    params.routerRunReason === "ran_should_run_router" ||
+    params.routerRunReason === "ran_harm_low_confidence" ||
+    params.routerRunReason === "ran_sensitive_boundary";
+  if (routerAttempted && !params.routerOutput) {
+    cooldownTurnsRemaining = Math.max(cooldownTurnsRemaining, 1);
+    if (!cooldownActivatedReason) {
+      cooldownActivatedReason = "soft_harm_capacity";
+    }
+  }
+  return {
+    cooldownTurnsRemaining,
+    cooldownLastReason,
+    cooldownActivatedReason,
+  };
+}
+
 function buildStyleGuardBlock(params: {
   stance: StanceOverlayType | "none";
   endearmentCooldownTurns: number;
+  cooldownActive?: boolean;
 }) {
   const lines = ["[STYLE_GUARD]"];
   lines.push('- Ban robotic phrases: "you shared that", "tentative glimmer", "want to name one small thing".');
+  if (params.cooldownActive) {
+    lines.push("- Keep this turn short, present, and non-probing unless safety requires a check-in.");
+  }
   if (params.stance === "witness") {
     lines.push("- No endearments in this turn.");
     lines.push('- Ban phrases: "must feel", "that must feel", "that sounds", "all ears", "so heavy", "so jumbled", "you shared that", "tentative glimmer".');
@@ -3427,6 +3912,17 @@ export async function POST(request: NextRequest) {
     let pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
     const userState = librarianResult?.userState ?? null;
     let riskLevel = librarianResult?.riskLevel ?? DEFAULT_RISK;
+    const triage = librarianResult?.triage ?? conservativeTriageFallback();
+    const triageSource = librarianResult?.triageSource ?? "fallback";
+    const postureSource = librarianResult?.postureSource ?? "fallback";
+    const routerRunReason = librarianResult?.routerRunReason ?? "triage_failed_parse";
+    const routerOutput = librarianResult?.routerOutput ?? null;
+    const triageModel = librarianResult?.triageModel ?? TRIAGE_PRIMARY_MODEL;
+    const triageUsedFallbackModel = librarianResult?.triageUsedFallbackModel ?? false;
+    const triageModelFallbackReason = librarianResult?.triageModelFallbackReason ?? null;
+    const routerModel = librarianResult?.routerModel ?? null;
+    const routerUsedFallbackModel = librarianResult?.routerUsedFallbackModel ?? false;
+    const routerModelFallbackReason = librarianResult?.routerModelFallbackReason ?? null;
     const overlayIntent = librarianResult?.intent ?? DEFAULT_GATE_INTENT;
     const overlayIsUrgent = librarianResult?.isUrgent ?? false;
     const overlayIsDirectRequest = librarianResult?.isDirectRequest ?? false;
@@ -3491,6 +3987,9 @@ export async function POST(request: NextRequest) {
       lastUsedAt: 0,
     };
     let endearmentCooldownTurns = overlayState.endearmentCooldownTurns ?? 0;
+    let cooldownTurnsRemaining = overlayState.cooldownTurnsRemaining ?? 0;
+    let cooldownLastReason = overlayState.cooldownLastReason ?? null;
+    let lastProbingTacticFired = overlayState.lastProbingTacticFired ?? false;
     const synapseSessionIngestOk = overlayState.synapseSessionIngestOk ?? null;
     const synapseSessionIngestError = overlayState.synapseSessionIngestError ?? null;
     const overlayUser = overlayState.user ?? {};
@@ -3522,6 +4021,9 @@ export async function POST(request: NextRequest) {
       stanceTurnsRemaining = 0;
       tierBurst = { activeId: null, remaining: 0, lastUsedAt: 0 };
       endearmentCooldownTurns = 0;
+      cooldownTurnsRemaining = 0;
+      cooldownLastReason = null;
+      lastProbingTacticFired = false;
     }
     if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
       startbriefV2FirstUserLowSignal = isLowSignalFirstUserMessage(sttResult.transcript);
@@ -3632,6 +4134,17 @@ export async function POST(request: NextRequest) {
       opsSource = null;
     }
 
+    const cooldownResult = applyCooldownPolicy({
+      previousCooldownTurnsRemaining: cooldownTurnsRemaining,
+      previousCooldownLastReason: cooldownLastReason,
+      triage,
+      routerRunReason,
+      routerOutput,
+    });
+    cooldownTurnsRemaining = cooldownResult.cooldownTurnsRemaining;
+    cooldownLastReason = cooldownResult.cooldownLastReason;
+    const cooldownActivatedReason = cooldownResult.cooldownActivatedReason;
+
     let stanceOverlayType: StanceOverlayType | "none" = "none";
     let tacticOverlayType: TacticOverlayType | "none" = "none";
     let overlayTriggerReason = "none";
@@ -3639,6 +4152,7 @@ export async function POST(request: NextRequest) {
     let overlayExitReason: "cap" | "dismiss" | "topicShift" | "helpRequest" | "lowEnergy" | "policy" | "none" =
       "none";
     let overlayTopicKey: string | undefined;
+    let tacticEligibility: TacticEligibilityResult = { allowed: true, vetoReasons: [] };
     const baseOverlayPolicy = shouldSkipOverlaySelection({
       intent: overlayIntent,
       isUrgent: effectiveSignals.isUrgent,
@@ -3868,6 +4382,22 @@ export async function POST(request: NextRequest) {
     }
 
     if (!overlayPolicy.skip && overlayTypeActive === "curiosity_spiral") {
+      const continuationEligibility = evaluateTacticEligibility({
+        tactic: "curiosity_spiral",
+        triage,
+        cooldownTurnsRemaining,
+      });
+      if (!continuationEligibility.allowed) {
+        tacticEligibility = continuationEligibility;
+        overlaySuppressionReason = continuationEligibility.vetoReasons.join(",");
+        overlayExitReason = "policy";
+        overlayTypeActive = null;
+        overlayTurnCount = 0;
+        shortReplyStreak = 0;
+      }
+    }
+
+    if (!overlayPolicy.skip && overlayTypeActive === "curiosity_spiral") {
       if (overlayTurnCount < 4) {
         tacticOverlayType = "curiosity_spiral";
         overlayTriggerReason = "curiosity_active";
@@ -3916,6 +4446,18 @@ export async function POST(request: NextRequest) {
       overlayTriggerReason = decision.triggerReason;
       overlaySuppressionReason = decision.suppressionReason ?? null;
       overlayTopicKey = decision.topicKey;
+      tacticEligibility = evaluateTacticEligibility({
+        tactic: tacticOverlayType,
+        triage,
+        cooldownTurnsRemaining,
+      });
+      if (!tacticEligibility.allowed) {
+        if (tacticOverlayType !== "none") {
+          overlaySuppressionReason = tacticEligibility.vetoReasons.join(",");
+        }
+        tacticOverlayType = "none";
+        overlayTopicKey = undefined;
+      }
 
       const stanceKey = stanceOverlayType === "none" ? null : `stance:${stanceOverlayType}`;
       if (
@@ -3990,6 +4532,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const probingTacticFired = isProbingTactic(tacticOverlayType);
+    const tacticRegretCandidate =
+      lastProbingTacticFired && (triage.rupture === "MILD" || triage.rupture === "STRONG");
+    lastProbingTacticFired = probingTacticFired;
+
     recentOverlayKeys = updateRecentOverlayKeys(recentOverlayKeys, [
       ...(stanceOverlayType !== "none" ? [`stance:${stanceOverlayType}`] : []),
       ...(tacticOverlayType !== "none" ? [`tactic:${tacticOverlayType}`] : []),
@@ -4009,6 +4556,7 @@ export async function POST(request: NextRequest) {
     const styleGuardBlock = buildStyleGuardBlock({
       stance: stanceOverlayType,
       endearmentCooldownTurns,
+      cooldownActive: cooldownTurnsRemaining > 0,
     });
     endearmentCooldownTurns = nextEndearmentCooldownTurns(endearmentCooldownTurns, stanceOverlayType);
 
@@ -4127,6 +4675,9 @@ export async function POST(request: NextRequest) {
       stanceTurnsRemaining,
       tierBurst,
       endearmentCooldownTurns,
+      cooldownTurnsRemaining,
+      cooldownLastReason,
+      lastProbingTacticFired,
       lastSessionId: session.id,
       user: overlayUser,
     });
@@ -4147,6 +4698,11 @@ export async function POST(request: NextRequest) {
             overlayTurnCount,
             overlayExitReason,
             topicKey: overlayTopicKey ?? null,
+            cooldown_turns_remaining: cooldownTurnsRemaining,
+            cooldown_last_reason: cooldownLastReason,
+            cooldown_activated_reason: cooldownActivatedReason,
+            tactic_eligibility_allowed: tacticEligibility.allowed,
+            tactic_eligibility_veto_reasons: tacticEligibility.vetoReasons,
           },
         },
       }).catch((error) => {
@@ -4317,6 +4873,23 @@ export async function POST(request: NextRequest) {
             context_governor_selected_by_source: governedContext.runtime.selected_by_source,
             context_governor_dropped_by_reason: governedContext.runtime.dropped_by_reason,
             context_governor_selected_keys: governedContext.runtime.selected_keys,
+            triage_output: triage,
+            triage_source: triageSource,
+            posture_source: postureSource,
+            router_output: routerOutput,
+            router_run_reason: routerRunReason,
+            triage_model: triageModel,
+            triage_used_fallback_model: triageUsedFallbackModel,
+            triage_model_fallback_reason: triageModelFallbackReason,
+            router_model: routerModel,
+            router_used_fallback_model: routerUsedFallbackModel,
+            router_model_fallback_reason: routerModelFallbackReason,
+            cooldown_turns_remaining: cooldownTurnsRemaining,
+            cooldown_last_reason: cooldownLastReason,
+            cooldown_activated_reason: cooldownActivatedReason,
+            tactic_eligibility_allowed: tacticEligibility.allowed,
+            tactic_eligibility_veto_reasons: tacticEligibility.vetoReasons,
+            tactic_regret_candidate: tacticRegretCandidate,
             ...buildBouncerAuthorityTraceFields({
               shadowLogEnabled: isBouncerAuthorityShadowLogEnabled(),
               authorityRemapEnabled,
@@ -4621,10 +5194,15 @@ export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalM
 export const __test__deriveTurnConstraintsFromTranscript = deriveTurnConstraintsFromTranscript;
 export const __test__resolveEffectiveOverlaySignals = resolveEffectiveOverlaySignals;
 export const __test__shouldHoldWitnessOnContinuation = shouldHoldWitnessOnContinuation;
+export const __test__evaluateTacticEligibility = evaluateTacticEligibility;
+export const __test__applyCooldownPolicy = applyCooldownPolicy;
 export const __test__buildBouncerAuthorityTraceFields = buildBouncerAuthorityTraceFields;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
 };
 export const __test__resetUserStateCache = () => {
   userStateCache.clear();
+};
+export const __test__resetOverlayStateCache = () => {
+  overlayStateCache.clear();
 };
