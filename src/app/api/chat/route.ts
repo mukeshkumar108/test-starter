@@ -41,6 +41,7 @@ import {
 import { ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
 import * as synapseClient from "@/lib/services/synapseClient";
 import type { SynapseStartBriefResponse } from "@/lib/services/synapseClient";
+import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
 
 export const runtime = "nodejs";
 
@@ -2112,7 +2113,7 @@ async function runLibrarianReflex(params: {
 } | null> {
   const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
     params;
-  if (!env.OPENROUTER_API_KEY || !env.SYNAPSE_BASE_URL || !env.SYNAPSE_TENANT_ID) {
+  if (!env.OPENROUTER_API_KEY || !env.SYNAPSE_BASE_URL) {
     return null;
   }
 
@@ -2454,7 +2455,7 @@ async function runLibrarianReflex(params: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        tenantId: env.SYNAPSE_TENANT_ID,
+        tenantId: SYNAPSE_CANONICAL_TENANT_ID,
         userId,
         query: sanitized,
         limit: 10,
@@ -3447,6 +3448,88 @@ function shouldInjectTurn2Handover(params: {
   return params.firstUserMsgLowSignal;
 }
 
+function toOrdinal(value: number) {
+  const abs = Math.abs(value);
+  const mod100 = abs % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${value}th`;
+  const mod10 = abs % 10;
+  if (mod10 === 1) return `${value}st`;
+  if (mod10 === 2) return `${value}nd`;
+  if (mod10 === 3) return `${value}rd`;
+  return `${value}th`;
+}
+
+function formatStartbriefClock(
+  localTime: string | null | undefined,
+  fallbackTimeOfDay: string | null | undefined
+) {
+  const raw = typeof localTime === "string" ? localTime.trim() : "";
+  const match = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (match) {
+    const hour24 = Number.parseInt(match[1], 10);
+    if (Number.isFinite(hour24) && hour24 >= 0 && hour24 <= 23) {
+      const suffix = hour24 >= 12 ? "pm" : "am";
+      const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+      return `${hour12}${suffix}`;
+    }
+  }
+  const fallback =
+    typeof fallbackTimeOfDay === "string" ? fallbackTimeOfDay.trim().toLowerCase() : "";
+  return fallback || "this time";
+}
+
+function formatStartbriefGapHuman(gapMinutes: number | null | undefined) {
+  if (typeof gapMinutes !== "number" || !Number.isFinite(gapMinutes) || gapMinutes < 0) {
+    return "an unknown amount of time";
+  }
+  if (gapMinutes < 60) {
+    const minutes = Math.max(1, Math.round(gapMinutes));
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  if (gapMinutes < 24 * 60) {
+    const hours = Math.max(1, Math.round(gapMinutes / 60));
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  const days = Math.max(1, Math.round(gapMinutes / (24 * 60)));
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+function formatStartbriefSessionOrdinal(
+  sessionsToday: number | null | undefined,
+  firstSessionToday: boolean | null | undefined
+) {
+  if (typeof sessionsToday === "number" && Number.isFinite(sessionsToday) && sessionsToday >= 1) {
+    return toOrdinal(Math.round(sessionsToday));
+  }
+  if (firstSessionToday === true) return "1st";
+  return "current";
+}
+
+function buildStartbriefTimeAnchorLine(params: {
+  packet: SynapseStartBriefResponse;
+  now: Date;
+  timeZone: string;
+}) {
+  const timeContext = params.packet.time_context ?? null;
+  const clock = formatStartbriefClock(timeContext?.local_time, timeContext?.time_of_day);
+  const dateFormatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: params.timeZone,
+    weekday: "long",
+    day: "2-digit",
+    month: "short",
+  });
+  const dateParts = dateFormatter.formatToParts(params.now);
+  const weekday = dateParts.find((part) => part.type === "weekday")?.value ?? "Unknown day";
+  const day = dateParts.find((part) => part.type === "day")?.value ?? "00";
+  const month = dateParts.find((part) => part.type === "month")?.value ?? "Unknown";
+  const gapHuman = formatStartbriefGapHuman(timeContext?.gap_minutes ?? null);
+  const sessionOrdinal = formatStartbriefSessionOrdinal(
+    timeContext?.sessions_today ?? null,
+    timeContext?.first_session_today ?? null
+  );
+  return `It is ${clock} on ${weekday}, ${day} ${month}. Your last conversation was ${gapHuman} ago. This is the ${sessionOrdinal} conversation today.`;
+}
+
 function shouldAllowHandoverReinjection(params: {
   gateAction: "memory_query" | "none";
   gateConfidence: number;
@@ -3469,6 +3552,8 @@ function buildStartbriefInjection(params: {
   userTurnsSeen: number;
   firstUserMsgLowSignal: boolean;
   allowSemanticReinjection: boolean;
+  now?: Date;
+  timeZone?: string;
 }) {
   const packet = params.packet;
   if (!packet) {
@@ -3491,6 +3576,12 @@ function buildStartbriefInjection(params: {
       reinjectionUsed: false,
     };
   }
+  const timeAnchorLine = buildStartbriefTimeAnchorLine({
+    packet,
+    now: params.now ?? new Date(),
+    timeZone: params.timeZone ?? "Europe/Zagreb",
+  });
+  const anchoredHandover = `${timeAnchorLine}\n\n${handover}`;
   const bridgeText =
     packet.resume?.use_bridge && typeof packet.resume.bridge_text === "string"
       ? packet.resume.bridge_text.trim()
@@ -3499,7 +3590,7 @@ function buildStartbriefInjection(params: {
   if (params.userTurnsSeen === 0) {
     return {
       bridgeBlock: bridgeText || null,
-      handoverBlock: handover,
+      handoverBlock: anchoredHandover,
       bridgeInjected: Boolean(bridgeText),
       handoverInjected: true,
       reinjectionUsed: false,
@@ -3507,7 +3598,7 @@ function buildStartbriefInjection(params: {
   }
   return {
     bridgeBlock: null as string | null,
-    handoverBlock: handover,
+    handoverBlock: anchoredHandover,
     bridgeInjected: false,
     handoverInjected: true,
     reinjectionUsed: false,
@@ -4261,6 +4352,8 @@ export async function POST(request: NextRequest) {
       userTurnsSeen: startbriefV2UserTurnsSeen,
       firstUserMsgLowSignal: startbriefV2FirstUserLowSignal,
       allowSemanticReinjection,
+      now,
+      timeZone,
     });
     const bridgeBlock = startbriefInjection.bridgeBlock;
     const handoverBlock = startbriefInjection.handoverBlock;
@@ -4301,13 +4394,13 @@ export async function POST(request: NextRequest) {
         const loopsCacheFresh =
           Number.isFinite(loopsFetchedAtMs) && nowMs - loopsFetchedAtMs <= 10 * 60 * 1000;
         let loopTexts = loopsCacheFresh ? loopsCache.items ?? [] : [];
-        if (!loopsCacheFresh && env.SYNAPSE_BASE_URL && env.SYNAPSE_TENANT_ID) {
+        if (!loopsCacheFresh && env.SYNAPSE_BASE_URL) {
           const loopsResponse = await synapseClient.memoryLoops<{
             tenantId: string;
             userId: string;
             limit: number;
           }, { items?: Array<{ text?: string | null }> | null }>({
-            tenantId: env.SYNAPSE_TENANT_ID,
+            tenantId: SYNAPSE_CANONICAL_TENANT_ID,
             userId: user.id,
             limit: 2,
           });
@@ -5319,7 +5412,7 @@ function fireAndForgetSynapseIngest(params: {
 }) {
   const { requestId, userId, personaId, sessionId, transcript, assistantText } = params;
   const basePayload = {
-    tenantId: env.SYNAPSE_TENANT_ID,
+    tenantId: SYNAPSE_CANONICAL_TENANT_ID,
     userId,
     personaId,
     sessionId,

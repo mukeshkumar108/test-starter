@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
 import { summarizeRollingSessionFromMessages, summarizeSession } from "@/lib/services/session/sessionSummarizer";
 import * as synapseClient from "@/lib/services/synapseClient";
+import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
 
 const DEFAULT_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
 const ROLLING_SUMMARY_TURN_INTERVAL = 4;
@@ -205,7 +206,7 @@ async function processPendingSynapseSessionIngestRetries(params: {
   });
 
   const result = await getSynapseSessionIngestWithMeta()({
-    tenantId: env.SYNAPSE_TENANT_ID,
+    tenantId: SYNAPSE_CANONICAL_TENANT_ID,
     userId: params.userId,
     personaId: params.personaId,
     sessionId: due.sessionId,
@@ -388,7 +389,7 @@ async function fireAndForgetSynapseSessionIngest(session: {
 
     const start = Date.now();
     void getSynapseSessionIngestWithMeta()({
-      tenantId: env.SYNAPSE_TENANT_ID,
+      tenantId: SYNAPSE_CANONICAL_TENANT_ID,
       userId: session.userId,
       personaId: session.personaId,
       sessionId: session.id,
@@ -558,6 +559,140 @@ export async function closeStaleSessionIfAny(
   }
 
   return updated;
+}
+
+type CloseInactiveSessionsBatchParams = {
+  now?: Date;
+  inactivityMs?: number;
+  limit?: number;
+  dryRun?: boolean;
+};
+
+type CloseInactiveSessionsBatchResult = {
+  cutoffIso: string;
+  scanned: number;
+  closed: number;
+  skippedRace: number;
+  sessions: Array<{
+    sessionId: string;
+    userId: string;
+    personaId: string;
+    lastActivityAt: string;
+    endedAt: string;
+  }>;
+};
+
+const DEFAULT_INACTIVE_CLOSE_MS = 10 * 60 * 1000;
+const DEFAULT_INACTIVE_CLOSE_LIMIT = 100;
+const MAX_INACTIVE_CLOSE_LIMIT = 500;
+
+export async function closeInactiveSessionsBatch(
+  params: CloseInactiveSessionsBatchParams = {}
+): Promise<CloseInactiveSessionsBatchResult> {
+  const now = params.now ?? new Date();
+  const inactivityMs =
+    typeof params.inactivityMs === "number" &&
+    Number.isFinite(params.inactivityMs) &&
+    params.inactivityMs > 0
+      ? params.inactivityMs
+      : DEFAULT_INACTIVE_CLOSE_MS;
+  const requestedLimit =
+    typeof params.limit === "number" &&
+    Number.isFinite(params.limit) &&
+    params.limit > 0
+      ? Math.floor(params.limit)
+      : DEFAULT_INACTIVE_CLOSE_LIMIT;
+  const limit = Math.min(MAX_INACTIVE_CLOSE_LIMIT, requestedLimit);
+  const cutoff = new Date(now.getTime() - inactivityMs);
+  const dryRun = params.dryRun === true;
+
+  const candidates = await prisma.session.findMany({
+    where: {
+      endedAt: null,
+      lastActivityAt: {
+        lte: cutoff,
+      },
+    },
+    orderBy: { lastActivityAt: "asc" },
+    take: limit,
+    select: {
+      id: true,
+      userId: true,
+      personaId: true,
+      startedAt: true,
+      lastActivityAt: true,
+    },
+  });
+
+  let closed = 0;
+  let skippedRace = 0;
+  const sessions: CloseInactiveSessionsBatchResult["sessions"] = [];
+
+  for (const candidate of candidates) {
+    const endedAt = candidate.lastActivityAt;
+    if (dryRun) {
+      sessions.push({
+        sessionId: candidate.id,
+        userId: candidate.userId,
+        personaId: candidate.personaId,
+        lastActivityAt: candidate.lastActivityAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+      });
+      continue;
+    }
+
+    const update = await prisma.session.updateMany({
+      where: {
+        id: candidate.id,
+        endedAt: null,
+      },
+      data: {
+        endedAt,
+      },
+    });
+
+    if (update.count === 0) {
+      skippedRace += 1;
+      continue;
+    }
+
+    closed += 1;
+    sessions.push({
+      sessionId: candidate.id,
+      userId: candidate.userId,
+      personaId: candidate.personaId,
+      lastActivityAt: candidate.lastActivityAt.toISOString(),
+      endedAt: endedAt.toISOString(),
+    });
+
+    void fireAndForgetSynapseSessionIngest({
+      id: candidate.id,
+      userId: candidate.userId,
+      personaId: candidate.personaId,
+      startedAt: candidate.startedAt,
+      endedAt,
+    });
+
+    if (isSummaryEnabled()) {
+      void createSessionSummary({
+        id: candidate.id,
+        userId: candidate.userId,
+        personaId: candidate.personaId,
+        startedAt: candidate.startedAt,
+        lastActivityAt: candidate.lastActivityAt,
+      }).catch((error) => {
+        console.warn("[session.summary] failed", error);
+      });
+    }
+  }
+
+  return {
+    cutoffIso: cutoff.toISOString(),
+    scanned: candidates.length,
+    closed,
+    skippedRace,
+    sessions,
+  };
 }
 
 export async function closeSessionOnExplicitEnd(

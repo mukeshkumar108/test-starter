@@ -17,6 +17,8 @@
 - `buildContext(user.id, personaId, sttResult.transcript)` → `src/lib/services/memory/contextBuilder.ts`
 - On session start, calls Synapse `/session/startbrief` (cached per session)
 - Fallback: Synapse `/session/brief`
+- Synapse tenant uses one canonical runtime value (`SYNAPSE_CANONICAL_TENANT_ID`);
+  legacy `sophie-prod` is remapped to `default`.
 
 **LLM prompt assembly (exact order)**
 Source: `src/app/api/chat/route.ts` (messages array)
@@ -24,7 +26,7 @@ Source: `src/app/api/chat/route.ts` (messages array)
 2. **CONVERSATION_POSTURE** (neutral labels; momentum guard appended when relevant)
 3. **OVERLAY** (optional)
 4. **bridgeBlock** (optional; turn-1 when startbrief `resume.use_bridge=true`)
-5. **handoverBlock** (optional; startbrief-v2 policy, verbatim)
+5. **handoverBlock** (optional; startbrief-v2 policy, includes fixed time-anchor line + handover narrative)
 6. **opsSnippetBlock** (optional; deterministic, one sentence)
 7. **SUPPLEMENTAL_CONTEXT** (Recall Sheet, optional; top 3 facts/entities)
 8. **Recent messages** (last 8)
@@ -33,6 +35,8 @@ Source: `src/app/api/chat/route.ts` (messages array)
 **Write path**
 - Store user + assistant messages in Prisma
 - If a session closes, fire‑and‑forget Synapse `/session/ingest`
+- Background safety net: `/api/admin/run-session-sweeper` (Vercel cron every 5 minutes)
+  closes stale open sessions and triggers ingest.
 
 ---
 

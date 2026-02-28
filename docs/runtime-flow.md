@@ -24,6 +24,8 @@ Two paths run in parallel:
    - On session start: Synapse `/user/model` (cached per session; stored as deferred profile context)
    - On session start: Synapse `/analysis/daily` (best-effort; used only for high-confidence steering)
    - Fallback: Synapse `/session/brief` if startbrief unavailable
+   - Synapse tenant is canonicalized from a single runtime constant (`SYNAPSE_CANONICAL_TENANT_ID`);
+     legacy `sophie-prod` is remapped to `default`.
    - Startbrief payload is normalized defensively:
      - `items` coerced to array
      - malformed item rows dropped
@@ -42,7 +44,9 @@ Two paths run in parallel:
   - Overlay loop inputs are sourced from Synapse `/memory/loops` on session start (fallback to startbrief loop items)
   - Loop continuity is user-scoped (not persona-partitioned)
   - startbrief-v2 injection policy:
-    - Turn 1: bridge (only when `resume.use_bridge=true`) + handover (verbatim)
+    - Turn 1: bridge (only when `resume.use_bridge=true`) + handover
+      (prepended with a fixed structured time anchor line derived from `time_context`,
+      followed by handover narrative)
     - Turn 2: handover only if depth is `yesterday|multi_day`, or `gap_minutes>=120`, or first user message is low-signal
     - Turn 3+: no handover/bridge, except one semantic reinjection path
   - Ops snippet is suppressed when SUPPLEMENTAL_CONTEXT exists (mutual exclusion to prevent duplication).
@@ -82,6 +86,11 @@ Two paths run in parallel:
   - Non-OK/exception writes durable retry state in `sessionState.state.synapseSessionIngestRetry`
   - Retry runs non-blocking on next `ensureActiveSession` pass
   - Retry attempts are capped at 3 with `lastError` and `lastAttemptAt`
+- **Session sweeper cron** (`/api/admin/run-session-sweeper`)
+  - Runs every 5 minutes in production (Vercel cron).
+  - Closes sessions where `endedAt IS NULL` and inactivity exceeds configured threshold (default 10m).
+  - Sets `endedAt = lastActivityAt` and triggers session ingest.
+  - Auth accepts either `x-admin-secret` or `x-vercel-cron: 1`.
 
 Optional legacy path (feature‑flagged):
 - Shadow Judge + local Todo/Memory extraction

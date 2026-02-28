@@ -12,6 +12,7 @@ import type {
   SynapseStartBriefResponse,
   SynapseUserModelResponse,
 } from "@/lib/services/synapseClient";
+import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
 
@@ -1327,7 +1328,7 @@ async function maybeFetchOverlayLoops(params: {
       userId: string;
       limit: number;
     }, SynapseMemoryLoopsResponse>({
-      tenantId: env.SYNAPSE_TENANT_ID,
+      tenantId: SYNAPSE_CANONICAL_TENANT_ID,
       userId: params.userId,
       limit: 5,
     });
@@ -1391,7 +1392,7 @@ export async function buildContextFromSynapse(
         sessionId: string;
         now: string;
       }, SynapseSignalsPackResponse>({
-        tenantId: env.SYNAPSE_TENANT_ID,
+        tenantId: SYNAPSE_CANONICAL_TENANT_ID,
         userId,
         sessionId,
         now: new Date().toISOString(),
@@ -1495,7 +1496,7 @@ export async function buildContextFromSynapse(
       timezone?: string;
       now: string;
     }, SynapseStartBriefResponse>({
-      tenantId: env.SYNAPSE_TENANT_ID,
+      tenantId: SYNAPSE_CANONICAL_TENANT_ID,
       userId,
       sessionId,
       timezone: "Europe/Zagreb",
@@ -1508,14 +1509,14 @@ export async function buildContextFromSynapse(
           tenantId?: string;
           userId: string;
         }, SynapseUserModelResponse>({
-          tenantId: env.SYNAPSE_TENANT_ID,
+          tenantId: SYNAPSE_CANONICAL_TENANT_ID,
           userId,
         }).catch(() => null),
         getSynapseDailyAnalysis()<{
           tenantId?: string;
           userId: string;
         }, SynapseDailyAnalysisResponse>({
-          tenantId: env.SYNAPSE_TENANT_ID,
+          tenantId: SYNAPSE_CANONICAL_TENANT_ID,
           userId,
         }).catch(() => null),
       ]);
@@ -1766,7 +1767,7 @@ export async function buildContextFromSynapse(
     now: string;
     query: string | null;
   }, SynapseBriefResponse>({
-    tenantId: env.SYNAPSE_TENANT_ID,
+    tenantId: SYNAPSE_CANONICAL_TENANT_ID,
     userId,
     personaId,
     sessionId,

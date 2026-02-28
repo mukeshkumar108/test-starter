@@ -585,13 +585,25 @@ async function main() {
         handover_text: verbatim,
         handover_depth: "today",
         resume: { use_bridge: false, bridge_text: null },
-        time_context: { gap_minutes: 15 },
+        time_context: {
+          local_time: "13:00",
+          time_of_day: "AFTERNOON",
+          gap_minutes: 15,
+          sessions_today: 1,
+          first_session_today: true,
+        },
       },
       userTurnsSeen: 0,
       firstUserMsgLowSignal: false,
       allowSemanticReinjection: false,
+      now: new Date("2026-02-28T13:00:00.000Z"),
+      timeZone: "Europe/Zagreb",
     });
-    expect(injection.handoverBlock ?? "").toBe(verbatim);
+    const handoverBlock = injection.handoverBlock ?? "";
+    expect(handoverBlock.includes(verbatim)).toBe(true);
+    expect(handoverBlock.startsWith("It is 1pm on Saturday, 28 Feb.")).toBe(true);
+    expect(handoverBlock.includes("Your last conversation was 15 minutes ago.")).toBe(true);
+    expect(handoverBlock.includes("This is the 1st conversation today.")).toBe(true);
   });
 
   await runTest("bridge only on turn1 when use_bridge is true", () => {
@@ -636,8 +648,8 @@ async function main() {
       firstUserMsgLowSignal: false,
       allowSemanticReinjection: false,
     });
-    expect(turn2.handoverBlock).toBe("handover");
-    expect(turn3.handoverBlock).toBe("handover");
+    expect((turn2.handoverBlock ?? "").includes("handover")).toBe(true);
+    expect((turn3.handoverBlock ?? "").includes("handover")).toBe(true);
   });
 
   await runTest("supplemental context suppresses ops snippet", () => {
