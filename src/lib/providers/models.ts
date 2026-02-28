@@ -23,8 +23,8 @@ export const MODELS = {
 } as const;
 
 export const MODEL_TIERS = {
-  T1: "x-ai/grok-4.1-fast",
-  T2: "google/gemini-2.5-flash",
+  T1: "allenai/olmo-3.1-32b-instruct",
+  T2: "x-ai/grok-4.1-fast",
   T3: "anthropic/claude-sonnet-4.6",
 } as const;
 

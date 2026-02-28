@@ -8,6 +8,14 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 type FixtureScenario = {
   id: string;
   name: string;
+  narrative?: string | null;
+  handover?: string | null;
+  signalPack?: {
+    relationships?: string | null;
+    state?: string | null;
+    trajectory?: string | null;
+  } | null;
+  stanceOverlay?: "witness" | "excavator" | "none" | null;
   situationalContext: string;
   supplementalContext: string | null;
   sessionFacts: string | null;
@@ -52,6 +60,15 @@ function getPersonaPrompt(): Promise<string> {
     promptPath: "/prompts/persona-creative.md",
     rootDir: process.cwd(),
   });
+}
+
+function buildSignalPackBlock(signalPack?: FixtureScenario["signalPack"]) {
+  const lines: string[] = [];
+  if (signalPack?.relationships?.trim()) lines.push(`[relationships] ${signalPack.relationships.trim()}`);
+  if (signalPack?.state?.trim()) lines.push(`[state] ${signalPack.state.trim()}`);
+  if (signalPack?.trajectory?.trim()) lines.push(`[trajectory] ${signalPack.trajectory.trim()}`);
+  if (lines.length === 0) return null;
+  return `Signal Pack (private):\n${lines.map((line) => `- ${line}`).join("\n")}`;
 }
 
 async function callOpenRouter(
@@ -118,6 +135,13 @@ async function run() {
             ? [...history, { role: "user" as const, content: turn.content }]
             : __test__buildChatMessages({
                 persona,
+                userNarrativeBlock: scenario.narrative ?? null,
+                handoverBlock: scenario.handover ?? null,
+                signalPackBlock: buildSignalPackBlock(scenario.signalPack),
+                stanceOverlayBlock:
+                  scenario.stanceOverlay && scenario.stanceOverlay !== "none"
+                    ? `[STANCE_OVERLAY]\n[STANCE_OVERLAY: ${scenario.stanceOverlay}]`
+                    : null,
                 situationalContext: scenario.situationalContext,
                 supplementalContext: scenario.supplementalContext,
                 rollingSummary: scenario.sessionFacts ?? "",
@@ -138,6 +162,13 @@ async function run() {
           ? [...history]
           : __test__buildChatMessages({
               persona,
+              userNarrativeBlock: scenario.narrative ?? null,
+              handoverBlock: scenario.handover ?? null,
+              signalPackBlock: buildSignalPackBlock(scenario.signalPack),
+              stanceOverlayBlock:
+                scenario.stanceOverlay && scenario.stanceOverlay !== "none"
+                  ? `[STANCE_OVERLAY]\n[STANCE_OVERLAY: ${scenario.stanceOverlay}]`
+                  : null,
               situationalContext: scenario.situationalContext,
               supplementalContext: scenario.supplementalContext,
               rollingSummary: scenario.sessionFacts ?? "",

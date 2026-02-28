@@ -40,8 +40,8 @@ The prompt is intentionally small and ordered.
 - Chat model routing is tiered per turn (after stance + user-context moment signals):
   - Safety override (unchanged): `risk_level in {HIGH, CRISIS}` -> `MODELS.CHAT.SAFETY`.
   - Non-safety tier mapping:
-    - `T1` -> `bytedance-seed/seed-1.6-flash`
-    - `T2` -> `google/gemini-2.5-flash`
+    - `T1` -> `allenai/olmo-3.1-32b-instruct`
+    - `T2` -> `x-ai/grok-4.1-fast`
     - `T3` -> `anthropic/claude-sonnet-4.6`
   - Precedence: `risk > stance > moment > intent > depth > direct/urgent > default`.
   - Depth routing:

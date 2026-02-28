@@ -55,8 +55,8 @@ Two paths run in parallel:
    - Non-safety turns use tier router (`getTurnTierForSignals` -> `getChatModelForTurn`).
    - Tier precedence: `risk > stance > moment > intent > depth > direct/urgent > default`.
    - Tier models:
-     - `T1`: `bytedance-seed/seed-1.6-flash`
-     - `T2`: `google/gemini-2.5-flash`
+     - `T1`: `allenai/olmo-3.1-32b-instruct`
+     - `T2`: `x-ai/grok-4.1-fast`
      - `T3`: `anthropic/claude-sonnet-4.6`
    - Depth routing:
      - If posture is `RELATIONSHIP|RECOVERY|REFLECTION`, route to `T2` with reason `companion_depth`.
