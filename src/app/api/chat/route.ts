@@ -54,7 +54,7 @@ const DEFAULT_LIBRARIAN_TIMEOUT_MS = 5000;
 const MIN_OPTIONAL_LIBRARIAN_STEP_MS = 300;
 const DEFAULT_POSTURE_RESET_GAP_MINUTES = 180;
 const DEFAULT_USER_STATE_RESET_GAP_MINUTES = 180;
-const CONTEXT_GOVERNOR_MAX_CHARS = 1000;
+const CONTEXT_GOVERNOR_MAX_CHARS = 999999;
 
 function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");
@@ -2978,16 +2978,17 @@ function buildContextGovernorSelection(params: {
   const seenNormalized = new Set<string>();
   let usedChars = 0;
   for (const candidate of sorted) {
-    if (candidate.score < 40) {
+    const isMandatory = candidate.source === "handover";
+    if (!isMandatory && candidate.score < 40) {
       droppedByReason.low_relevance += 1;
       continue;
     }
-    if (seenNormalized.has(candidate.normalized)) {
+    if (!isMandatory && seenNormalized.has(candidate.normalized)) {
       droppedByReason.redundant += 1;
       continue;
     }
     const projected = usedChars + candidate.charLen;
-    if (projected > CONTEXT_GOVERNOR_MAX_CHARS) {
+    if (!isMandatory && projected > CONTEXT_GOVERNOR_MAX_CHARS) {
       droppedByReason.budget += 1;
       continue;
     }

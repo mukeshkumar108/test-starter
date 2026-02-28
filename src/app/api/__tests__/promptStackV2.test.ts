@@ -239,7 +239,7 @@ async function main() {
     expect(governed.signalPackBlock ?? "").notToContain("[open_loops]");
   });
 
-  await runTest("context governor enforces context budget", () => {
+  await runTest("context governor keeps handover and effectively disables budget trimming", () => {
     const lineA = `A-${"x".repeat(250)}`;
     const lineB = `B-${"x".repeat(250)}`;
     const lineC = `C-${"x".repeat(250)}`;
@@ -263,8 +263,10 @@ async function main() {
       (governed.bridgeBlock?.length ?? 0) +
       (governed.handoverBlock?.length ?? 0) +
       (governed.opsSnippetBlock?.length ?? 0);
-    expect(totalChars <= 1200).toBe(true);
-    expect(governed.runtime.dropped_by_reason.budget > 0).toBe(true);
+    expect(governed.handoverBlock ?? "").toBe(lineD);
+    expect(totalChars > 1200).toBe(true);
+    expect(governed.runtime.budget_chars).toBe(999999);
+    expect(governed.runtime.dropped_by_reason.budget).toBe(0);
   });
 
   await runTest("magic moment is prioritized in selected user context candidates", () => {
