@@ -1562,7 +1562,7 @@ const TRIAGE_PRIMARY_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const ROUTER_PRIMARY_MODEL = "openai/gpt-oss-20b";
 const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const TRIAGE_MAX_TIMEOUT_MS = 1500;
-const TRIAGE_BODY_READ_TIMEOUT_MS = 1000;
+const TRIAGE_BODY_READ_TIMEOUT_MS = 2000;
 const ROUTER_MAX_TIMEOUT_MS = 550;
 const ROUTER_MIN_BUDGET_MS = 350;
 
