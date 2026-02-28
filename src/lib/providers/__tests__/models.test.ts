@@ -41,7 +41,7 @@ async function main() {
       personaId: "creative",
       gate: { risk_level: "HIGH" },
     });
-    expect(model).toBe(MODELS.CHAT.SAFETY);
+    expect(model).toBe(MODEL_TIERS.T1);
   });
 
   await runTest("risk CRISIS routes to safety model", () => {
@@ -49,7 +49,7 @@ async function main() {
       personaId: "mentor",
       gate: { risk_level: "CRISIS" },
     });
-    expect(model).toBe(MODELS.CHAT.SAFETY);
+    expect(model).toBe(MODEL_TIERS.T1);
   });
 
   await runTest("risk LOW routes to persona model", () => {
@@ -189,7 +189,7 @@ async function main() {
       moment: "win",
       intent: "output_task",
     });
-    expect(safetyModel).toBe(MODELS.CHAT.SAFETY);
+    expect(safetyModel).toBe(MODEL_TIERS.T1);
     expect(tierDecision.tier).toBe("T3");
   });
 

@@ -31,7 +31,6 @@ import { ensureUserByClerkId } from "@/lib/user";
 import { env } from "@/env";
 import {
   applyT3BurstRouting,
-  getChatModelForGate,
   getChatModelForTurn,
   getTurnTierForSignals,
   type TierBurstState,
@@ -2628,6 +2627,7 @@ function buildChatMessages(params: {
   persona: string;
   momentumGuardBlock?: string | null;
   styleGuardBlock?: string | null;
+  crisisResponseTemplateBlock?: string | null;
   userContextBlock?: string | null;
   signalPackBlock?: string | null;
   stanceOverlayBlock?: string | null;
@@ -2662,6 +2662,9 @@ function buildChatMessages(params: {
 
   return [
     { role: "system" as const, content: params.persona },
+    ...(params.crisisResponseTemplateBlock
+      ? [{ role: "system" as const, content: params.crisisResponseTemplateBlock }]
+      : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
     ...(params.signalPackBlock ? [{ role: "system" as const, content: params.signalPackBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
@@ -3957,6 +3960,19 @@ function buildStyleGuardBlock(params: {
   return lines.join("\n");
 }
 
+function buildCrisisResponseTemplateBlock(params: {
+  riskLevel: RiskLevel;
+}) {
+  if (params.riskLevel !== "HIGH" && params.riskLevel !== "CRISIS") return null;
+  return [
+    "[CRISIS_RESPONSE_TEMPLATE]",
+    "- Acknowledge presence first in grounded language.",
+    "- Do not problem-solve or give tactical plans in this turn.",
+    "- Keep the response short, steady, and non-judgmental.",
+    "- If genuine danger signals are present (self-harm intent, plan, means, or immediate danger), explicitly encourage immediate local emergency support and reaching a trusted person now.",
+  ].join("\n");
+}
+
 function sanitizeHandoverText(input: string) {
   const normalized = normalizeWhitespace(input);
   if (!normalized) return "";
@@ -4927,6 +4943,7 @@ export async function POST(request: NextRequest) {
       endearmentCooldownTurns,
       cooldownActive: cooldownTurnsRemaining > 0,
     });
+    const crisisResponseTemplateBlock = buildCrisisResponseTemplateBlock({ riskLevel });
     endearmentCooldownTurns = nextEndearmentCooldownTurns(endearmentCooldownTurns, stanceOverlayType);
 
     const deferredProfileLines = buildDeferredProfileContextLines({
@@ -4983,21 +5000,18 @@ export async function POST(request: NextRequest) {
       isDirectRequest: effectiveSignals.isDirectRequest,
       isUrgent: effectiveSignals.isUrgent,
     });
-    const safetyModel = getChatModelForGate({
-      personaId: persona.slug,
-      gate: { risk_level: riskLevel },
-    });
     const safetyModelOverride = riskLevel === "HIGH" || riskLevel === "CRISIS";
     const burstRemainingBefore = Math.max(0, tierBurst.remaining ?? 0);
     let burstEventId: string | null = null;
     let burstWasStarted = false;
     let burstRemainingAfter = burstRemainingBefore;
     let tierForModel: TurnTier = tierDecision.tier;
-    let tierSelected: "SAFETY" | TurnTier = tierDecision.tier;
+    let tierSelected: TurnTier = tierDecision.tier;
     let routingReason = tierDecision.reason;
 
     if (safetyModelOverride) {
-      tierSelected = "SAFETY";
+      tierForModel = "T1";
+      tierSelected = "T1";
       routingReason = "risk_high_or_crisis";
     } else {
       const burstDecision = applyT3BurstRouting({
@@ -5019,9 +5033,7 @@ export async function POST(request: NextRequest) {
       burstRemainingAfter = burstDecision.burstRemainingAfter;
     }
 
-    const model = safetyModelOverride
-      ? safetyModel
-      : getChatModelForTurn({ tier: tierForModel });
+    const model = getChatModelForTurn({ tier: tierForModel });
 
     await writeOverlayState(user.id, personaId, {
       overlayUsed,
@@ -5118,6 +5130,7 @@ export async function POST(request: NextRequest) {
         localHour: zoned.hour,
       }),
       styleGuardBlock,
+      crisisResponseTemplateBlock,
       userContextBlock: governedContext.userContextBlock,
       signalPackBlock: governedContext.signalPackBlock,
       stanceOverlayBlock,
@@ -5194,6 +5207,7 @@ export async function POST(request: NextRequest) {
 
     const systemBlockOrder = [
       "persona",
+      ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
       ...(governedContext.userContextBlock ? ["user_context"] : []),
       ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
       ...(stanceOverlayBlock ? ["stance_overlay"] : []),

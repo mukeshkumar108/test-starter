@@ -9,7 +9,6 @@ export const MODELS = {
     COACH: "bytedance-seed/seed-1.6-flash",
     CREATIVE: "bytedance-seed/seed-1.6",
     ANALYTICAL: "bytedance-seed/seed-1.6-flash",
-    SAFETY: "bytedance-seed/seed-1.6",
   },
   
   // Cheap model for shadow processing/judging
@@ -63,7 +62,7 @@ export function getChatModelForGate(params: {
 }): ChatModel {
   const riskLevel = params.gate?.risk_level;
   if (riskLevel === "HIGH" || riskLevel === "CRISIS") {
-    return MODELS.CHAT.SAFETY;
+    return MODEL_TIERS.T1;
   }
   return getChatModelForPersona(params.personaId);
 }
