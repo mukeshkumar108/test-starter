@@ -761,6 +761,7 @@ function buildChatTrace(params: {
     userTurnsSeen: number;
     handover_injected: boolean;
     bridge_injected: boolean;
+    user_narrative_injected: boolean;
     ops_injected: boolean;
     ops_source: "startbrief_ops" | "loops" | "query" | null;
     startbrief_fetch: "hit" | "miss";
@@ -2633,6 +2634,7 @@ function buildChatMessages(params: {
   tacticOverlayBlock?: string | null;
   overlayBlock?: string | null;
   bridgeBlock?: string | null;
+  userNarrativeBlock?: string | null;
   handoverBlock?: string | null;
   opsSnippetBlock?: string | null;
   supplementalContext?: string | null;
@@ -2666,6 +2668,9 @@ function buildChatMessages(params: {
     ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
     ...(params.overlayBlock ? [{ role: "system" as const, content: params.overlayBlock }] : []),
     ...(params.bridgeBlock ? [{ role: "system" as const, content: params.bridgeBlock }] : []),
+    ...(params.userNarrativeBlock
+      ? [{ role: "system" as const, content: params.userNarrativeBlock }]
+      : []),
     ...(params.handoverBlock ? [{ role: "system" as const, content: params.handoverBlock }] : []),
     ...(params.opsSnippetBlock ? [{ role: "system" as const, content: params.opsSnippetBlock }] : []),
     ...(params.supplementalContext
@@ -3593,29 +3598,36 @@ function buildStartbriefInjection(params: {
   if (!packet) {
     return {
       bridgeBlock: null as string | null,
+      userNarrativeBlock: null as string | null,
       handoverBlock: null as string | null,
       bridgeInjected: false,
+      userNarrativeInjected: false,
       handoverInjected: false,
       reinjectionUsed: false,
     };
   }
   const handover =
     typeof packet.handover_text === "string" ? sanitizeHandoverText(packet.handover_text) : "";
-  if (!handover) {
+  const userNarrative =
+    typeof packet.narrative === "string" ? packet.narrative.trim() : "";
+  if (!handover && !userNarrative) {
     return {
       bridgeBlock: null as string | null,
+      userNarrativeBlock: null as string | null,
       handoverBlock: null as string | null,
       bridgeInjected: false,
+      userNarrativeInjected: false,
       handoverInjected: false,
       reinjectionUsed: false,
     };
   }
-  const timeAnchorLine = buildStartbriefTimeAnchorLine({
-    packet,
-    now: params.now ?? new Date(),
-    timeZone: params.timeZone ?? "Europe/Zagreb",
-  });
-  const anchoredHandover = `${timeAnchorLine}\n\n${handover}`;
+  const anchoredHandover = handover
+    ? `${buildStartbriefTimeAnchorLine({
+        packet,
+        now: params.now ?? new Date(),
+        timeZone: params.timeZone ?? "Europe/Zagreb",
+      })}\n\n${handover}`
+    : null;
   const bridgeText =
     packet.resume?.use_bridge && typeof packet.resume.bridge_text === "string"
       ? packet.resume.bridge_text.trim()
@@ -3624,17 +3636,21 @@ function buildStartbriefInjection(params: {
   if (params.userTurnsSeen === 0) {
     return {
       bridgeBlock: bridgeText || null,
+      userNarrativeBlock: userNarrative || null,
       handoverBlock: anchoredHandover,
       bridgeInjected: Boolean(bridgeText),
-      handoverInjected: true,
+      userNarrativeInjected: Boolean(userNarrative),
+      handoverInjected: Boolean(anchoredHandover),
       reinjectionUsed: false,
     };
   }
   return {
     bridgeBlock: null as string | null,
+    userNarrativeBlock: userNarrative || null,
     handoverBlock: anchoredHandover,
     bridgeInjected: false,
-    handoverInjected: true,
+    userNarrativeInjected: Boolean(userNarrative),
+    handoverInjected: Boolean(anchoredHandover),
     reinjectionUsed: false,
   };
 }
@@ -4390,8 +4406,10 @@ export async function POST(request: NextRequest) {
       timeZone,
     });
     const bridgeBlock = startbriefInjection.bridgeBlock;
+    const userNarrativeBlock = startbriefInjection.userNarrativeBlock;
     const handoverBlock = startbriefInjection.handoverBlock;
     const bridgeInjected = startbriefInjection.bridgeInjected;
+    const userNarrativeInjected = startbriefInjection.userNarrativeInjected;
     const handoverInjected = startbriefInjection.handoverInjected;
     const reinjectionUsed = startbriefInjection.reinjectionUsed;
     if (reinjectionUsed) {
@@ -5104,6 +5122,7 @@ export async function POST(request: NextRequest) {
       stanceOverlayBlock,
       tacticOverlayBlock,
       bridgeBlock: governedContext.bridgeBlock,
+      userNarrativeBlock,
       handoverBlock: governedContext.handoverBlock,
       opsSnippetBlock: governedContext.opsSnippetBlock,
       supplementalContext,
@@ -5179,6 +5198,7 @@ export async function POST(request: NextRequest) {
       ...(stanceOverlayBlock ? ["stance_overlay"] : []),
       ...(tacticOverlayBlock ? ["overlay"] : []),
       ...(governedContext.bridgeBlock ? ["bridge"] : []),
+      ...(userNarrativeBlock ? ["user_narrative"] : []),
       ...(governedContext.handoverBlock ? ["handover"] : []),
       ...(governedContext.opsSnippetBlock ? ["ops"] : []),
       ...(supplementalContext ? ["supplemental"] : []),
@@ -5384,6 +5404,7 @@ export async function POST(request: NextRequest) {
         userTurnsSeen: startbriefV2UserTurnsSeen,
         handover_injected: handoverInjected,
         bridge_injected: bridgeInjected,
+        user_narrative_injected: userNarrativeInjected,
         ops_injected: opsInjected,
         ops_source: opsSource,
         startbrief_fetch: context.startbriefFetch === "hit" ? "hit" : "miss",

@@ -20,6 +20,7 @@ export type SynapseBriefResponse = {
 };
 
 export type SynapseStartBriefResponse = {
+  narrative?: string | null;
   handover_text?: string | null;
   handover_depth?: "continuation" | "today" | "yesterday" | "multi_day" | null;
   time_context?: {
@@ -235,6 +236,7 @@ function normalizeSynapseStartBriefResponse(
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
   return {
+    narrative: toNullableString(value.narrative),
     handover_text: toNullableString(value.handover_text),
     handover_depth:
       value.handover_depth === "continuation" ||

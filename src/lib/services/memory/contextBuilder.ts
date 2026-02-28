@@ -690,10 +690,12 @@ function isUsableStartBrief(startBrief: SynapseStartBriefResponse | null | undef
   if (!isWeakSummary) return true;
   const handoverText =
     typeof startBrief.handover_text === "string" ? startBrief.handover_text.trim() : "";
+  const narrativeText =
+    typeof startBrief.narrative === "string" ? startBrief.narrative.trim() : "";
   const items = Array.isArray(startBrief.items) ? startBrief.items : [];
   const resumeBridgeText =
     typeof startBrief.resume?.bridge_text === "string" ? startBrief.resume.bridge_text.trim() : "";
-  return !(!handoverText && items.length === 0 && !resumeBridgeText);
+  return !(!handoverText && !narrativeText && items.length === 0 && !resumeBridgeText);
 }
 
 function withStartBriefForSession(

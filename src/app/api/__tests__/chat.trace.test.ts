@@ -67,6 +67,7 @@ async function main() {
         userTurnsSeen: 1,
         handover_injected: true,
         bridge_injected: true,
+        user_narrative_injected: false,
         ops_injected: false,
         ops_source: null,
         startbrief_fetch: "miss",
