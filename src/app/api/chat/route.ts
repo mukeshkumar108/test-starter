@@ -1428,10 +1428,14 @@ async function callOpenRouterJsonDetailed(params: {
   prompt: string;
   model: string;
   timeoutMs: number;
+  bodyReadTimeoutMs?: number;
 }) {
-  const controller = new AbortController();
+  const headersController = new AbortController();
   const startedAt = Date.now();
-  const timeoutId = setTimeout(() => controller.abort(), params.timeoutMs);
+  let headersTimeoutId: ReturnType<typeof setTimeout> | null = setTimeout(
+    () => headersController.abort(),
+    params.timeoutMs
+  );
   try {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
@@ -1454,8 +1458,12 @@ async function callOpenRouterJsonDetailed(params: {
         temperature: 0,
         response_format: { type: "json_object" },
       }),
-      signal: controller.signal,
+      signal: headersController.signal,
     });
+    if (headersTimeoutId) {
+      clearTimeout(headersTimeoutId);
+      headersTimeoutId = null;
+    }
 
     if (!response.ok) {
       return {
@@ -1466,15 +1474,39 @@ async function callOpenRouterJsonDetailed(params: {
       };
     }
     let rawBody = "";
+    const bodyReadTimeoutMs = params.bodyReadTimeoutMs ?? params.timeoutMs;
+    const bodyReadController = new AbortController();
+    const bodyReadTimeoutId = setTimeout(() => bodyReadController.abort(), bodyReadTimeoutMs);
     try {
-      rawBody = await response.text();
-    } catch {
+      const bodyText = (await Promise.race([
+        response.text(),
+        new Promise<string>((_, reject) => {
+          bodyReadController.signal.addEventListener(
+            "abort",
+            () => reject(new Error("body_read_timeout")),
+            { once: true }
+          );
+        }),
+      ])) as string;
+      rawBody = bodyText;
+    } catch (error) {
+      if (error instanceof Error && error.message === "body_read_timeout") {
+        void response.body?.cancel().catch(() => undefined);
+        return {
+          result: null as Record<string, unknown> | null,
+          failureCause: "body_read_timeout",
+          latencyMs: Date.now() - startedAt,
+          rawContent: null as string | null,
+        };
+      }
       return {
         result: null as Record<string, unknown> | null,
         failureCause: "response_read_error",
         latencyMs: Date.now() - startedAt,
         rawContent: null as string | null,
       };
+    } finally {
+      clearTimeout(bodyReadTimeoutId);
     }
 
     let data: unknown = null;
@@ -1514,7 +1546,7 @@ async function callOpenRouterJsonDetailed(params: {
     }
   } catch (error) {
     const failureCause =
-      error instanceof Error && error.name === "AbortError" ? "timeout" : "fetch_error";
+      error instanceof Error && error.name === "AbortError" ? "connection_timeout" : "fetch_error";
     return {
       result: null as Record<string, unknown> | null,
       failureCause,
@@ -1522,14 +1554,15 @@ async function callOpenRouterJsonDetailed(params: {
       rawContent: null as string | null,
     };
   } finally {
-    clearTimeout(timeoutId);
+    if (headersTimeoutId) clearTimeout(headersTimeoutId);
   }
 }
 
 const TRIAGE_PRIMARY_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const ROUTER_PRIMARY_MODEL = "openai/gpt-oss-20b";
 const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
-const TRIAGE_MAX_TIMEOUT_MS = 400;
+const TRIAGE_MAX_TIMEOUT_MS = 1500;
+const TRIAGE_BODY_READ_TIMEOUT_MS = 1000;
 const ROUTER_MAX_TIMEOUT_MS = 550;
 const ROUTER_MIN_BUDGET_MS = 350;
 
@@ -1850,6 +1883,7 @@ ${transcript}`;
     prompt,
     model: TRIAGE_PRIMARY_MODEL,
     timeoutMs: triageTimeoutMs,
+    bodyReadTimeoutMs: TRIAGE_BODY_READ_TIMEOUT_MS,
   });
   let triageRawResult: Record<string, unknown> | null = call.result;
   if (!triageRawResult && call.rawContent) {
