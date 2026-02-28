@@ -197,7 +197,7 @@ async function testExplicitRecall() {
 
     expect(messages[0]?.content === "Persona", "Expected persona prompt to be first");
     const postureBlock = messages.find((msg) => msg.content.startsWith("[CONVERSATION_POSTURE]"));
-    expect(Boolean(postureBlock), "Expected posture block in system messages");
+    expect(!postureBlock, "Expected posture block to be omitted from system messages");
     assertNoBannedPhrases(messages);
 
     const supplementalBlock = messages.find((msg) =>
@@ -638,7 +638,7 @@ async function testPostureBlockPresentWhenActionNone() {
 
     expect(messages[0]?.content === "Persona", "Expected persona prompt to be first");
     const postureBlock = messages.find((msg) => msg.content.startsWith("[CONVERSATION_POSTURE]"));
-    expect(Boolean(postureBlock), "Expected posture block in system messages");
+    expect(!postureBlock, "Expected posture block to be omitted from system messages");
     assertNoBannedPhrases(messages);
   } finally {
     global.fetch = originalFetch;
