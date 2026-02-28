@@ -86,16 +86,14 @@ async function main() {
     });
     const contents = messages.map((message) => message.content);
     expect(contents[0]).toBe("PERSONA");
-    expect(contents[1].startsWith("[CONVERSATION_POSTURE]")).toBe(true);
-    expect(contents[1]).notToContain("Lean:");
-    expect(contents[2].startsWith("[USER_CONTEXT]")).toBe(true);
-    expect(contents[3].startsWith("[OVERLAY]")).toBe(true);
-    expect(contents[4]).toBe("BRIDGE");
-    expect(contents[5]).toBe("HANDOVER VERBATIM");
-    expect(contents[6]).toBe("One useful thread to anchor on is walk daily.");
-    expect(contents[7].startsWith("[SUPPLEMENTAL_CONTEXT]")).toBe(true);
-    expect(contents[8]).toBe("prev");
-    expect(contents[9]).toBe("current user turn");
+    expect(contents[1].startsWith("[USER_CONTEXT]")).toBe(true);
+    expect(contents[2].startsWith("[OVERLAY]")).toBe(true);
+    expect(contents[3]).toBe("BRIDGE");
+    expect(contents[4]).toBe("HANDOVER VERBATIM");
+    expect(contents[5]).toBe("One useful thread to anchor on is walk daily.");
+    expect(contents[6].startsWith("[SUPPLEMENTAL_CONTEXT]")).toBe(true);
+    expect(contents[7]).toBe("prev");
+    expect(contents[8]).toBe("current user turn");
   });
 
   await runTest("conversation history block combines rolling summary and raw turns", () => {
@@ -110,11 +108,11 @@ async function main() {
       transcript: "current user turn",
     });
     const contents = messages.map((message) => message.content);
-    expect(contents[2].startsWith("[CONVERSATION_HISTORY]")).toBe(true);
-    expect(contents[2]).toContain("\n---\n");
-    expect(contents[2]).toContain("user: u1");
-    expect(contents[2]).toContain("assistant: a1");
-    const summaryLine = contents[2].split("\n")[1] ?? "";
+    expect(contents[1].startsWith("[CONVERSATION_HISTORY]")).toBe(true);
+    expect(contents[1]).toContain("\n---\n");
+    expect(contents[1]).toContain("user: u1");
+    expect(contents[1]).toContain("assistant: a1");
+    const summaryLine = contents[1].split("\n")[1] ?? "";
     expect(summaryLine.length).toBe(803);
     expect(summaryLine.endsWith("...")).toBe(true);
   });
@@ -132,8 +130,8 @@ async function main() {
     const contents = messages.map((message) => message.content);
     const joined = contents.join("\n");
     expect(joined).notToContain("[CONVERSATION_HISTORY]");
-    expect(contents[2]).toBe("prev");
-    expect(contents[3]).toBe("older user");
+    expect(contents[1]).toBe("prev");
+    expect(contents[2]).toBe("older user");
   });
 
   await runTest("legacy orientation blocks never appear in composed messages", () => {
@@ -165,8 +163,8 @@ async function main() {
       transcript: "current user turn",
     });
     const contents = messages.map((message) => message.content);
-    expect(contents[2]).toContain("Local (now): stressed lately");
-    expect(contents[2]).toContain("Synapse (recent): Daily anchors");
+    expect(contents[1]).toContain("Local (now): stressed lately");
+    expect(contents[1]).toContain("Synapse (recent): Daily anchors");
   });
 
   await runTest("signal pack is not injected on session start", () => {

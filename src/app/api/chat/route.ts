@@ -2608,13 +2608,6 @@ function buildChatMessages(params: {
   pressure?: ConversationPressure;
   userState?: { mood: UserMood; energy: UserEnergy; tone: UserTone } | null;
 }) {
-  const posture = params.posture ?? DEFAULT_POSTURE;
-  const pressure = params.pressure ?? DEFAULT_PRESSURE;
-  const postureLines = [`[CONVERSATION_POSTURE]`, `Mode: ${posture} (pressure: ${pressure})`];
-  if (params.momentumGuardBlock) {
-    postureLines.push("", params.momentumGuardBlock);
-  }
-  const postureBlock = postureLines.join("\n");
   const trimmedRollingSummary = (params.rollingSummary ?? "").trim();
   const cappedRollingSummary =
     trimmedRollingSummary.length > 800
@@ -2632,8 +2625,6 @@ function buildChatMessages(params: {
 
   return [
     { role: "system" as const, content: params.persona },
-    { role: "system" as const, content: postureBlock },
-    ...(params.styleGuardBlock ? [{ role: "system" as const, content: params.styleGuardBlock }] : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
     ...(params.signalPackBlock ? [{ role: "system" as const, content: params.signalPackBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
@@ -5056,8 +5047,6 @@ export async function POST(request: NextRequest) {
 
     const systemBlockOrder = [
       "persona",
-      "posture",
-      ...(styleGuardBlock ? ["style_guard"] : []),
       ...(governedContext.userContextBlock ? ["user_context"] : []),
       ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
       ...(stanceOverlayBlock ? ["stance_overlay"] : []),

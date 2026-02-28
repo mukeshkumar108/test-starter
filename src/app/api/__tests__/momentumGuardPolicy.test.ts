@@ -69,7 +69,7 @@ async function main() {
     expect(block).toBe(null);
   });
 
-  await runTest("buildChatMessages inserts momentum guard after posture", () => {
+  await runTest("buildChatMessages does not inject momentum guard into LLM payload", () => {
     const block = __test__buildMomentumGuardBlock({
       intent: "momentum",
       posture: "MOMENTUM",
@@ -82,10 +82,8 @@ async function main() {
       transcript: "hello",
     });
     const contents = messages.map((message) => message.content);
-    const postureIndex = contents.findIndex((value) => value.startsWith("[CONVERSATION_POSTURE]"));
     const guardIndex = contents.findIndex((value) => value.includes("[MOMENTUM_GUARD]"));
-    expect(postureIndex >= 0).toBeTrue();
-    expect(guardIndex).toBe(postureIndex);
+    expect(guardIndex).toBe(-1);
   });
 
   const failed = results.filter((result) => !result.passed);
