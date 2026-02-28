@@ -369,6 +369,32 @@ function deriveBurstTopicHint(params: {
   return "general";
 }
 
+function resolveBaseTierDecision(params: {
+  triageSource: TriageSource;
+  riskLevel: RiskLevel;
+  posture: ConversationPosture;
+  pressure: ConversationPressure;
+  stanceSelected: StanceOverlayType | "none";
+  moment: RoutingMoment | null;
+  intent: OverlayIntent;
+  isDirectRequest: boolean;
+  isUrgent: boolean;
+}): { tier: TurnTier; reason: string } {
+  if (params.triageSource === "fallback" || params.triageSource === "failed_parse") {
+    return { tier: "T1", reason: "triage_failure_force_t1" };
+  }
+  return getTurnTierForSignals({
+    riskLevel: params.riskLevel,
+    posture: params.posture,
+    pressure: params.pressure,
+    stanceSelected: params.stanceSelected,
+    moment: params.moment,
+    intent: params.intent,
+    isDirectRequest: params.isDirectRequest,
+    isUrgent: params.isUrgent,
+  });
+}
+
 function keyFromDeferredProfileLine(line: string) {
   const lowered = line.toLowerCase();
   if (lowered.startsWith("daily anchors:")) return "synapse:daily_anchors";
@@ -4809,7 +4835,8 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
       overlayTopicKey: overlayTopicKey ?? null,
     });
-    const tierDecision = getTurnTierForSignals({
+    const tierDecision = resolveBaseTierDecision({
+      triageSource,
       riskLevel,
       posture,
       pressure,
@@ -5413,6 +5440,7 @@ export const __test__shouldHoldWitnessOnContinuation = shouldHoldWitnessOnContin
 export const __test__evaluateTacticEligibility = evaluateTacticEligibility;
 export const __test__applyCooldownPolicy = applyCooldownPolicy;
 export const __test__buildBouncerAuthorityTraceFields = buildBouncerAuthorityTraceFields;
+export const __test__resolveBaseTierDecision = resolveBaseTierDecision;
 export const __test__resetPostureStateCache = () => {
   postureStateCache.clear();
 };
