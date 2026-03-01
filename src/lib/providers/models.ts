@@ -27,6 +27,10 @@ export const MODEL_TIERS = {
   T3: "anthropic/claude-sonnet-4.6",
 } as const;
 
+export const ROUTER_MODELS = {
+  PRIMARY: "ibm-granite/granite-4.0-h-micro",
+} as const;
+
 export type TurnTier = keyof typeof MODEL_TIERS;
 export type TierBurstState = {
   activeId: string | null;

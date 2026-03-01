@@ -856,7 +856,20 @@ async function main() {
           },
         ],
         state: [],
-        relationships: [],
+        relationships: [
+          {
+            id: "sp-3",
+            class: "relationships",
+            text: "and (brother): active",
+            sensitivity: "LOW",
+          },
+          {
+            id: "sp-4",
+            class: "relationships",
+            text: "Jasmine (daughter): active",
+            sensitivity: "LOW",
+          },
+        ],
       },
       debug: { source: "cache-test" },
     };
@@ -902,6 +915,12 @@ async function main() {
   }
   if (!second.signalPackBlock.includes("[identity] Prefers concise responses.")) {
     throw new Error("Expected cached signal pack line on second call");
+  }
+  if (!second.signalPackBlock.includes("[relationships] Jasmine (daughter): active")) {
+    throw new Error("Expected well-formed relationship signal to be included");
+  }
+  if (second.signalPackBlock.includes("[relationships] and (brother): active")) {
+    throw new Error("Did not expect malformed relationship signal to be included");
   }
   if (second.signalPackBlock.includes("Sensitive private detail.")) {
     throw new Error("Did not expect sensitive signal text to appear verbatim");

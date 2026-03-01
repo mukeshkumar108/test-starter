@@ -1230,6 +1230,18 @@ function normalizeSignalPackLineText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function isValidRelationshipSignalLine(text: string) {
+  const match = /^(.+?)\s+\(([^()]+)\):\s*(.+)$/.exec(text);
+  if (!match) return false;
+  const entity = match[1]?.trim() ?? "";
+  const relationshipType = match[2]?.trim() ?? "";
+  const status = match[3]?.trim() ?? "";
+  if (!entity || !relationshipType || !status) return false;
+  if (!/[A-Za-z0-9]/.test(entity)) return false;
+  if (/^(and|or|&|plus)$/i.test(entity)) return false;
+  return true;
+}
+
 function shouldUseSignalPackSteeringNote(item: SynapseSignalPackItem) {
   const sensitivity = (item.sensitivity ?? "").toUpperCase();
   const surfacePolicy = (item.surface_policy ?? "").toLowerCase();
@@ -1242,6 +1254,9 @@ function buildSignalPackLine(item: SynapseSignalPackItem) {
   }
   const text = normalizeSignalPackLineText(item.text ?? "");
   if (!text) return null;
+  if (item.class === "relationships" && !isValidRelationshipSignalLine(text)) {
+    return null;
+  }
   return `- [${item.class}] ${text}`;
 }
 

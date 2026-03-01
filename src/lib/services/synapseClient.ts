@@ -20,6 +20,11 @@ export type SynapseBriefResponse = {
 };
 
 export type SynapseStartBriefResponse = {
+  entity_profiles?: Array<{
+    name?: string | null;
+    profile_text?: string | null;
+    facts?: string[] | null;
+  }> | null;
   narrative?: string | null;
   handover_text?: string | null;
   handover_depth?: "continuation" | "today" | "yesterday" | "multi_day" | null;
@@ -199,6 +204,26 @@ function normalizeSynapseStartBriefResponse(
       ? (value.evidence as Record<string, unknown>)
       : null;
   const topLoops = Array.isArray(ops?.top_loops_today) ? ops?.top_loops_today : [];
+  const rawEntityProfiles = Array.isArray(value.entity_profiles) ? value.entity_profiles : [];
+  const entityProfiles = rawEntityProfiles
+    .map((profile) => {
+      if (!profile || typeof profile !== "object" || Array.isArray(profile)) return null;
+      const row = profile as Record<string, unknown>;
+      const name = toNullableString(row.name)?.trim() ?? "";
+      const profileText = toNullableString(row.profile_text)?.trim() ?? "";
+      if (!name || !profileText) return null;
+      const facts = Array.isArray(row.facts)
+        ? (row.facts as unknown[])
+            .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+            .map((item) => item.trim())
+        : [];
+      return {
+        name,
+        profile_text: profileText,
+        facts,
+      };
+    })
+    .filter((profile): profile is NonNullable<typeof profile> => Boolean(profile));
   const rawItems = Array.isArray(value.items) ? value.items : [];
   const mappedTopLoops = topLoops
     .map((item) => {
@@ -236,6 +261,7 @@ function normalizeSynapseStartBriefResponse(
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
   return {
+    entity_profiles: entityProfiles,
     narrative: toNullableString(value.narrative),
     handover_text: toNullableString(value.handover_text),
     handover_depth:
@@ -433,6 +459,19 @@ function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPa
     "state",
     "relationships",
   ];
+  const isValidRelationshipSignalText = (text: string | null) => {
+    if (!text) return false;
+    const trimmed = text.trim();
+    const match = /^(.+?)\s+\(([^()]+)\):\s*(.+)$/.exec(trimmed);
+    if (!match) return false;
+    const entity = match[1]?.trim() ?? "";
+    const relationshipType = match[2]?.trim() ?? "";
+    const status = match[3]?.trim() ?? "";
+    if (!entity || !relationshipType || !status) return false;
+    if (!/[A-Za-z0-9]/.test(entity)) return false;
+    if (/^(and|or|&|plus)$/i.test(entity)) return false;
+    return true;
+  };
   const classes = classNames.reduce(
     (acc, className) => {
       const rows = Array.isArray(rawClasses[className]) ? (rawClasses[className] as unknown[]) : [];
@@ -440,7 +479,7 @@ function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPa
         .map((row) => {
           if (!row || typeof row !== "object" || Array.isArray(row)) return null;
           const item = row as Record<string, unknown>;
-          return {
+          const normalized = {
             id: toNullableString(item.id),
             class: className,
             text: toNullableString(item.text),
@@ -451,6 +490,13 @@ function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPa
             source: toNullableString(item.source),
             surface_policy: toNullableString(item.surface_policy),
           } satisfies SynapseSignalPackItem;
+          if (
+            className === "relationships" &&
+            !isValidRelationshipSignalText(normalized.text)
+          ) {
+            return null;
+          }
+          return normalized;
         })
         .filter((item): item is SynapseSignalPackItem => Boolean(item));
       return acc;

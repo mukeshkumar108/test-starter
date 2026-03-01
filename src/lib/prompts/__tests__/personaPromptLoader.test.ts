@@ -89,7 +89,7 @@ async function main() {
       slug: "creative",
       promptPath: "/prompts/persona-creative.md",
     });
-    expect(prompt).toContain("Terms of endearment are rare");
+    expect(prompt).toContain("Endearments: rare");
     expect(prompt).notToContain("\"babes\", \"babe\", \"buddy\"");
   });
 

@@ -33,6 +33,7 @@ import {
   applyT3BurstRouting,
   getChatModelForTurn,
   getTurnTierForSignals,
+  ROUTER_MODELS,
   type TierBurstState,
   type TurnTier,
   type RoutingMoment,
@@ -1559,7 +1560,7 @@ async function callOpenRouterJsonDetailed(params: {
 }
 
 const TRIAGE_PRIMARY_MODEL = "meta-llama/llama-3.1-8b-instruct";
-const ROUTER_PRIMARY_MODEL = "openai/gpt-oss-20b";
+const ROUTER_PRIMARY_MODEL = ROUTER_MODELS.PRIMARY;
 const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const TRIAGE_MAX_TIMEOUT_MS = 1500;
 const TRIAGE_BODY_READ_TIMEOUT_MS = 2000;
@@ -2111,6 +2112,7 @@ async function runLibrarianReflex(params: {
   sessionId: string;
   transcript: string;
   recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt?: Date }>;
+  relationshipNames?: string[];
   now: Date;
   shouldTrace: boolean;
 }): Promise<{
@@ -2145,7 +2147,17 @@ async function runLibrarianReflex(params: {
   routerPrimaryFailureCause: string | null;
   routerFallbackFailureCause: string | null;
 } | null> {
-  const { requestId, userId, personaId, sessionId, transcript, recentMessages, now, shouldTrace } =
+  const {
+    requestId,
+    userId,
+    personaId,
+    sessionId,
+    transcript,
+    recentMessages,
+    relationshipNames = [],
+    now,
+    shouldTrace,
+  } =
     params;
   if (!env.OPENROUTER_API_KEY || !env.SYNAPSE_BASE_URL) {
     return null;
@@ -2210,12 +2222,14 @@ async function runLibrarianReflex(params: {
     triage.risk_level !== "CRISIS" &&
     triage.capacity !== "LOW";
   const shouldRunRouterFromHarm =
+    triage.should_run_router &&
     triage.harm_if_wrong === "HIGH" &&
     triage.confidence < 0.7 &&
     triage.risk_level !== "HIGH" &&
     triage.risk_level !== "CRISIS" &&
     triage.capacity !== "LOW";
   const shouldRunRouterFromSensitiveBoundary =
+    triage.should_run_router &&
     (triage.pressure === "MED" || triage.pressure === "HIGH" || triage.capacity === "MED") &&
     triage.permission !== "EXPLICIT" &&
     triage.confidence < 0.8 &&
@@ -2380,7 +2394,16 @@ async function runLibrarianReflex(params: {
 
   const explicitSignal = isExplicitRecall(transcript);
   const explicit = gateExplicit || explicitSignal;
-  const threshold = explicit ? 0.55 : 0.8;
+  const relationshipEntityBypass =
+    relationshipNames.length > 0 &&
+    transcriptMentionsTrackedName(
+      `${transcript}\n${recentMessages.slice(-4).map((message) => message.content).join("\n")}`,
+      relationshipNames
+    );
+  let threshold = explicit ? 0.55 : 0.8;
+  if (relationshipEntityBypass) {
+    threshold = Math.min(threshold, 0.6);
+  }
   if (gateAction !== "memory_query" || triage.confidence < threshold) {
     return {
       supplementalContext: null,
@@ -2546,13 +2569,19 @@ async function runLibrarianReflex(params: {
         ...gateSignals,
       };
     }
-    const relevance = await runRecallRelevanceCheck({
-      query: sanitized,
-      facts,
-      entities,
-      timeoutMs: remaining(),
-    });
-    if (!relevance || !relevance.use || relevance.confidence < 0.6) {
+    const relevance = relationshipEntityBypass
+      ? ({
+          use: true,
+          confidence: 1,
+          reason: "relationship_entity_bypass",
+        } satisfies RecallRelevanceResult)
+      : await runRecallRelevanceCheck({
+          query: sanitized,
+          facts,
+          entities,
+          timeoutMs: remaining(),
+        });
+    if (!relationshipEntityBypass && (!relevance || !relevance.use || relevance.confidence < 0.6)) {
       return {
         supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
         posture: postureResult.posture,
@@ -2636,6 +2665,7 @@ function buildChatMessages(params: {
   bridgeBlock?: string | null;
   userNarrativeBlock?: string | null;
   handoverBlock?: string | null;
+  entityProfileBlocks?: string[] | null;
   opsSnippetBlock?: string | null;
   supplementalContext?: string | null;
   rollingSummary?: string | null;
@@ -2675,6 +2705,10 @@ function buildChatMessages(params: {
       ? [{ role: "system" as const, content: params.userNarrativeBlock }]
       : []),
     ...(params.handoverBlock ? [{ role: "system" as const, content: params.handoverBlock }] : []),
+    ...((params.entityProfileBlocks ?? []).map((block) => ({
+      role: "system" as const,
+      content: block,
+    }))),
     ...(params.opsSnippetBlock ? [{ role: "system" as const, content: params.opsSnippetBlock }] : []),
     ...(params.supplementalContext
       ? [
@@ -4132,6 +4166,39 @@ function extractFactsFromSupplementalContext(supplemental: string | null) {
   return lines.slice(0, 2);
 }
 
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildEntityProfileBlocks(params: {
+  packet?: SynapseStartBriefResponse;
+  handoverBlock?: string | null;
+  signalPackBlock?: string | null;
+}) {
+  const profiles = Array.isArray(params.packet?.entity_profiles)
+    ? params.packet!.entity_profiles!
+    : [];
+  if (profiles.length === 0) return [] as string[];
+  const searchable = `${params.handoverBlock ?? ""}\n${params.signalPackBlock ?? ""}`;
+  if (!searchable.trim()) return [] as string[];
+  const lowered = searchable.toLowerCase();
+  const seen = new Set<string>();
+  const blocks: string[] = [];
+  for (const profile of profiles) {
+    const name = typeof profile?.name === "string" ? profile.name.trim() : "";
+    const profileText =
+      typeof profile?.profile_text === "string" ? profile.profile_text.trim() : "";
+    if (!name || !profileText) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    const pattern = new RegExp(`\\b${escapeRegex(key)}\\b`, "i");
+    if (!pattern.test(lowered)) continue;
+    seen.add(key);
+    blocks.push(`[ENTITY_PROFILE: ${name}]\n${profileText}`);
+  }
+  return blocks;
+}
+
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   const traceId = request.headers.get("x-trace-id") || crypto.randomUUID();
@@ -4276,6 +4343,7 @@ export async function POST(request: NextRequest) {
       sessionId: session.id,
       transcript: sttResult.transcript,
       recentMessages: context.recentMessages,
+      relationshipNames: context.deferredProfileContext?.relationshipNames ?? [],
       now,
       shouldTrace: shouldTraceLibrarian,
     });
@@ -5121,6 +5189,11 @@ export async function POST(request: NextRequest) {
       stance: stanceOverlayType,
       riskLevel,
     });
+    const entityProfileBlocks = buildEntityProfileBlocks({
+      packet: context.startbriefPacket,
+      handoverBlock: governedContext.handoverBlock,
+      signalPackBlock: governedContext.signalPackBlock,
+    });
 
     const messages = buildChatMessages({
       persona: context.persona,
@@ -5138,6 +5211,7 @@ export async function POST(request: NextRequest) {
       bridgeBlock: governedContext.bridgeBlock,
       userNarrativeBlock,
       handoverBlock: governedContext.handoverBlock,
+      entityProfileBlocks,
       opsSnippetBlock: governedContext.opsSnippetBlock,
       supplementalContext,
       rollingSummary,
@@ -5215,6 +5289,7 @@ export async function POST(request: NextRequest) {
       ...(governedContext.bridgeBlock ? ["bridge"] : []),
       ...(userNarrativeBlock ? ["user_narrative"] : []),
       ...(governedContext.handoverBlock ? ["handover"] : []),
+      ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
       ...(governedContext.opsSnippetBlock ? ["ops"] : []),
       ...(supplementalContext ? ["supplemental"] : []),
       ...(rollingSummary ? ["conversation_history"] : []),
