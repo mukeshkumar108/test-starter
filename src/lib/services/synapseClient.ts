@@ -143,6 +143,7 @@ export type SynapseDailyAnalysisResponse = {
 export type SynapseSignalPackClassName =
   | "identity"
   | "trajectory"
+  | "habits"
   | "today"
   | "open_loops"
   | "state"
@@ -433,6 +434,7 @@ function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPa
   const emptyClasses: Record<SynapseSignalPackClassName, SynapseSignalPackItem[]> = {
     identity: [],
     trajectory: [],
+    habits: [],
     today: [],
     open_loops: [],
     state: [],
@@ -454,6 +456,7 @@ function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPa
   const classNames: SynapseSignalPackClassName[] = [
     "identity",
     "trajectory",
+    "habits",
     "today",
     "open_loops",
     "state",

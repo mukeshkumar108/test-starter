@@ -57,6 +57,7 @@ see `baseline.md`
 Overlay prompts live in `prompts/overlays/`. They are injected as temporary system lenses when deterministic heuristics trigger:
 - `curiosity_spiral.md`: story‑pulling curiosity (max once per session, up to 4 turns)
 - `accountability_tug.md`: gentle open‑loop check‑in (max once per day, 48h backoff on dismissal)
+- `entity_intro.md`: natural curiosity when a meaningful unknown entity is introduced (single grounded follow-up)
 
 Tune triggers and cooldowns in `src/lib/services/memory/overlaySelector.ts`.
 

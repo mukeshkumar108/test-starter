@@ -60,6 +60,236 @@ function normalizeWhitespace(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
 
+type TurnEntityType = "person" | "project" | "place" | "commitment";
+
+type TurnEntityCandidate = {
+  name: string;
+  type: TurnEntityType;
+  confidence: number;
+  meaningful: boolean;
+  evidencePhrase: string;
+};
+
+type UnknownEntitySignal = {
+  name: string;
+  type: TurnEntityType;
+  confidence: number;
+  meaningful: true;
+  evidencePhrase: string;
+};
+
+const ENTITY_TOKEN_STOPWORDS = new Set([
+  "i",
+  "im",
+  "i'm",
+  "we",
+  "you",
+  "he",
+  "she",
+  "they",
+  "it",
+  "my",
+  "our",
+  "your",
+  "the",
+  "a",
+  "an",
+  "and",
+  "or",
+  "but",
+  "to",
+  "of",
+  "in",
+  "on",
+  "at",
+  "for",
+  "from",
+  "with",
+  "is",
+  "are",
+  "was",
+  "were",
+  "am",
+  "this",
+  "that",
+  "today",
+  "tonight",
+  "yesterday",
+  "tomorrow",
+  "sophie",
+  "mukesh",
+]);
+
+function normalizeEntityKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s'-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeEntityDisplayName(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function sanitizeDetectedEntityName(value: string) {
+  const tokens = normalizeEntityDisplayName(value).split(" ").filter(Boolean);
+  const cutoffWords = new Set(["and", "or", "to", "for", "with", "on", "at", "in"]);
+  const filtered: string[] = [];
+  for (const token of tokens) {
+    if (cutoffWords.has(token.toLowerCase())) break;
+    filtered.push(token);
+  }
+  return filtered.join(" ").trim();
+}
+
+function buildKnownEntitySet(params: {
+  startbriefPacket?: SynapseStartBriefResponse;
+  handoverBlock?: string | null;
+  signalPackBlock?: string | null;
+  relationshipNames?: string[];
+}) {
+  const known = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    if (!value) return;
+    const normalized = normalizeEntityKey(value);
+    if (!normalized) return;
+    known.add(normalized);
+  };
+  for (const profile of params.startbriefPacket?.entity_profiles ?? []) {
+    if (typeof profile?.name === "string") add(profile.name);
+  }
+  for (const name of params.relationshipNames ?? []) {
+    add(name);
+  }
+  const sourceText = `${params.handoverBlock ?? ""}\n${params.signalPackBlock ?? ""}`;
+  const tokenRegex = /\b([A-Z][a-z0-9'&-]*(?:\s+[A-Z][a-z0-9'&-]*){0,2})\b/g;
+  for (const match of sourceText.matchAll(tokenRegex)) {
+    const token = normalizeEntityDisplayName(match[1] ?? "");
+    if (!token) continue;
+    const normalized = normalizeEntityKey(token);
+    if (!normalized || ENTITY_TOKEN_STOPWORDS.has(normalized)) continue;
+    known.add(normalized);
+  }
+  return known;
+}
+
+function detectTurnEntities(transcript: string): TurnEntityCandidate[] {
+  const normalized = normalizeWhitespace(transcript);
+  if (!normalized) return [];
+  const lowered = normalized.toLowerCase();
+  const firstPersonInvolvement = /\b(i[' ]?m|i am|i've|i have|i started|i met|i committed|my project|my team|i built|i launched|i shipped)\b/i.test(
+    lowered
+  );
+  const consequentialFraming = /\b(project|working on|building|launched|shipped|committed|relationship|met|partner|client|team|deadline|goal)\b/i.test(
+    lowered
+  );
+  const genericMediaReference = /\b(watching|watched|reading|read|movie|film|book|article|podcast|video)\b/i.test(
+    lowered
+  );
+  const meaningful = firstPersonInvolvement && consequentialFraming && !genericMediaReference;
+
+  const patterns: Array<{ type: TurnEntityType; confidence: number; regex: RegExp }> = [
+    {
+      type: "project",
+      confidence: 0.9,
+      regex:
+        /\b(?:i[' ]?m|i am)\s+(?:working on|building)\s+([A-Za-z][A-Za-z0-9'&-]*(?:\s+[A-Za-z][A-Za-z0-9'&-]*){0,2})/i,
+    },
+    {
+      type: "project",
+      confidence: 0.88,
+      regex:
+        /\b(?:my project(?:\s+called)?|i started|i launched|i shipped)\s+([A-Za-z][A-Za-z0-9'&-]*(?:\s+[A-Za-z][A-Za-z0-9'&-]*){0,2})/i,
+    },
+    {
+      type: "person",
+      confidence: 0.86,
+      regex:
+        /\b(?:i met|my (?:friend|manager|colleague|brother|sister|partner|client))\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/i,
+    },
+    {
+      type: "place",
+      confidence: 0.8,
+      regex:
+        /\b(?:i(?:'m| am)?\s+(?:going to|in)|i moved to)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})/i,
+    },
+    {
+      type: "commitment",
+      confidence: 0.78,
+      regex:
+        /\b(?:i committed to|i promised)\s+([A-Za-z][A-Za-z0-9'&-]*(?:\s+[A-Za-z][A-Za-z0-9'&-]*){0,2})/i,
+    },
+  ];
+
+  const candidates: TurnEntityCandidate[] = [];
+  const seen = new Set<string>();
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern.regex);
+    const rawName = sanitizeDetectedEntityName(match?.[1] ?? "");
+    if (!rawName) continue;
+    const key = normalizeEntityKey(rawName);
+    if (!key || ENTITY_TOKEN_STOPWORDS.has(key) || seen.has(key)) continue;
+    if (/^\d+$/.test(key)) continue;
+    seen.add(key);
+    candidates.push({
+      name: rawName,
+      type: pattern.type,
+      confidence: pattern.confidence,
+      meaningful,
+      evidencePhrase: normalizeWhitespace(match?.[0] ?? rawName),
+    });
+  }
+  return candidates;
+}
+
+function hasGriefOrRuptureSignal(text: string) {
+  return /\b(miss her|grief|guilt|shame|estranged|falling out|made me cry|i cried|tears|broke down|funeral|lost my)\b/i.test(
+    normalizeWhitespace(text).toLowerCase()
+  );
+}
+
+async function confirmKnownEntityViaSynapseLookup(params: {
+  userId: string;
+  name: string;
+  now: Date;
+  timeoutMs?: number;
+}) {
+  if (!env.SYNAPSE_BASE_URL) return false;
+  const timeoutMs = Math.max(120, Math.min(params.timeoutMs ?? 350, 700));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${env.SYNAPSE_BASE_URL}/memory/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tenantId: SYNAPSE_CANONICAL_TENANT_ID,
+        userId: params.userId,
+        query: params.name,
+        limit: 3,
+        referenceTime: params.now.toISOString(),
+        includeContext: false,
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return false;
+    const data = (await response.json()) as MemoryQueryResponse;
+    const { facts, entities, factRows } = normalizeMemoryQueryResponse(data);
+    const nameKey = normalizeEntityKey(params.name);
+    const recallFacts = factRows
+      .filter((fact) => fact.relevanceTier !== "stale")
+      .map((fact) => fact.text)
+      .concat(facts);
+    const haystack = [...recallFacts, ...entities].map((item) => normalizeEntityKey(item));
+    return haystack.some((entry) => entry.includes(nameKey));
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function extractLocalTurnSignalLine(transcript: string) {
   const normalized = normalizeWhitespace(transcript);
   if (!normalized) return null;
@@ -750,6 +980,9 @@ function buildChatTrace(params: {
   suppressionReason: string | null;
   overlaySelected: OverlayType | "none";
   overlaySkipReason: string | null;
+  unknownEntityDetected: boolean;
+  unknownEntityName: string | null;
+  entityIntroFired: boolean;
   startbrief: {
     used: boolean;
     fallback: "session/brief" | null;
@@ -793,6 +1026,9 @@ function buildChatTrace(params: {
     suppressionReason: params.suppressionReason,
     overlaySelected: params.overlaySelected,
     overlaySkipReason: params.overlaySkipReason,
+    unknown_entity_detected: params.unknownEntityDetected,
+    unknown_entity_name: params.unknownEntityName,
+    entity_intro_fired: params.entityIntroFired,
     startbrief_used: params.startbrief.used,
     startbrief_fallback: params.startbrief.fallback,
     startbrief_items_count: params.startbrief.items_count,
@@ -1288,21 +1524,64 @@ async function resolvePostureWithHysteresis(params: {
 }
 
 type MemoryQueryResponse = {
-  facts?: Array<string | { text?: string; relevance?: number | null; source?: string }>;
+  facts?: Array<
+    | string
+    | {
+        text?: string;
+        relevance?: number | null;
+        source?: string;
+        relevance_tier?: string | null;
+      }
+  >;
   entities?: Array<{ summary?: string; type?: string; uuid?: string }>;
   metadata?: { query?: string; facts?: number; entities?: number };
 };
 
+type RecallFactRelevanceTier = "recent" | "persistent" | "stale";
+
+type NormalizedRecallFact = {
+  text: string;
+  relevanceTier: RecallFactRelevanceTier | null;
+};
+
+function parseRecallFactRelevanceTier(value: unknown): RecallFactRelevanceTier | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "recent" || normalized === "persistent" || normalized === "stale") {
+    return normalized;
+  }
+  return null;
+}
+
+function recallFactTierSortRank(tier: RecallFactRelevanceTier | null): number {
+  if (tier === "recent") return 0;
+  if (tier === "persistent") return 1;
+  if (tier === "stale") return 3;
+  return 2;
+}
+
 function normalizeMemoryQueryResponse(data: MemoryQueryResponse | null | undefined) {
-  const facts = Array.isArray(data?.facts)
+  const factRows: NormalizedRecallFact[] = Array.isArray(data?.facts)
     ? data!.facts
-        .map((fact) => {
-          if (typeof fact === "string") return fact.trim();
-          if (fact && typeof fact.text === "string") return fact.text.trim();
-          return "";
+        .map((fact): NormalizedRecallFact | null => {
+          if (typeof fact === "string") {
+            const text = fact.trim();
+            return text ? { text, relevanceTier: null } : null;
+          }
+          if (fact && typeof fact.text === "string") {
+            const text = fact.text.trim();
+            if (!text) return null;
+            return {
+              text,
+              relevanceTier: parseRecallFactRelevanceTier(fact.relevance_tier),
+            };
+          }
+          return null;
         })
-        .filter(Boolean)
+        .filter((fact): fact is NormalizedRecallFact => Boolean(fact))
+        .sort((a, b) => recallFactTierSortRank(a.relevanceTier) - recallFactTierSortRank(b.relevanceTier))
     : [];
+  const facts = factRows.map((fact) => fact.text);
   const entities = Array.isArray(data?.entities)
     ? data!.entities
         .map((entity) =>
@@ -1310,19 +1589,29 @@ function normalizeMemoryQueryResponse(data: MemoryQueryResponse | null | undefin
         )
         .filter(Boolean)
     : [];
-  return { facts, entities };
+  return { facts, entities, factRows };
 }
 
 function buildRecallSheet(params: {
   query: string;
   facts: string[];
+  factRows?: NormalizedRecallFact[];
   entities: string[];
+  includeStaleFacts?: boolean;
 }) {
+  const includeStaleFacts = params.includeStaleFacts === true;
+  const orderedFacts =
+    params.factRows?.map((fact) => fact) ??
+    params.facts.map((text) => ({ text, relevanceTier: null } satisfies NormalizedRecallFact));
+  const facts = orderedFacts
+    .filter((fact) => includeStaleFacts || fact.relevanceTier !== "stale")
+    .map((fact) => fact.text);
+
   const lines: string[] = [];
   lines.push(`Recall Sheet (query: ${params.query})`);
-  if (params.facts.length > 0) {
+  if (facts.length > 0) {
     lines.push("Facts:");
-    for (const fact of params.facts.slice(0, 3)) {
+    for (const fact of facts.slice(0, 3)) {
       lines.push(`- ${fact}`);
     }
   }
@@ -2536,9 +2825,12 @@ async function runLibrarianReflex(params: {
       };
     }
     const data = (await response.json()) as MemoryQueryResponse;
-    const { facts, entities } = normalizeMemoryQueryResponse(data);
+    const { facts, entities, factRows } = normalizeMemoryQueryResponse(data);
+    const recallFacts = factRows
+      .filter((fact) => fact.relevanceTier !== "stale")
+      .map((fact) => fact.text);
 
-    if (facts.length === 0 && entities.length === 0) {
+    if (recallFacts.length === 0 && entities.length === 0) {
       return {
         supplementalContext: explicit ? `No matching memories found for "${sanitized}".` : null,
         posture: postureResult.posture,
@@ -2577,7 +2869,7 @@ async function runLibrarianReflex(params: {
         } satisfies RecallRelevanceResult)
       : await runRecallRelevanceCheck({
           query: sanitized,
-          facts,
+          facts: recallFacts,
           entities,
           timeoutMs: remaining(),
         });
@@ -2592,7 +2884,13 @@ async function runLibrarianReflex(params: {
       };
     }
 
-    const supplemental = buildRecallSheet({ query: sanitized, facts, entities });
+    const supplemental = buildRecallSheet({
+      query: sanitized,
+      facts,
+      factRows,
+      entities,
+      includeStaleFacts: false,
+    });
 
     if (shouldTrace) {
       void prisma.librarianTrace.create({
@@ -4500,6 +4798,39 @@ export async function POST(request: NextRequest) {
     if (reinjectionUsed) {
       startbriefV2ReinjectedOnce = true;
     }
+    const turnEntityCandidates = detectTurnEntities(sttResult.transcript);
+    const knownEntitySet = buildKnownEntitySet({
+      startbriefPacket: context.startbriefPacket,
+      handoverBlock,
+      signalPackBlock: context.signalPackBlock ?? null,
+      relationshipNames: context.deferredProfileContext?.relationshipNames ?? [],
+    });
+    let unknownEntitySignal: UnknownEntitySignal | null = null;
+    let unknownEntityDetected = false;
+    let unknownEntityName: string | null = null;
+    let entityIntroFired = false;
+    const meaningfulUnknownCandidate = turnEntityCandidates.find((candidate) => {
+      if (!candidate.meaningful) return false;
+      return !knownEntitySet.has(normalizeEntityKey(candidate.name));
+    });
+    if (meaningfulUnknownCandidate) {
+      const confirmedKnown = await confirmKnownEntityViaSynapseLookup({
+        userId: user.id,
+        name: meaningfulUnknownCandidate.name,
+        now,
+      });
+      if (!confirmedKnown) {
+        unknownEntitySignal = {
+          name: meaningfulUnknownCandidate.name,
+          type: meaningfulUnknownCandidate.type,
+          confidence: meaningfulUnknownCandidate.confidence,
+          meaningful: true,
+          evidencePhrase: meaningfulUnknownCandidate.evidencePhrase,
+        };
+        unknownEntityDetected = true;
+        unknownEntityName = meaningfulUnknownCandidate.name;
+      }
+    }
 
     let opsSnippetBlock: string | null = null;
     let opsInjected = false;
@@ -4985,6 +5316,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (unknownEntitySignal) {
+      const canFireEntityIntro =
+        !overlayPolicy.skip &&
+        !safetyRiskOverride &&
+        stanceOverlayType !== "witness" &&
+        tacticOverlayType === "none" &&
+        cooldownTurnsRemaining === 0 &&
+        triage.rupture === "NONE" &&
+        !hasGriefOrRuptureSignal(sttResult.transcript) &&
+        riskLevel !== "HIGH" &&
+        riskLevel !== "CRISIS";
+      if (canFireEntityIntro) {
+        tacticOverlayType = "entity_intro";
+        overlayTriggerReason = "unknown_entity_intro";
+        overlaySuppressionReason = overlaySuppressionReason ?? null;
+        entityIntroFired = true;
+      } else if (!overlaySuppressionReason) {
+        overlaySuppressionReason = "entity_intro_vetoed";
+      }
+    }
+
     const probingTacticFired = isProbingTactic(tacticOverlayType);
     const tacticRegretCandidate =
       lastProbingTacticFired && (triage.rupture === "MILD" || triage.rupture === "STRONG");
@@ -5003,7 +5355,14 @@ export async function POST(request: NextRequest) {
 
     let tacticOverlayBlock: string | null = null;
     if (tacticOverlayType !== "none") {
-      const overlayText = await loadOverlay(tacticOverlayType);
+      let overlayText = await loadOverlay(tacticOverlayType);
+      if (tacticOverlayType === "entity_intro" && unknownEntitySignal) {
+        const entityName = unknownEntitySignal.name.trim();
+        const evidencePhrase = unknownEntitySignal.evidencePhrase.trim();
+        overlayText = overlayText
+          .replaceAll("{{entity_name}}", entityName || "the mentioned entity")
+          .replaceAll("{{evidence_phrase}}", evidencePhrase || sttResult.transcript.trim());
+      }
       tacticOverlayBlock = `[OVERLAY]\n${overlayText}`;
     }
     const styleGuardBlock = buildStyleGuardBlock({
@@ -5148,6 +5507,9 @@ export async function POST(request: NextRequest) {
             overlayTurnCount,
             overlayExitReason,
             topicKey: overlayTopicKey ?? null,
+            unknown_entity_detected: unknownEntityDetected,
+            unknown_entity_name: unknownEntityName,
+            entity_intro_fired: entityIntroFired,
             cooldown_turns_remaining: cooldownTurnsRemaining,
             cooldown_last_reason: cooldownLastReason,
             cooldown_activated_reason: cooldownActivatedReason,
@@ -5244,6 +5606,9 @@ export async function POST(request: NextRequest) {
           stanceSelected: stanceOverlayType,
           tacticSelected: tacticOverlayType,
           overlaySelected: tacticOverlayType,
+          unknown_entity_detected: unknownEntityDetected,
+          unknown_entity_name: unknownEntityName,
+          entity_intro_fired: entityIntroFired,
           overlaySkipReason,
           suppressionReason: overlaySuppressionReason,
         })
@@ -5322,6 +5687,9 @@ export async function POST(request: NextRequest) {
             tacticSelected: tacticOverlayType,
             overlaySelected: tacticOverlayType,
             overlaySkipReason,
+            unknown_entity_detected: unknownEntityDetected,
+            unknown_entity_name: unknownEntityName,
+            entity_intro_fired: entityIntroFired,
             suppressionReason: overlaySuppressionReason,
             system_blocks: systemBlockOrder,
             startbrief_used: Boolean(context.startBrief?.used),
@@ -5483,6 +5851,9 @@ export async function POST(request: NextRequest) {
       suppressionReason: overlaySuppressionReason,
       overlaySelected: tacticOverlayType,
       overlaySkipReason,
+      unknownEntityDetected,
+      unknownEntityName,
+      entityIntroFired,
       startbrief: {
         used: Boolean(context.startBrief?.used),
         fallback: context.startBrief?.fallback ?? null,
@@ -5663,6 +6034,8 @@ export const __test__buildContextGovernorSelection = buildContextGovernorSelecti
 export const __test__applyOpsSupplementalMutualExclusion = applyOpsSupplementalMutualExclusion;
 export const __test__deriveTurnConstraintsFromTranscript = deriveTurnConstraintsFromTranscript;
 export const __test__resolveEffectiveOverlaySignals = resolveEffectiveOverlaySignals;
+export const __test__detectTurnEntities = detectTurnEntities;
+export const __test__buildKnownEntitySet = buildKnownEntitySet;
 export const __test__shouldHoldWitnessOnContinuation = shouldHoldWitnessOnContinuation;
 export const __test__evaluateTacticEligibility = evaluateTacticEligibility;
 export const __test__applyCooldownPolicy = applyCooldownPolicy;

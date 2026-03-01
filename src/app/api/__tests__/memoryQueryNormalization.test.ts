@@ -54,6 +54,21 @@ async function main() {
     expect(parsed.entities.length).toBe(0);
   });
 
+  await runTest("orders facts by relevance_tier (recent, persistent, stale)", () => {
+    const parsed = __test__normalizeMemoryQueryResponse({
+      facts: [
+        { text: "stale fact", relevance_tier: "stale" },
+        { text: "persistent fact", relevance_tier: "persistent" },
+        { text: "recent fact", relevance_tier: "recent" },
+        { text: "untiered fact" },
+      ],
+      entities: [],
+    });
+    expect(parsed.facts[0]).toBe("recent fact");
+    expect(parsed.facts[1]).toBe("persistent fact");
+    expect(parsed.facts[parsed.facts.length - 1]).toBe("stale fact");
+  });
+
   const failed = results.filter((result) => !result.passed);
   if (failed.length > 0) {
     console.error("\nMemory query normalization tests failed:");

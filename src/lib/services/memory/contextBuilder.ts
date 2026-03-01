@@ -83,6 +83,7 @@ const briefCache = new Map<
 const SIGNAL_PACK_CLASS_ORDER: SynapseSignalPackClassName[] = [
   "identity",
   "trajectory",
+  "habits",
   "today",
   "open_loops",
   "state",
@@ -92,6 +93,7 @@ const SIGNAL_PACK_CLASS_ORDER: SynapseSignalPackClassName[] = [
 const SIGNAL_PACK_CLASS_LIMITS: Record<SynapseSignalPackClassName, number> = {
   identity: 3,
   trajectory: 3,
+  habits: 3,
   today: 3,
   open_loops: 3,
   state: 3,
@@ -115,6 +117,7 @@ function createEmptySignalsPackCounts(): SignalsPackEmittedCounts {
   return {
     identity: 0,
     trajectory: 0,
+    habits: 0,
     today: 0,
     open_loops: 0,
     state: 0,

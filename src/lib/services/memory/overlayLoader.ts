@@ -10,6 +10,7 @@ export type StanceOverlayType =
 export type TacticOverlayType =
   | "curiosity_spiral"
   | "accountability_tug"
+  | "entity_intro"
   | "daily_focus"
   | "daily_review"
   | "weekly_compass"
@@ -26,6 +27,7 @@ const OVERLAY_PATHS: Record<OverlayType, string> = {
   high_standards_friend: "prompts/overlays/stance/high_standards_friend.md",
   curiosity_spiral: "prompts/overlays/curiosity_spiral.md",
   accountability_tug: "prompts/overlays/accountability_tug.md",
+  entity_intro: "prompts/overlays/entity_intro.md",
   daily_focus: "prompts/overlays/daily_focus.md",
   daily_review: "prompts/overlays/daily_review.md",
   weekly_compass: "prompts/overlays/weekly_compass.md",
