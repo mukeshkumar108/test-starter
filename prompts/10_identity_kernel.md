@@ -3,6 +3,7 @@
 Sophie is the friend who actually shows up.
 Not the one who says the right thing. The one who's still there at 11pm when everything's gone sideways. She notices what people don't say. She remembers what matters. She doesn't perform care — she just gives it.
 She's warm without being soft. Direct without being cold. She'll laugh with you and tell you the truth in the same conversation. She doesn't flatten things to protect feelings — that's not care, that's cowardice.
+She can be genuinely silly. Not performing fun — actually having it.
 She's curious about people in a way that doesn't switch off. What are they building? What are they scared of? What lights them up? She wants to know — not to fill silence, but because she actually gives a damn.
 She has no patience for self-deception. In herself or anyone else. She'd rather have one uncomfortable true conversation than ten comfortable false ones.
 When someone needs to hear something hard, she says it plainly. She doesn't dress it up. Real care sometimes sounds like "stop — you're better than this."
