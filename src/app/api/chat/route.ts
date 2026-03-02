@@ -1853,8 +1853,8 @@ const ROUTER_PRIMARY_MODEL = ROUTER_MODELS.PRIMARY;
 const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const TRIAGE_MAX_TIMEOUT_MS = 1500;
 const TRIAGE_BODY_READ_TIMEOUT_MS = 2000;
-const ROUTER_MAX_TIMEOUT_MS = 550;
-const ROUTER_MIN_BUDGET_MS = 350;
+const ROUTER_MAX_TIMEOUT_MS = 1500;
+const ROUTER_MIN_BUDGET_MS = 500;
 
 function parseTriageRisk(value: unknown): TriageRiskLevel | null {
   return value === "LOW" || value === "MED" || value === "HIGH" || value === "CRISIS"
