@@ -1183,6 +1183,7 @@ async function testRouterFailureUsesFallbackAndSuppressesProbingTactics() {
                     risk_level: "LOW",
                     pressure: "MED",
                     capacity: "HIGH",
+                    decision_paralysis: false,
                     permission: "IMPLICIT",
                     tactic_appetite: "HIGH",
                     rupture: "NONE",

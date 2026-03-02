@@ -5,7 +5,8 @@ export type StanceOverlayType =
   | "witness"
   | "excavator"
   | "repair_and_forward"
-  | "high_standards_friend";
+  | "high_standards_friend"
+  | "clarity";
 
 export type TacticOverlayType =
   | "curiosity_spiral"
@@ -25,6 +26,7 @@ const OVERLAY_PATHS: Record<OverlayType, string> = {
   excavator: "prompts/overlays/stance/excavator.md",
   repair_and_forward: "prompts/overlays/stance/repair_and_forward.md",
   high_standards_friend: "prompts/overlays/stance/high_standards_friend.md",
+  clarity: "prompts/overlays/clarity.md",
   curiosity_spiral: "prompts/overlays/curiosity_spiral.md",
   accountability_tug: "prompts/overlays/accountability_tug.md",
   entity_intro: "prompts/overlays/entity_intro.md",

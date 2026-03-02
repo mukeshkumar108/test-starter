@@ -20,6 +20,7 @@ const tests: TestDef[] = [
   { name: "librarian", command: [...nodeWithTsx, "src/synapse/librarian.test.ts"] },
   { name: "overlayInjection", command: [...nodeWithTsx, "src/app/api/__tests__/overlayInjection.test.ts"] },
   { name: "chatCooldownIntegration", command: [...nodeWithTsx, "src/app/api/__tests__/chat.cooldown.integration.test.ts"] },
+  { name: "chatClarityIntegration", command: [...nodeWithTsx, "src/app/api/__tests__/chat.clarity.integration.test.ts"] },
   { name: "chatRouterFallbackProbingGuardIntegration", command: [...nodeWithTsx, "src/app/api/__tests__/chat.router-fallback-probing-guard.integration.test.ts"] },
   { name: "chatTierRoutingOnTriageFailure", command: [...nodeWithTsx, "src/app/api/__tests__/chat.tier-routing-on-triage-failure.test.ts"] },
   { name: "promptStackV2", command: [...nodeWithTsx, "src/app/api/__tests__/promptStackV2.test.ts"] },

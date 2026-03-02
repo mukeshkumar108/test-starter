@@ -10,6 +10,7 @@ const CREATIVE_KERNEL_FILES = [
 ] as const;
 
 let creativeKernelCache: string | null = null;
+const creativeKernelVariantCache = new Map<string, string>();
 
 function toAbsolutePath(rootDir: string, promptPath: string) {
   const relative = promptPath.startsWith("/") ? promptPath.slice(1) : promptPath;
@@ -61,6 +62,27 @@ export async function loadPersonaPrompt(params: {
   }
 }
 
+export async function loadCreativeKernelByFiles(params: {
+  files: readonly string[];
+  rootDir?: string;
+}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const cacheKey = params.files.join("|");
+  const cached = creativeKernelVariantCache.get(cacheKey);
+  if (cached) return cached;
+  const blocks = await Promise.all(
+    params.files.map(async (fileName) => {
+      const fullPath = join(rootDir, "prompts", fileName);
+      const contents = await readFile(fullPath, "utf-8");
+      return contents.trim();
+    })
+  );
+  const compiled = blocks.filter(Boolean).join("\n\n");
+  creativeKernelVariantCache.set(cacheKey, compiled);
+  return compiled;
+}
+
 export function clearPersonaPromptCache() {
   creativeKernelCache = null;
+  creativeKernelVariantCache.clear();
 }

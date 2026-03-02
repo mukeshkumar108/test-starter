@@ -39,6 +39,7 @@ const lowRiskHighRunwayTriage = {
   risk_level: "LOW",
   pressure: "LOW",
   capacity: "HIGH",
+  decision_paralysis: false,
   permission: "EXPLICIT",
   tactic_appetite: "HIGH",
   rupture: "NONE",

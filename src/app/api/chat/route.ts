@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { transcribeAudio } from "@/lib/services/voice/sttService";
 import { generateResponse } from "@/lib/services/voice/llmService";
 import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
+import { loadCreativeKernelByFiles } from "@/lib/prompts/personaPromptLoader";
 import {
   buildContext,
   type DeferredProfileContext,
@@ -614,11 +615,13 @@ function resolveBaseTierDecision(params: {
   if (params.triageSource === "fallback" || params.triageSource === "failed_parse") {
     return { tier: "T1", reason: "triage_failure_force_t1" };
   }
+  const stanceForTier =
+    params.stanceSelected === "clarity" ? "none" : params.stanceSelected;
   return getTurnTierForSignals({
     riskLevel: params.riskLevel,
     posture: params.posture,
     pressure: params.pressure,
-    stanceSelected: params.stanceSelected,
+    stanceSelected: stanceForTier,
     moment: params.moment,
     intent: params.intent,
     isDirectRequest: params.isDirectRequest,
@@ -806,6 +809,7 @@ type TriageGateResult = {
   risk_level: TriageRiskLevel;
   pressure: TriagePressure;
   capacity: TriageCapacity;
+  decision_paralysis: boolean;
   permission: TriagePermission;
   tactic_appetite: TriageTacticAppetite;
   rupture: TriageRupture;
@@ -928,6 +932,8 @@ type OverlayState = {
   recentOverlayKeys?: string[];
   stanceActive?: StanceOverlayType | null;
   stanceTurnsRemaining?: number;
+  clarityBurstActive?: boolean;
+  clarityPhase?: number;
   tierBurst?: TierBurstState;
   endearmentCooldownTurns?: number;
   cooldownTurnsRemaining?: number;
@@ -983,6 +989,9 @@ function buildChatTrace(params: {
   unknownEntityDetected: boolean;
   unknownEntityName: string | null;
   entityIntroFired: boolean;
+  clarityStanceFired: boolean;
+  clarityBurstActive: boolean;
+  clarityResolved: boolean;
   startbrief: {
     used: boolean;
     fallback: "session/brief" | null;
@@ -1029,6 +1038,9 @@ function buildChatTrace(params: {
     unknown_entity_detected: params.unknownEntityDetected,
     unknown_entity_name: params.unknownEntityName,
     entity_intro_fired: params.entityIntroFired,
+    clarity_stance_fired: params.clarityStanceFired,
+    clarity_burst_active: params.clarityBurstActive,
+    clarity_resolved: params.clarityResolved,
     startbrief_used: params.startbrief.used,
     startbrief_fallback: params.startbrief.fallback,
     startbrief_items_count: params.startbrief.items_count,
@@ -1259,6 +1271,11 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
       typeof raw.stanceTurnsRemaining === "number" && Number.isFinite(raw.stanceTurnsRemaining)
         ? Math.max(0, raw.stanceTurnsRemaining)
         : 0,
+    clarityBurstActive: raw.clarityBurstActive === true,
+    clarityPhase:
+      typeof raw.clarityPhase === "number" && Number.isFinite(raw.clarityPhase)
+        ? Math.max(1, Math.round(raw.clarityPhase))
+        : 1,
     endearmentCooldownTurns:
       typeof raw.endearmentCooldownTurns === "number" && Number.isFinite(raw.endearmentCooldownTurns)
         ? Math.max(0, raw.endearmentCooldownTurns)
@@ -1849,6 +1866,7 @@ async function callOpenRouterJsonDetailed(params: {
 }
 
 const TRIAGE_PRIMARY_MODEL = "meta-llama/llama-3.1-8b-instruct";
+const TRIAGE_EMERGENCY_FALLBACK_MODEL = ROUTER_MODELS.PRIMARY;
 const ROUTER_PRIMARY_MODEL = ROUTER_MODELS.PRIMARY;
 const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const TRIAGE_MAX_TIMEOUT_MS = 1500;
@@ -1898,6 +1916,7 @@ function conservativeTriageFallback(): TriageGateResult {
     risk_level: "MED",
     pressure: "LOW",
     capacity: "LOW",
+    decision_paralysis: false,
     permission: "NONE",
     tactic_appetite: "NONE",
     rupture: "NONE",
@@ -1914,6 +1933,8 @@ function parseTriageGateResponse(result: Record<string, unknown>): TriageGateRes
   const risk_level = parseTriageRisk(result.risk_level);
   const pressure = parseTriagePressure(result.pressure);
   const capacity = parseTriageCapacity(result.capacity);
+  const decision_paralysis =
+    typeof result.decision_paralysis === "boolean" ? result.decision_paralysis : null;
   const permission = parseTriagePermission(result.permission);
   const tactic_appetite = parseTriageTacticAppetite(result.tactic_appetite);
   const rupture = parseTriageRupture(result.rupture);
@@ -1929,6 +1950,7 @@ function parseTriageGateResponse(result: Record<string, unknown>): TriageGateRes
     !risk_level ||
     !pressure ||
     !capacity ||
+    decision_paralysis === null ||
     !permission ||
     !tactic_appetite ||
     !rupture ||
@@ -1945,6 +1967,7 @@ function parseTriageGateResponse(result: Record<string, unknown>): TriageGateRes
     risk_level,
     pressure,
     capacity,
+    decision_paralysis,
     permission,
     tactic_appetite,
     rupture,
@@ -2021,6 +2044,7 @@ function parseLegacyGateAsTriage(result: Record<string, unknown>): TriageGateRes
     risk_level,
     pressure,
     capacity,
+    decision_paralysis: false,
     permission,
     tactic_appetite: "LOW",
     rupture: "NONE",
@@ -2133,6 +2157,7 @@ Schema:
   "risk_level":"LOW|MED|HIGH|CRISIS",
   "pressure":"LOW|MED|HIGH",
   "capacity":"LOW|MED|HIGH",
+  "decision_paralysis":true|false,
   "permission":"NONE|IMPLICIT|EXPLICIT",
   "tactic_appetite":"NONE|LOW|MED|HIGH",
   "rupture":"NONE|MILD|STRONG",
@@ -2148,19 +2173,20 @@ Guidance:
 - Conservative under uncertainty.
 - If fragile, prefer capacity=LOW, permission=NONE, harm_if_wrong=HIGH.
 - capacity LOW means the user is distressed, overloaded, or clearly low-runway; capacity MED means neutral or mixed runway; capacity HIGH means engaged, energized, or explicitly asking for guidance/planning.
+- decision_paralysis=true when the user is cognitively stuck on priorities/options/focus (e.g. "I don't know where to start", "too many things", "what should I focus on"), even without emotional distress.
 - should_run_router=true when nuanced interpretation is likely to improve quality (mixed signals, relational context, implicit/emotional ambiguity, or unpacking requests). should_run_router=false for clear/simple operational turns.
 - permission and tactic_appetite should be coherent: if permission=EXPLICIT then tactic_appetite is usually at least LOW unless the user is explicitly resisting guidance.
 - rupture should capture semantic resistance/correction interaction quality, not exact phrase matching.
 - Do not infer self-harm unless clearly present.
 
 Example output (format only; do not copy values blindly):
-{"risk_level":"MED","pressure":"LOW","capacity":"LOW","permission":"NONE","tactic_appetite":"NONE","rupture":"NONE","rupture_confidence":0.2,"should_run_router":false,"memory_query_eligible":false,"confidence":0.4,"harm_if_wrong":"HIGH","reason":"brief reason"}
+{"risk_level":"MED","pressure":"LOW","capacity":"LOW","decision_paralysis":false,"permission":"NONE","tactic_appetite":"NONE","rupture":"NONE","rupture_confidence":0.2,"should_run_router":false,"memory_query_eligible":false,"confidence":0.4,"harm_if_wrong":"HIGH","reason":"brief reason"}
 Example output (neutral operational turn):
-{"risk_level":"LOW","pressure":"LOW","capacity":"MED","permission":"IMPLICIT","tactic_appetite":"LOW","rupture":"NONE","rupture_confidence":0.0,"should_run_router":false,"memory_query_eligible":false,"confidence":0.8,"harm_if_wrong":"LOW","reason":"clear operational update"}
+{"risk_level":"LOW","pressure":"LOW","capacity":"MED","decision_paralysis":false,"permission":"IMPLICIT","tactic_appetite":"LOW","rupture":"NONE","rupture_confidence":0.0,"should_run_router":false,"memory_query_eligible":false,"confidence":0.8,"harm_if_wrong":"LOW","reason":"clear operational update"}
 Example output (ambiguous emotional turn):
-{"risk_level":"LOW","pressure":"MED","capacity":"MED","permission":"IMPLICIT","tactic_appetite":"LOW","rupture":"NONE","rupture_confidence":0.1,"should_run_router":true,"memory_query_eligible":true,"confidence":0.75,"harm_if_wrong":"MED","reason":"needs nuanced posture/intent"}
+{"risk_level":"LOW","pressure":"MED","capacity":"MED","decision_paralysis":false,"permission":"IMPLICIT","tactic_appetite":"LOW","rupture":"NONE","rupture_confidence":0.1,"should_run_router":true,"memory_query_eligible":true,"confidence":0.75,"harm_if_wrong":"MED","reason":"needs nuanced posture/intent"}
 Example output (explicit unpack request):
-{"risk_level":"LOW","pressure":"LOW","capacity":"HIGH","permission":"EXPLICIT","tactic_appetite":"MED","rupture":"NONE","rupture_confidence":0.0,"should_run_router":true,"memory_query_eligible":true,"confidence":0.9,"harm_if_wrong":"LOW","reason":"explicit request to unpack"}
+{"risk_level":"LOW","pressure":"LOW","capacity":"HIGH","decision_paralysis":false,"permission":"EXPLICIT","tactic_appetite":"MED","rupture":"NONE","rupture_confidence":0.0,"should_run_router":true,"memory_query_eligible":true,"confidence":0.9,"harm_if_wrong":"LOW","reason":"explicit request to unpack"}
 
 Recent conversation:
 ${lastTurns}
@@ -2169,45 +2195,125 @@ Current user message:
 ${transcript}`;
 
   const triageTimeoutMs = Math.max(80, Math.min(timeoutMs, TRIAGE_MAX_TIMEOUT_MS));
-  const call = await callOpenRouterJsonDetailed({
+  const shouldRetryTransportFailure = (failureCause: string | null | undefined) =>
+    failureCause === "connection_timeout" ||
+    failureCause === "body_read_timeout" ||
+    failureCause === "fetch_error";
+
+  const extractTriageRawResult = (params: {
+    call: Awaited<ReturnType<typeof callOpenRouterJsonDetailed>>;
+    model: string;
+  }) => {
+    if (params.call.result) return params.call.result;
+    if (!params.call.rawContent) return null;
+    const extracted = extractFirstJsonObjectBlock(params.call.rawContent);
+    if (!extracted) {
+      console.warn("[triage] json extraction failed (no object block)", {
+        failureCause: params.call.failureCause,
+        model: params.model,
+        contentShape: shapePreview(params.call.rawContent),
+      });
+      return null;
+    }
+    try {
+      const extractedParsed = JSON.parse(extracted);
+      if (
+        extractedParsed &&
+        typeof extractedParsed === "object" &&
+        !Array.isArray(extractedParsed)
+      ) {
+        return extractedParsed as Record<string, unknown>;
+      }
+      console.warn("[triage] json extraction failed (non-object)", {
+        failureCause: params.call.failureCause,
+        model: params.model,
+        contentShape: shapePreview(params.call.rawContent),
+      });
+      return null;
+    } catch {
+      console.warn("[triage] json extraction failed (parse)", {
+        failureCause: params.call.failureCause,
+        model: params.model,
+        contentShape: shapePreview(params.call.rawContent),
+      });
+      return null;
+    }
+  };
+
+  let primaryCall = await callOpenRouterJsonDetailed({
     prompt,
     model: TRIAGE_PRIMARY_MODEL,
     timeoutMs: triageTimeoutMs,
     bodyReadTimeoutMs: TRIAGE_BODY_READ_TIMEOUT_MS,
   });
-  let triageRawResult: Record<string, unknown> | null = call.result;
-  if (!triageRawResult && call.rawContent) {
-    const extracted = extractFirstJsonObjectBlock(call.rawContent);
-    if (!extracted) {
-      console.warn("[triage] json extraction failed (no object block)", {
-        failureCause: call.failureCause,
-        model: TRIAGE_PRIMARY_MODEL,
-        contentShape: shapePreview(call.rawContent),
-      });
-    } else {
-      try {
-        const extractedParsed = JSON.parse(extracted);
-        if (
-          extractedParsed &&
-          typeof extractedParsed === "object" &&
-          !Array.isArray(extractedParsed)
-        ) {
-          triageRawResult = extractedParsed as Record<string, unknown>;
-        } else {
-          console.warn("[triage] json extraction failed (non-object)", {
-            failureCause: call.failureCause,
-            model: TRIAGE_PRIMARY_MODEL,
-            contentShape: shapePreview(call.rawContent),
-          });
-        }
-      } catch {
-        console.warn("[triage] json extraction failed (parse)", {
-          failureCause: call.failureCause,
-          model: TRIAGE_PRIMARY_MODEL,
-          contentShape: shapePreview(call.rawContent),
-        });
-      }
+  let triageRawResult: Record<string, unknown> | null = extractTriageRawResult({
+    call: primaryCall,
+    model: TRIAGE_PRIMARY_MODEL,
+  });
+  let primaryFailureCause: string | null = primaryCall.failureCause ?? null;
+
+  if (!triageRawResult && shouldRetryTransportFailure(primaryFailureCause)) {
+    const retryCall = await callOpenRouterJsonDetailed({
+      prompt,
+      model: TRIAGE_PRIMARY_MODEL,
+      timeoutMs: triageTimeoutMs,
+      bodyReadTimeoutMs: TRIAGE_BODY_READ_TIMEOUT_MS,
+    });
+    primaryCall = retryCall;
+    triageRawResult = extractTriageRawResult({
+      call: retryCall,
+      model: TRIAGE_PRIMARY_MODEL,
+    });
+    primaryFailureCause = retryCall.failureCause ?? primaryFailureCause;
+  }
+
+  if (!triageRawResult && shouldRetryTransportFailure(primaryFailureCause)) {
+    const fallbackCall = await callOpenRouterJsonDetailed({
+      prompt,
+      model: TRIAGE_EMERGENCY_FALLBACK_MODEL,
+      timeoutMs: triageTimeoutMs,
+      bodyReadTimeoutMs: triageTimeoutMs,
+    });
+    const fallbackRawResult = extractTriageRawResult({
+      call: fallbackCall,
+      model: TRIAGE_EMERGENCY_FALLBACK_MODEL,
+    });
+    if (!fallbackRawResult) {
+      return {
+        triage: conservativeTriageFallback(),
+        triageSource: "fallback" as TriageSource,
+        modelUsed: TRIAGE_EMERGENCY_FALLBACK_MODEL,
+        usedFallbackModel: true,
+        modelFallbackReason: `primary_retry_failed_fallback_failed:${primaryFailureCause ?? "unknown"}`,
+        primaryFailureCause,
+        fallbackFailureCause: fallbackCall.failureCause ?? "unknown",
+        rawResult: null,
+      };
     }
+    const fallbackParsed =
+      parseTriageGateResponse(fallbackRawResult) ?? parseLegacyGateAsTriage(fallbackRawResult);
+    if (!fallbackParsed) {
+      return {
+        triage: conservativeTriageFallback(),
+        triageSource: "failed_parse" as TriageSource,
+        modelUsed: TRIAGE_EMERGENCY_FALLBACK_MODEL,
+        usedFallbackModel: true,
+        modelFallbackReason: `primary_retry_failed_fallback_parse_error:${primaryFailureCause ?? "unknown"}`,
+        primaryFailureCause,
+        fallbackFailureCause: "parse_error",
+        rawResult: fallbackRawResult,
+      };
+    }
+    return {
+      triage: fallbackParsed,
+      triageSource: "model" as TriageSource,
+      modelUsed: TRIAGE_EMERGENCY_FALLBACK_MODEL,
+      usedFallbackModel: true,
+      modelFallbackReason: `primary_retry_failed_fallback_succeeded:${primaryFailureCause ?? "unknown"}`,
+      primaryFailureCause,
+      fallbackFailureCause: null,
+      rawResult: fallbackRawResult,
+    };
   }
 
   if (!triageRawResult) {
@@ -2216,8 +2322,8 @@ ${transcript}`;
       triageSource: "fallback" as TriageSource,
       modelUsed: TRIAGE_PRIMARY_MODEL,
       usedFallbackModel: false,
-      modelFallbackReason: call.failureCause ? `primary_failed_no_fallback:${call.failureCause}` : null,
-      primaryFailureCause: call.failureCause,
+      modelFallbackReason: primaryFailureCause ? `primary_failed_no_fallback:${primaryFailureCause}` : null,
+      primaryFailureCause,
       fallbackFailureCause: "no_fallback_configured",
       rawResult: null,
     };
@@ -4189,6 +4295,116 @@ function shouldHoldWitnessOnContinuation(params: {
   return true;
 }
 
+function hasConcreteNextActionCommitment(text: string) {
+  const lowered = normalizeWhitespace(text).toLowerCase();
+  if (!lowered) return false;
+  return /\b(i will|i'll|i am going to|i'm going to|next step is|i can do now|by (tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|this week i will)\b/i.test(
+    lowered
+  );
+}
+
+function inferClarityPhase(transcript: string, currentPhase: number) {
+  const lowered = normalizeWhitespace(transcript).toLowerCase();
+  let phase = Math.max(1, currentPhase);
+  if (
+    /\b(stuck|don'?t know where to start|too many things|what should i focus on|what moves the needle)\b/i.test(
+      lowered
+    )
+  ) {
+    phase = Math.max(phase, 1);
+  }
+  if (
+    /\b(blocked|avoid|avoiding|procrastinat|afraid|fear|time|bandwidth|energy|overwhelm|overloaded)\b/i.test(
+      lowered
+    )
+  ) {
+    phase = Math.max(phase, 2);
+  }
+  if (/\b(matters|important|why this matters|priority|priorities|value)\b/i.test(lowered)) {
+    phase = Math.max(phase, 3);
+  }
+  if (
+    /\b(next 7 days|this week|controllable|what i can control|within a week|next week)\b/i.test(
+      lowered
+    )
+  ) {
+    phase = Math.max(phase, 4);
+  }
+  if (hasConcreteNextActionCommitment(lowered)) {
+    phase = 5;
+  }
+  return phase;
+}
+
+async function loadClarityPersonaKernel() {
+  return loadCreativeKernelByFiles({
+    files: ["00_model_kernel.md", "10_identity_kernel.md", "30_product_kernel.md"],
+  });
+}
+
+function applyClarityBurstPolicy(params: {
+  transcript: string;
+  overlayPolicySkip: boolean;
+  safetyRiskOverride: boolean;
+  decisionParalysis: boolean;
+  capacity: TriageCapacity;
+  rupture: TriageRupture;
+  clarityBurstActive: boolean;
+  clarityPhase: number;
+}) {
+  const canRun =
+    !params.overlayPolicySkip &&
+    !params.safetyRiskOverride &&
+    params.capacity !== "LOW" &&
+    params.rupture === "NONE";
+  const commitmentDetected = hasConcreteNextActionCommitment(params.transcript);
+
+  if (params.clarityBurstActive && commitmentDetected) {
+    return {
+      shouldApply: false,
+      nextBurstActive: false,
+      nextPhase: 5,
+      resolved: true,
+      allowAccountabilityTug: true,
+      triggerReason: null as "clarity_decision_paralysis" | "clarity_burst_continue" | null,
+    };
+  }
+
+  if (!canRun) {
+    return {
+      shouldApply: false,
+      nextBurstActive: false,
+      nextPhase: Math.max(1, params.clarityPhase),
+      resolved: false,
+      allowAccountabilityTug: false,
+      triggerReason: null as "clarity_decision_paralysis" | "clarity_burst_continue" | null,
+    };
+  }
+
+  if (!(params.clarityBurstActive || params.decisionParalysis)) {
+    return {
+      shouldApply: false,
+      nextBurstActive: false,
+      nextPhase: Math.max(1, params.clarityPhase),
+      resolved: false,
+      allowAccountabilityTug: false,
+      triggerReason: null as "clarity_decision_paralysis" | "clarity_burst_continue" | null,
+    };
+  }
+
+  const nextPhase = inferClarityPhase(params.transcript, params.clarityPhase);
+  return {
+    shouldApply: true,
+    nextBurstActive: true,
+    nextPhase,
+    resolved: false,
+    allowAccountabilityTug: nextPhase >= 4,
+    triggerReason: (params.decisionParalysis
+      ? "clarity_decision_paralysis"
+      : "clarity_burst_continue") as "clarity_decision_paralysis" | "clarity_burst_continue",
+  };
+}
+
 type TacticEligibilityResult = {
   allowed: boolean;
   vetoReasons: string[];
@@ -4724,6 +4940,8 @@ export async function POST(request: NextRequest) {
     let recentOverlayKeys = overlayState.recentOverlayKeys ?? [];
     let stanceActive = overlayState.stanceActive ?? null;
     let stanceTurnsRemaining = overlayState.stanceTurnsRemaining ?? 0;
+    let clarityBurstActive = overlayState.clarityBurstActive ?? false;
+    let clarityPhase = Math.max(1, overlayState.clarityPhase ?? 1);
     let tierBurst: TierBurstState = overlayState.tierBurst ?? {
       activeId: null,
       remaining: 0,
@@ -4762,6 +4980,8 @@ export async function POST(request: NextRequest) {
       recentOverlayKeys = [];
       stanceActive = null;
       stanceTurnsRemaining = 0;
+      clarityBurstActive = false;
+      clarityPhase = 1;
       tierBurst = { activeId: null, remaining: 0, lastUsedAt: 0 };
       endearmentCooldownTurns = 0;
       cooldownTurnsRemaining = 0;
@@ -4935,6 +5155,8 @@ export async function POST(request: NextRequest) {
     let tacticEligibility: TacticEligibilityResult = { allowed: true, vetoReasons: [] };
     let curiosityContinuationAttempted = false;
     let curiosityContinuationBlockedByEligibility = false;
+    let clarityStanceFired = false;
+    let clarityResolved = false;
     const baseOverlayPolicy = shouldSkipOverlaySelection({
       intent: overlayIntent,
       isUrgent: effectiveSignals.isUrgent,
@@ -5337,6 +5559,29 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const clarityDecision = applyClarityBurstPolicy({
+      transcript: sttResult.transcript,
+      overlayPolicySkip: overlayPolicy.skip,
+      safetyRiskOverride,
+      decisionParalysis: triage.decision_paralysis,
+      capacity: triage.capacity,
+      rupture: triage.rupture,
+      clarityBurstActive,
+      clarityPhase,
+    });
+    clarityResolved = clarityDecision.resolved;
+    clarityBurstActive = clarityDecision.nextBurstActive;
+    clarityPhase = clarityDecision.nextPhase;
+    if (clarityDecision.shouldApply) {
+      stanceOverlayType = "clarity";
+      clarityStanceFired = true;
+      overlayTriggerReason = clarityDecision.triggerReason ?? overlayTriggerReason;
+      if (tacticOverlayType !== "accountability_tug" || !clarityDecision.allowAccountabilityTug) {
+        tacticOverlayType = "none";
+        overlayTopicKey = undefined;
+      }
+    }
+
     const probingTacticFired = isProbingTactic(tacticOverlayType);
     const tacticRegretCandidate =
       lastProbingTacticFired && (triage.rupture === "MILD" || triage.rupture === "STRONG");
@@ -5365,11 +5610,14 @@ export async function POST(request: NextRequest) {
       }
       tacticOverlayBlock = `[OVERLAY]\n${overlayText}`;
     }
-    const styleGuardBlock = buildStyleGuardBlock({
-      stance: stanceOverlayType,
-      endearmentCooldownTurns,
-      cooldownActive: cooldownTurnsRemaining > 0,
-    });
+    const styleGuardBlock =
+      stanceOverlayType === "clarity"
+        ? null
+        : buildStyleGuardBlock({
+            stance: stanceOverlayType,
+            endearmentCooldownTurns,
+            cooldownActive: cooldownTurnsRemaining > 0,
+          });
     const crisisResponseTemplateBlock = buildCrisisResponseTemplateBlock({ riskLevel });
     endearmentCooldownTurns = nextEndearmentCooldownTurns(endearmentCooldownTurns, stanceOverlayType);
 
@@ -5445,7 +5693,7 @@ export async function POST(request: NextRequest) {
         baseTier: tierDecision.tier,
         baseReason: tierDecision.reason,
         burstState: tierBurst,
-        stanceSelected: stanceOverlayType,
+        stanceSelected: stanceOverlayType === "clarity" ? "none" : stanceOverlayType,
         moment: routingMoment,
         intent: overlayIntent,
         topicHint: burstTopicHint,
@@ -5458,6 +5706,12 @@ export async function POST(request: NextRequest) {
       burstEventId = burstDecision.burstEventId;
       burstWasStarted = burstDecision.burstWasStarted;
       burstRemainingAfter = burstDecision.burstRemainingAfter;
+    }
+
+    if (stanceOverlayType === "clarity" && clarityBurstActive) {
+      tierForModel = "T3";
+      tierSelected = "T3";
+      routingReason = "clarity_stance_t3";
     }
 
     const model = getChatModelForTurn({ tier: tierForModel });
@@ -5482,6 +5736,8 @@ export async function POST(request: NextRequest) {
       recentOverlayKeys,
       stanceActive,
       stanceTurnsRemaining,
+      clarityBurstActive,
+      clarityPhase,
       tierBurst,
       endearmentCooldownTurns,
       cooldownTurnsRemaining,
@@ -5510,6 +5766,9 @@ export async function POST(request: NextRequest) {
             unknown_entity_detected: unknownEntityDetected,
             unknown_entity_name: unknownEntityName,
             entity_intro_fired: entityIntroFired,
+            clarity_stance_fired: clarityStanceFired,
+            clarity_burst_active: clarityBurstActive,
+            clarity_resolved: clarityResolved,
             cooldown_turns_remaining: cooldownTurnsRemaining,
             cooldown_last_reason: cooldownLastReason,
             cooldown_activated_reason: cooldownActivatedReason,
@@ -5557,8 +5816,13 @@ export async function POST(request: NextRequest) {
       signalPackBlock: governedContext.signalPackBlock,
     });
 
+    const personaKernelForTurn =
+      stanceOverlayType === "clarity" && persona.slug === "creative"
+        ? await loadClarityPersonaKernel()
+        : context.persona;
+
     const messages = buildChatMessages({
-      persona: context.persona,
+      persona: personaKernelForTurn,
       momentumGuardBlock: buildMomentumGuardBlock({
         intent: overlayIntent,
         posture,
@@ -5609,6 +5873,9 @@ export async function POST(request: NextRequest) {
           unknown_entity_detected: unknownEntityDetected,
           unknown_entity_name: unknownEntityName,
           entity_intro_fired: entityIntroFired,
+          clarity_stance_fired: clarityStanceFired,
+          clarity_burst_active: clarityBurstActive,
+          clarity_resolved: clarityResolved,
           overlaySkipReason,
           suppressionReason: overlaySuppressionReason,
         })
@@ -5690,6 +5957,9 @@ export async function POST(request: NextRequest) {
             unknown_entity_detected: unknownEntityDetected,
             unknown_entity_name: unknownEntityName,
             entity_intro_fired: entityIntroFired,
+            clarity_stance_fired: clarityStanceFired,
+            clarity_burst_active: clarityBurstActive,
+            clarity_resolved: clarityResolved,
             suppressionReason: overlaySuppressionReason,
             system_blocks: systemBlockOrder,
             startbrief_used: Boolean(context.startBrief?.used),
@@ -5854,6 +6124,9 @@ export async function POST(request: NextRequest) {
       unknownEntityDetected,
       unknownEntityName,
       entityIntroFired,
+      clarityStanceFired,
+      clarityBurstActive,
+      clarityResolved,
       startbrief: {
         used: Boolean(context.startBrief?.used),
         fallback: context.startBrief?.fallback ?? null,
@@ -6037,6 +6310,7 @@ export const __test__resolveEffectiveOverlaySignals = resolveEffectiveOverlaySig
 export const __test__detectTurnEntities = detectTurnEntities;
 export const __test__buildKnownEntitySet = buildKnownEntitySet;
 export const __test__shouldHoldWitnessOnContinuation = shouldHoldWitnessOnContinuation;
+export const __test__applyClarityBurstPolicy = applyClarityBurstPolicy;
 export const __test__evaluateTacticEligibility = evaluateTacticEligibility;
 export const __test__applyCooldownPolicy = applyCooldownPolicy;
 export const __test__buildBouncerAuthorityTraceFields = buildBouncerAuthorityTraceFields;
