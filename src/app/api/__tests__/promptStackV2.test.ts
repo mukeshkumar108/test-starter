@@ -67,8 +67,8 @@ async function main() {
 
   await runTest("style kernel reflection template no longer mandates a question fork", async () => {
     const style = await readFile(join(process.cwd(), "prompts/40_style_kernel.md"), "utf-8");
-    expect(style).toContain("\"It sounds like...\" / \"I hear that...\" / \"that must feel\" / \"you shared that\"");
-    expect(style).toContain("Generic reassurance. Name the specific thing or say nothing.");
+    expect(style).toContain("Skip the therapy-speak:");
+    expect(style).toContain("Generic reassurance is noise. Say the specific thing or say nothing.");
     expect(style).notToContain("Optionally ask one choice question.");
     expect(style).notToContain("Want to stay with that for a second, or take one tiny next step?");
   });
