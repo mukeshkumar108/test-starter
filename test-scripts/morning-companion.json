@@ -1,0 +1,8 @@
+{
+  "name": "morning-companion",
+  "userId": "cmkqxf72t0000lb04axesvlpx",
+  "turns": [
+    { "userMessage": "Hi Sophie" },
+    { "userMessage": "Just woke up, feeling okay" }
+  ]
+}

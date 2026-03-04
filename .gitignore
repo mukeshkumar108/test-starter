@@ -53,3 +53,7 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# local traces / generated prompt compiles
+/trace.json
+/prompts/system_prompt_kernels_00_40_compiled.txt

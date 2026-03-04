@@ -29,6 +29,7 @@
     "synth:prompt-assembly:v1": "pnpm tsx scripts/synth-prompt-assembly-v1.ts",
     "synth:prompt-assembly:v1:gap": "pnpm tsx scripts/synth-prompt-assembly-v1-gap.ts",
     "synth:semantic-match": "pnpm tsx scripts/synth-semantic-match.ts",
+    "synth:conversation-harness": "pnpm tsx scripts/synth-conversation-harness.ts",
     "test:entity-normalizer": "pnpm tsx src/lib/services/memory/__tests__/entityNormalizer.test.ts"
   },
   "dependencies": {
