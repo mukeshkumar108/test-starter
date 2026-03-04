@@ -1869,8 +1869,8 @@ const TRIAGE_PRIMARY_MODEL = "meta-llama/llama-3.1-8b-instruct";
 const TRIAGE_EMERGENCY_FALLBACK_MODEL = ROUTER_MODELS.PRIMARY;
 const ROUTER_PRIMARY_MODEL = ROUTER_MODELS.PRIMARY;
 const GATE_FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct";
-const TRIAGE_MAX_TIMEOUT_MS = 1500;
-const TRIAGE_BODY_READ_TIMEOUT_MS = 2000;
+const TRIAGE_MAX_TIMEOUT_MS = 2000;
+const TRIAGE_BODY_READ_TIMEOUT_MS = 4000;
 const ROUTER_MAX_TIMEOUT_MS = 1500;
 const ROUTER_MIN_BUDGET_MS = 500;
 
@@ -2272,7 +2272,7 @@ ${transcript}`;
       prompt,
       model: TRIAGE_EMERGENCY_FALLBACK_MODEL,
       timeoutMs: triageTimeoutMs,
-      bodyReadTimeoutMs: triageTimeoutMs,
+      bodyReadTimeoutMs: TRIAGE_BODY_READ_TIMEOUT_MS,
     });
     const fallbackRawResult = extractTriageRawResult({
       call: fallbackCall,
