@@ -98,6 +98,7 @@ async function main() {
     expect(trace.request_id).toBe("req-1");
     expect(trace.stanceSelected).toBe("none");
     expect(trace.tacticSelected).toBe("none");
+    expect(trace.checkin_tactic_fired).toBe(false);
     expect(trace.suppressionReason).toBe(null);
     expect(trace.overlaySkipReason).toBe(null);
     expect(trace.startbrief_used).toBe(true);

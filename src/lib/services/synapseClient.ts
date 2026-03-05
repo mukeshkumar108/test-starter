@@ -144,6 +144,7 @@ export type SynapseSignalPackClassName =
   | "identity"
   | "trajectory"
   | "habits"
+  | "stale_threads"
   | "today"
   | "open_loops"
   | "state"
@@ -435,6 +436,7 @@ function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPa
     identity: [],
     trajectory: [],
     habits: [],
+    stale_threads: [],
     today: [],
     open_loops: [],
     state: [],
@@ -457,6 +459,7 @@ function normalizeSynapseSignalsPackResponse(payload: unknown): SynapseSignalsPa
     "identity",
     "trajectory",
     "habits",
+    "stale_threads",
     "today",
     "open_loops",
     "state",

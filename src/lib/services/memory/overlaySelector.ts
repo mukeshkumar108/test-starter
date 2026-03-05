@@ -283,6 +283,7 @@ function selectBaseTactic(params: {
   userLastTugAt?: string | null;
   tugBackoff?: Record<string, string>;
   hasHighPriorityLoop?: boolean;
+  hasStaleThreads?: boolean;
   now?: Date;
 }) {
   const {
@@ -301,6 +302,7 @@ function selectBaseTactic(params: {
     userLastTugAt,
     tugBackoff,
     hasHighPriorityLoop,
+    hasStaleThreads,
     now,
   } = params;
 
@@ -333,6 +335,10 @@ function selectBaseTactic(params: {
 
   if (hasRelationshipCue && hasAngerCue && (hasPressureSignal || hasStateSignal)) {
     return { tacticOverlay: "conflict_regulation" as const, triggerReason: "conflict_regulation" as const };
+  }
+
+  if (!suppressNonEssentialOverlays && hasStaleThreads) {
+    return { tacticOverlay: "checkin" as const, triggerReason: "stale_threads_checkin" as const };
   }
 
   if (!suppressNonEssentialOverlays && !overlayUsed?.curiositySpiral) {
@@ -392,6 +398,7 @@ export function selectOverlay(params: {
   userLastTugAt?: string | null;
   tugBackoff?: Record<string, string>;
   hasHighPriorityLoop?: boolean;
+  hasStaleThreads?: boolean;
   now?: Date;
 }): OverlaySelectionDecision {
   if (!params.transcript.trim()) {
@@ -460,6 +467,13 @@ export function selectOverlay(params: {
         triggerReason: `${stanceDecision.reason}:paired_curiosity`,
       };
     }
+    if (baseTactic.tacticOverlay === "checkin") {
+      return {
+        stanceOverlay: "excavator",
+        tacticOverlay: "checkin",
+        triggerReason: `${stanceDecision.reason}:paired_checkin`,
+      };
+    }
     return {
       stanceOverlay: "excavator",
       tacticOverlay: "none",
@@ -480,6 +494,13 @@ export function selectOverlay(params: {
         topicKey: baseTactic.topicKey,
       };
     }
+    if (baseTactic.tacticOverlay === "checkin") {
+      return {
+        stanceOverlay: "repair_and_forward",
+        tacticOverlay: "checkin",
+        triggerReason: `${stanceDecision.reason}:paired_checkin`,
+      };
+    }
     return {
       stanceOverlay: "repair_and_forward",
       tacticOverlay: "none",
@@ -495,6 +516,13 @@ export function selectOverlay(params: {
         tacticOverlay: "accountability_tug",
         triggerReason: `${stanceDecision.reason}:paired_accountability`,
         topicKey: baseTactic.topicKey,
+      };
+    }
+    if (baseTactic.tacticOverlay === "checkin") {
+      return {
+        stanceOverlay: "high_standards_friend",
+        tacticOverlay: "checkin",
+        triggerReason: `${stanceDecision.reason}:paired_checkin`,
       };
     }
     return {

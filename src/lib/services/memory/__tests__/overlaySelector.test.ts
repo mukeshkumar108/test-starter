@@ -148,6 +148,20 @@ async function main() {
     expect(normalizeTopicKey(decision.topicKey ?? "")).toBe("finish proposal");
   });
 
+  await runTest("stale_threads can trigger checkin tactic", () => {
+    const decision = selectOverlay({
+      transcript: "quick update before work",
+      posture: "COMPANION",
+      conflictSignals: { pressure: "LOW", riskLevel: "LOW" },
+      overlayUsed: {},
+      openLoops: [],
+      commitments: [],
+      hasStaleThreads: true,
+      now: new Date("2026-02-22T12:00:00Z"),
+    });
+    expect(decision.tacticOverlay).toBe("checkin");
+  });
+
   const failed = results.filter((result) => !result.passed);
   if (failed.length > 0) {
     console.error("\nOverlay selector tests failed:");

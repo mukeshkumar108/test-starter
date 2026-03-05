@@ -204,6 +204,7 @@ async function main() {
           },
         ],
         trajectory: [],
+        stale_threads: [],
         today: [],
         open_loops: [
           {
@@ -846,6 +847,7 @@ async function main() {
       classes: {
         identity: [{ id: "sp-1", class: "identity", text: "Prefers concise responses.", sensitivity: "LOW" }],
         trajectory: [],
+        stale_threads: [],
         today: [],
         open_loops: [
           {

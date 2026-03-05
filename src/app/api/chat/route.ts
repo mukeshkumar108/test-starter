@@ -983,6 +983,7 @@ function buildChatTrace(params: {
   intent: OverlayIntent;
   stanceSelected: StanceOverlayType | "none";
   tacticSelected: TacticOverlayType | "none";
+  checkinTacticFired?: boolean;
   suppressionReason: string | null;
   overlaySelected: OverlayType | "none";
   overlaySkipReason: string | null;
@@ -1032,6 +1033,7 @@ function buildChatTrace(params: {
     intent: params.intent,
     stanceSelected: params.stanceSelected,
     tacticSelected: params.tacticSelected,
+    checkin_tactic_fired: Boolean(params.checkinTacticFired),
     suppressionReason: params.suppressionReason,
     overlaySelected: params.overlaySelected,
     overlaySkipReason: params.overlaySkipReason,
@@ -4579,6 +4581,7 @@ function resolvePolicySkipSelection(params: {
   hasTodayFocus: boolean;
   hasDailyReviewToday: boolean;
   hasWeeklyCompass: boolean;
+  hasStaleThreads: boolean;
   pressure: ConversationPressure;
   riskLevel: RiskLevel;
   mood: UserMood | null | undefined;
@@ -4603,6 +4606,7 @@ function resolvePolicySkipSelection(params: {
     hasTodayFocus: params.hasTodayFocus,
     hasDailyReviewToday: params.hasDailyReviewToday,
     hasWeeklyCompass: params.hasWeeklyCompass,
+    hasStaleThreads: params.hasStaleThreads,
     conflictSignals: {
       pressure: params.pressure,
       riskLevel: params.riskLevel,
@@ -4657,6 +4661,11 @@ function applyOpsSupplementalMutualExclusion(
 ) {
   if (supplementalContext) return null;
   return opsSnippetBlock;
+}
+
+function hasStaleThreadsSignal(signalPackBlock?: string | null) {
+  if (!signalPackBlock) return false;
+  return signalPackBlock.toLowerCase().includes("[stale_threads]");
 }
 
 function topLoopTextsFromPacket(packet?: SynapseStartBriefResponse) {
@@ -5212,6 +5221,7 @@ export async function POST(request: NextRequest) {
       weekStartKey,
       weeklyNorthStarWeekStartDate: overlayUser.weeklyNorthStarWeekStartDate,
     });
+    const hasStaleThreads = hasStaleThreadsSignal(context.signalPackBlock ?? null);
 
     if (pendingFocusCapture && overlayUser.todayFocusDate !== dayKey) {
       const parsed = extractTodayFocus(sttResult.transcript);
@@ -5301,6 +5311,7 @@ export async function POST(request: NextRequest) {
         hasTodayFocus: overlayUser.todayFocusDate === dayKey,
         hasDailyReviewToday,
         hasWeeklyCompass,
+        hasStaleThreads,
         pressure,
         riskLevel,
         mood: userState?.mood,
@@ -5437,6 +5448,7 @@ export async function POST(request: NextRequest) {
         hasTodayFocus: overlayUser.todayFocusDate === dayKey,
         hasDailyReviewToday,
         hasWeeklyCompass,
+        hasStaleThreads,
         conflictSignals: {
           pressure,
           riskLevel,
@@ -5576,7 +5588,10 @@ export async function POST(request: NextRequest) {
       stanceOverlayType = "clarity";
       clarityStanceFired = true;
       overlayTriggerReason = clarityDecision.triggerReason ?? overlayTriggerReason;
-      if (tacticOverlayType !== "accountability_tug" || !clarityDecision.allowAccountabilityTug) {
+      const allowTacticWithClarity =
+        tacticOverlayType === "checkin" ||
+        (tacticOverlayType === "accountability_tug" && clarityDecision.allowAccountabilityTug);
+      if (!allowTacticWithClarity) {
         tacticOverlayType = "none";
         overlayTopicKey = undefined;
       }
@@ -5758,6 +5773,7 @@ export async function POST(request: NextRequest) {
           memoryQuery: {
             stanceSelected: stanceOverlayType,
             tacticSelected: tacticOverlayType,
+            checkin_tactic_fired: tacticOverlayType === "checkin",
             triggerReason: overlayTriggerReason,
             suppressionReason: overlaySuppressionReason,
             overlayTurnCount,
@@ -6118,6 +6134,7 @@ export async function POST(request: NextRequest) {
       intent: overlayIntent,
       stanceSelected: stanceOverlayType,
       tacticSelected: tacticOverlayType,
+      checkinTacticFired: tacticOverlayType === "checkin",
       suppressionReason: overlaySuppressionReason,
       overlaySelected: tacticOverlayType,
       overlaySkipReason,
