@@ -54,10 +54,18 @@ function verifyJwtWithKey(token: string, key: string) {
   if (parts.length !== 3) return false;
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
   const signingInput = `${encodedHeader}.${encodedPayload}`;
-  const expectedSignature = toBase64Url(
-    crypto.createHmac("sha256", Buffer.from(key, "base64")).update(signingInput).digest()
-  );
-  return safeEqual(encodedSignature, expectedSignature);
+  const keyCandidates: Buffer[] = [Buffer.from(key, "utf8")];
+  const maybeDecoded = fromBase64Url(key);
+  if (maybeDecoded.length > 0 && !safeEqual(toBase64Url(maybeDecoded), toBase64Url(Buffer.from(key, "utf8")))) {
+    keyCandidates.push(maybeDecoded);
+  }
+
+  return keyCandidates.some((secret) => {
+    const expectedSignature = toBase64Url(
+      crypto.createHmac("sha256", secret).update(signingInput).digest()
+    );
+    return safeEqual(encodedSignature, expectedSignature);
+  });
 }
 
 async function verifyQstashSignature(request: NextRequest) {
