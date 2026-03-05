@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "node:crypto";
 import { env } from "@/env";
 import { closeInactiveSessionsBatch } from "@/lib/services/session/sessionService";
 
@@ -21,18 +22,96 @@ function getCloseInactiveSessionsBatch() {
   return typeof override === "function" ? override : closeInactiveSessionsBatch;
 }
 
+function toBase64Url(input: Buffer | string) {
+  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  return buffer
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function fromBase64Url(input: string) {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = normalized.length % 4;
+  const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
+  return Buffer.from(padded, "base64");
+}
+
+function safeEqual(a: string, b: string) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function bodyHashBase64Url(body: string) {
+  return toBase64Url(crypto.createHash("sha256").update(body).digest());
+}
+
+function verifyJwtWithKey(token: string, key: string) {
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  const [encodedHeader, encodedPayload, encodedSignature] = parts;
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const expectedSignature = toBase64Url(
+    crypto.createHmac("sha256", Buffer.from(key, "base64")).update(signingInput).digest()
+  );
+  return safeEqual(encodedSignature, expectedSignature);
+}
+
+async function verifyQstashSignature(request: NextRequest) {
+  const signatureHeader = request.headers.get("upstash-signature");
+  const currentKey = env.QSTASH_CURRENT_SIGNING_KEY;
+  const nextKey = env.QSTASH_NEXT_SIGNING_KEY;
+  const keys = [currentKey, nextKey].filter((value): value is string => Boolean(value));
+  if (!signatureHeader || keys.length === 0) {
+    return false;
+  }
+
+  const token = signatureHeader.toLowerCase().startsWith("bearer ")
+    ? signatureHeader.slice(7).trim()
+    : signatureHeader.trim();
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  const [encodedHeader, encodedPayload] = parts;
+
+  let header: { alg?: string; typ?: string } | null = null;
+  let payload: { iss?: string; sub?: string; exp?: number; nbf?: number; body?: string } | null = null;
+  try {
+    header = JSON.parse(fromBase64Url(encodedHeader).toString("utf8"));
+    payload = JSON.parse(fromBase64Url(encodedPayload).toString("utf8"));
+  } catch {
+    return false;
+  }
+
+  if (!header || header.alg !== "HS256") return false;
+  if (!payload || payload.iss !== "Upstash" || payload.sub !== request.url) return false;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.nbf !== "number" || payload.nbf > now) return false;
+  if (typeof payload.exp !== "number" || payload.exp <= now) return false;
+
+  const body = await request.text();
+  if (typeof payload.body !== "string" || !safeEqual(payload.body, bodyHashBase64Url(body))) {
+    return false;
+  }
+
+  return keys.some((key) => verifyJwtWithKey(token, key));
+}
+
 async function handleSweep(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
   const secret = request.headers.get("x-admin-secret");
   const isAdminAuthorized = Boolean(env.ADMIN_SECRET && secret && secret === env.ADMIN_SECRET);
   const isVercelCron = request.headers.get("x-vercel-cron") === "1";
-  if (!isAdminAuthorized && !isVercelCron) {
-    if (!env.ADMIN_SECRET) {
+  const isQstashAuthorized = await verifyQstashSignature(request);
+  if (!isAdminAuthorized && !isVercelCron && !isQstashAuthorized) {
+    if (!env.ADMIN_SECRET && !env.QSTASH_CURRENT_SIGNING_KEY && !env.QSTASH_NEXT_SIGNING_KEY) {
       return new NextResponse("Not Found", { status: 404 });
     }
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { searchParams } = new URL(request.url);
   const inactivityMinutes = parsePositiveInt(searchParams.get("inactivityMinutes"), 10);
   const limit = parsePositiveInt(searchParams.get("limit"), 100);
   const dryRun = parseBoolean(searchParams.get("dryRun"));

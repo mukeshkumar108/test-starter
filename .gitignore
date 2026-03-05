@@ -57,3 +57,6 @@ next-env.d.ts
 # local traces / generated prompt compiles
 /trace.json
 /prompts/system_prompt_kernels_00_40_compiled.txt
+
+# local runtime/toolchain bootstrap
+/.tools
