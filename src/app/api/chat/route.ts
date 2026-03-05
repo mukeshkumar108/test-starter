@@ -3377,17 +3377,19 @@ function buildContextGovernorSelection(params: {
   signalLines.forEach((line, index) => {
     const classMatch = line.match(/^\[([a-z_]+)\]\s+/i);
     const className = classMatch?.[1]?.toLowerCase() ?? null;
-    if (hasHandover && (className === "open_loops" || className === "today")) {
+    if (hasHandover && (className === "open_loops" || className === "today" || className === "momentum")) {
       droppedByReason.precedence += 1;
       return;
     }
     let score = 70;
     if (isTaskTurn) {
       if (className === "open_loops" || className === "today" || className === "trajectory") score += 15;
+      if (className === "momentum") score -= 12;
       if (className === "state" || className === "relationships") score -= 5;
     }
     if (isRelationalTurn) {
       if (className === "state" || className === "relationships" || className === "identity") score += 15;
+      if (className === "momentum") score -= 12;
       if (className === "today") score -= 8;
     }
     if (params.stance === "witness" && params.pressure === "HIGH") {
