@@ -49,6 +49,16 @@ function bodyHashBase64Url(body: string) {
   return toBase64Url(crypto.createHash("sha256").update(body).digest());
 }
 
+function isSamePathAndQuery(urlA: string, urlB: string) {
+  try {
+    const a = new URL(urlA);
+    const b = new URL(urlB);
+    return a.pathname === b.pathname && a.search === b.search;
+  } catch {
+    return false;
+  }
+}
+
 function verifyJwtWithKey(token: string, key: string) {
   const parts = token.split(".");
   if (parts.length !== 3) return false;
@@ -94,7 +104,13 @@ async function verifyQstashSignature(request: NextRequest) {
   }
 
   if (!header || header.alg !== "HS256") return false;
-  if (!payload || payload.iss !== "Upstash" || payload.sub !== request.url) return false;
+  if (!payload || payload.iss !== "Upstash") return false;
+  if (typeof payload.sub !== "string") return false;
+  // QStash can sign against a canonical destination URL that may differ in host
+  // (for example after redirects or domain aliases). Enforce route+query match.
+  if (!(payload.sub === request.url || isSamePathAndQuery(payload.sub, request.url))) {
+    return false;
+  }
   const now = Math.floor(Date.now() / 1000);
   if (typeof payload.nbf !== "number" || payload.nbf > now) return false;
   if (typeof payload.exp !== "number" || payload.exp <= now) return false;

@@ -175,6 +175,31 @@ async function main() {
     expect(payload.result.closed).toBe(3);
   });
 
+  await runTest("accepts Upstash-Signature when host differs but path/query match", async () => {
+    (env as any).ADMIN_SECRET = "secret-123";
+    (env as any).QSTASH_CURRENT_SIGNING_KEY = currentSigningKey;
+    (env as any).QSTASH_NEXT_SIGNING_KEY = nextSigningKey;
+    (globalThis as any).__closeInactiveSessionsBatchOverride = async () => ({
+      cutoffIso: "2026-02-28T00:00:00.000Z",
+      scanned: 2,
+      closed: 2,
+      skippedRace: 0,
+      sessions: [],
+    });
+    const signedUrl = "https://test-starter-kappa.vercel.app/api/admin/run-session-sweeper?limit=50";
+    const requestUrl = "https://www.example.com/api/admin/run-session-sweeper?limit=50";
+    const token = signQstashToken(signedUrl, "", currentSigningKey);
+    const response = await GET(
+      makeRequest(requestUrl, {
+        "upstash-signature": token,
+      })
+    );
+    const payload = await response.json();
+    delete (globalThis as any).__closeInactiveSessionsBatchOverride;
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
+  });
+
   await runTest("rejects invalid Upstash-Signature", async () => {
     (env as any).ADMIN_SECRET = "secret-123";
     (env as any).QSTASH_CURRENT_SIGNING_KEY = currentSigningKey;
