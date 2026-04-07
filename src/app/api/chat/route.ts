@@ -5844,67 +5844,11 @@ export async function POST(request: NextRequest) {
       stanceOverlayType === "clarity" && persona.slug === "creative"
         ? await loadClarityPersonaKernel()
         : context.persona;
-
-    const messages = buildChatMessages({
-      persona: personaKernelForTurn,
-      momentumGuardBlock: buildMomentumGuardBlock({
-        intent: overlayIntent,
-        posture,
-        localHour: zoned.hour,
-      }),
-      styleGuardBlock,
-      crisisResponseTemplateBlock,
-      userContextBlock: governedContext.userContextBlock,
-      signalPackBlock: governedContext.signalPackBlock,
-      stanceOverlayBlock,
-      tacticOverlayBlock,
-      bridgeBlock: governedContext.bridgeBlock,
-      userNarrativeBlock,
-      handoverBlock: governedContext.handoverBlock,
-      entityProfileBlocks,
-      opsSnippetBlock: governedContext.opsSnippetBlock,
-      supplementalContext,
-      rollingSummary,
-      recentMessages: context.recentMessages,
-      transcript: sttResult.transcript,
+    const momentumGuardBlock = buildMomentumGuardBlock({
+      intent: overlayIntent,
       posture,
-      pressure,
-      userState,
+      localHour: zoned.hour,
     });
-
-    const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
-    if (totalChars > 20000) {
-      console.warn(
-        "[chat.prompt.warn]",
-        JSON.stringify({
-          trace_id: traceId,
-          userId: user.id,
-          personaId,
-          totalChars,
-          messageCount: messages.length,
-          counts: {
-            recentMessages: context.recentMessages.length,
-            situationalContext: 0,
-            supplementalContext: supplementalContext ? 1 : 0,
-            rollingSummary: rollingSummary ? 1 : 0,
-          },
-          chosenModel: model,
-          risk_level: riskLevel,
-          intent: overlayIntent,
-          stanceSelected: stanceOverlayType,
-          tacticSelected: tacticOverlayType,
-          overlaySelected: tacticOverlayType,
-          unknown_entity_detected: unknownEntityDetected,
-          unknown_entity_name: unknownEntityName,
-          entity_intro_fired: entityIntroFired,
-          clarity_stance_fired: clarityStanceFired,
-          clarity_burst_active: clarityBurstActive,
-          clarity_resolved: clarityResolved,
-          overlaySkipReason,
-          suppressionReason: overlaySuppressionReason,
-        })
-      );
-    }
 
     const debugEnabled =
       env.FEATURE_CONTEXT_DEBUG === "true" &&
@@ -5940,42 +5884,12 @@ export async function POST(request: NextRequest) {
     };
 
     let debugPayload: Record<string, unknown> | undefined;
-    if (debugEnabled && !chatOrchestratorV2Enabled) {
-      debugPayload = {
-        contextBlocks: {
-          persona: context.persona,
-          situationalContext: null,
-          supplementalContext,
-          rollingSummary,
-        },
-        startBrief: context.startBrief ?? null,
-        composedPrompt: promptDebugEnabled
-          ? {
-              chosenModel: model,
-              messages,
-            }
-          : undefined,
-      };
-    }
-
-    const systemBlockOrder = [
-      "persona",
-      ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
-      ...(governedContext.userContextBlock ? ["user_context"] : []),
-      ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
-      ...(stanceOverlayBlock ? ["stance_overlay"] : []),
-      ...(tacticOverlayBlock ? ["overlay"] : []),
-      ...(governedContext.bridgeBlock ? ["bridge"] : []),
-      ...(userNarrativeBlock ? ["user_narrative"] : []),
-      ...(governedContext.handoverBlock ? ["handover"] : []),
-      ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
-      ...(governedContext.opsSnippetBlock ? ["ops"] : []),
-      ...(supplementalContext ? ["supplemental"] : []),
-      ...(rollingSummary ? ["conversation_history"] : []),
-    ];
 
     let assistantResponseText: string;
-    let promptPacketMessages = tracePromptPacket ? messages : undefined;
+    let promptPacketMessages:
+      | Array<{ role: "user" | "assistant" | "system"; content: string }>
+      | undefined;
+    let systemBlockOrder: string[] = [];
     let generationMetadata:
       | {
           providerUsed: "openrouter" | "openai" | "safe_text";
@@ -5985,28 +5899,69 @@ export async function POST(request: NextRequest) {
           finalSafeTextUsed: boolean;
         }
       | undefined;
+    let turnResult:
+      | Awaited<ReturnType<typeof runAssistantTurn>>
+      | undefined;
 
     if (chatOrchestratorV2Enabled) {
-      const turnResult = await runAssistantTurn({
+      turnResult = await runAssistantTurn({
         executionContext,
         prompt: {
-          messages,
-          chosenModel: model,
-          personaSlug: persona.slug,
-          systemBlockOrder,
+          persona: personaKernelForTurn,
+          momentumGuardBlock,
+          styleGuardBlock,
+          crisisResponseTemplateBlock,
+          userContextBlock: governedContext.userContextBlock,
+          signalPackBlock: governedContext.signalPackBlock,
+          stanceOverlayBlock,
+          tacticOverlayBlock,
+          bridgeBlock: governedContext.bridgeBlock,
+          userNarrativeBlock,
+          handoverBlock: governedContext.handoverBlock,
+          entityProfileBlocks,
+          opsSnippetBlock: governedContext.opsSnippetBlock,
           supplementalContext,
           rollingSummary,
+          recentMessages: context.recentMessages,
+          transcript: sttResult.transcript,
+          chosenModel: model,
+          personaSlug: persona.slug,
           debugContextBlocks: {
             persona: context.persona,
             situationalContext: null,
             supplementalContext,
             rollingSummary,
           },
+          promptWarningMeta: {
+            userId: user.id,
+            personaId,
+            riskLevel,
+            intent: overlayIntent,
+            stanceSelected: stanceOverlayType,
+            tacticSelected: tacticOverlayType,
+            overlaySelected: tacticOverlayType,
+            unknownEntityDetected,
+            unknownEntityName,
+            entityIntroFired,
+            clarityStanceFired,
+            clarityBurstActive,
+            clarityResolved,
+            overlaySkipReason,
+            suppressionReason: overlaySuppressionReason,
+          },
+          traceMetadata: {
+            startbriefUsed: Boolean(context.startBrief?.used),
+            startbriefFallback: context.startBrief?.fallback ?? null,
+            startbriefItemsCount: context.startBrief?.itemsCount ?? 0,
+            bridgeTextChars: context.startBrief?.bridgeTextChars ?? 0,
+            contextGovernor: governedContext.runtime,
+          },
         },
       });
       assistantResponseText = turnResult.assistantText;
       timings.orchestration_ms = turnResult.timings.orchestration_ms;
       timings.llm_ms = turnResult.timings.llm_ms;
+      systemBlockOrder = turnResult.promptMetadata.systemBlockOrder;
       debugPayload = turnResult.debugPayload
         ? {
             ...turnResult.debugPayload,
@@ -6016,10 +5971,99 @@ export async function POST(request: NextRequest) {
       promptPacketMessages = turnResult.messages ?? promptPacketMessages;
       generationMetadata = turnResult.generation;
     } else {
+      const messages = buildChatMessages({
+        persona: personaKernelForTurn,
+        momentumGuardBlock,
+        styleGuardBlock,
+        crisisResponseTemplateBlock,
+        userContextBlock: governedContext.userContextBlock,
+        signalPackBlock: governedContext.signalPackBlock,
+        stanceOverlayBlock,
+        tacticOverlayBlock,
+        bridgeBlock: governedContext.bridgeBlock,
+        userNarrativeBlock,
+        handoverBlock: governedContext.handoverBlock,
+        entityProfileBlocks,
+        opsSnippetBlock: governedContext.opsSnippetBlock,
+        supplementalContext,
+        rollingSummary,
+        recentMessages: context.recentMessages,
+        transcript: sttResult.transcript,
+        posture,
+        pressure,
+        userState,
+      });
+      const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+      if (totalChars > 20000) {
+        console.warn(
+          "[chat.prompt.warn]",
+          JSON.stringify({
+            trace_id: traceId,
+            userId: user.id,
+            personaId,
+            totalChars,
+            messageCount: messages.length,
+            counts: {
+              recentMessages: context.recentMessages.length,
+              situationalContext: 0,
+              supplementalContext: supplementalContext ? 1 : 0,
+              rollingSummary: rollingSummary ? 1 : 0,
+            },
+            chosenModel: model,
+            risk_level: riskLevel,
+            intent: overlayIntent,
+            stanceSelected: stanceOverlayType,
+            tacticSelected: tacticOverlayType,
+            overlaySelected: tacticOverlayType,
+            unknown_entity_detected: unknownEntityDetected,
+            unknown_entity_name: unknownEntityName,
+            entity_intro_fired: entityIntroFired,
+            clarity_stance_fired: clarityStanceFired,
+            clarity_burst_active: clarityBurstActive,
+            clarity_resolved: clarityResolved,
+            overlaySkipReason,
+            suppressionReason: overlaySuppressionReason,
+          })
+        );
+      }
+      if (debugEnabled) {
+        debugPayload = {
+          contextBlocks: {
+            persona: context.persona,
+            situationalContext: null,
+            supplementalContext,
+            rollingSummary,
+          },
+          startBrief: context.startBrief ?? null,
+          composedPrompt: promptDebugEnabled
+            ? {
+                chosenModel: model,
+                messages,
+              }
+            : undefined,
+        };
+      }
+      systemBlockOrder = [
+        "persona",
+        ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
+        ...(governedContext.userContextBlock ? ["user_context"] : []),
+        ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
+        ...(stanceOverlayBlock ? ["stance_overlay"] : []),
+        ...(tacticOverlayBlock ? ["overlay"] : []),
+        ...(governedContext.bridgeBlock ? ["bridge"] : []),
+        ...(userNarrativeBlock ? ["user_narrative"] : []),
+        ...(governedContext.handoverBlock ? ["handover"] : []),
+        ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
+        ...(governedContext.opsSnippetBlock ? ["ops"] : []),
+        ...(supplementalContext ? ["supplemental"] : []),
+        ...(rollingSummary ? ["conversation_history"] : []),
+      ];
+      promptPacketMessages = tracePromptPacket ? messages : undefined;
       const llmResponse = await generateResponse(messages, persona.slug, model);
       assistantResponseText = llmResponse.content;
       timings.llm_ms = llmResponse.duration_ms;
     }
+    const tracePromptMetadata = turnResult?.tracePromptMetadata;
 
     if (tracePromptPacket) {
       void prisma.librarianTrace.create({
@@ -6052,18 +6096,30 @@ export async function POST(request: NextRequest) {
             clarity_burst_active: clarityBurstActive,
             clarity_resolved: clarityResolved,
             suppressionReason: overlaySuppressionReason,
-            system_blocks: systemBlockOrder,
-            startbrief_used: Boolean(context.startBrief?.used),
-            startbrief_fallback: context.startBrief?.fallback ?? null,
-            startbrief_items_count: context.startBrief?.itemsCount ?? 0,
-            bridgeText_chars: context.startBrief?.bridgeTextChars ?? 0,
-            context_governor_used: governedContext.runtime.used,
-            context_governor_budget_chars: governedContext.runtime.budget_chars,
-            context_governor_candidates_total: governedContext.runtime.candidates_total,
-            context_governor_selected_total: governedContext.runtime.selected_total,
-            context_governor_selected_by_source: governedContext.runtime.selected_by_source,
-            context_governor_dropped_by_reason: governedContext.runtime.dropped_by_reason,
-            context_governor_selected_keys: governedContext.runtime.selected_keys,
+            system_blocks: tracePromptMetadata?.system_blocks ?? systemBlockOrder,
+            startbrief_used: tracePromptMetadata?.startbrief_used ?? Boolean(context.startBrief?.used),
+            startbrief_fallback:
+              tracePromptMetadata?.startbrief_fallback ?? context.startBrief?.fallback ?? null,
+            startbrief_items_count:
+              tracePromptMetadata?.startbrief_items_count ?? context.startBrief?.itemsCount ?? 0,
+            bridgeText_chars:
+              tracePromptMetadata?.bridgeText_chars ?? context.startBrief?.bridgeTextChars ?? 0,
+            context_governor_used:
+              tracePromptMetadata?.context_governor_used ?? governedContext.runtime.used,
+            context_governor_budget_chars:
+              tracePromptMetadata?.context_governor_budget_chars ?? governedContext.runtime.budget_chars,
+            context_governor_candidates_total:
+              tracePromptMetadata?.context_governor_candidates_total ?? governedContext.runtime.candidates_total,
+            context_governor_selected_total:
+              tracePromptMetadata?.context_governor_selected_total ?? governedContext.runtime.selected_total,
+            context_governor_selected_by_source:
+              tracePromptMetadata?.context_governor_selected_by_source ??
+              governedContext.runtime.selected_by_source,
+            context_governor_dropped_by_reason:
+              tracePromptMetadata?.context_governor_dropped_by_reason ??
+              governedContext.runtime.dropped_by_reason,
+            context_governor_selected_keys:
+              tracePromptMetadata?.context_governor_selected_keys ?? governedContext.runtime.selected_keys,
             triage_output: triage,
             triage_source: triageSource,
             posture_source: postureSource,
