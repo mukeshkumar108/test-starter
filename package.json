@@ -33,11 +33,13 @@
     "test:entity-normalizer": "pnpm tsx src/lib/services/memory/__tests__/entityNormalizer.test.ts"
   },
   "dependencies": {
-    "@clerk/nextjs": "^6.36.7",
     "@ai-sdk/openai": "^2.0.40",
+    "@clerk/nextjs": "^6.36.7",
+    "@mastra/core": "^1.23.0",
     "@prisma/client": "6.15.0",
     "@vercel/blob": "^2.0.0",
     "ai": "^6.0.149",
+    "mastra": "^1.4.0",
     "next": "16.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",

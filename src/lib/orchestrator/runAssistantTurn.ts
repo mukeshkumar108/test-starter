@@ -1,6 +1,7 @@
 import { aiSdkCompletion, type AISDKMessage } from "@/lib/llm/aiSdkCompletion";
 import { loadCreativeKernelByFiles } from "@/lib/prompts/personaPromptLoader";
 import type { SynapseStartBriefResponse } from "@/lib/services/synapseClient";
+import { runMastraTurn } from "@/mastra/runMastraTurn";
 
 const CONTEXT_GOVERNOR_MAX_CHARS = 999999;
 
@@ -40,6 +41,7 @@ export type AssistantExecutionContext = {
     librarianTraceEnabled: boolean;
     chatOrchestratorV2Enabled: boolean;
     chatOrchestratorV2ParityEnabled: boolean;
+    mastraEnabled: boolean;
   };
   parityMode: {
     enabled: boolean;
@@ -578,7 +580,7 @@ function buildEntityProfileBlocks(params: {
   return blocks;
 }
 
-export async function runAssistantTurn(params: {
+async function runCustomAssistantTurn(params: {
   executionContext: AssistantExecutionContext;
   prompt: AssistantTurnPromptPayload;
 }) {
@@ -759,4 +761,167 @@ export async function runAssistantTurn(params: {
       : {}),
     ...(debugPayload ? { debugPayload } : {}),
   } satisfies AssistantTurnResult;
+}
+
+export async function runAssistantTurn(params: {
+  executionContext: AssistantExecutionContext;
+  prompt: AssistantTurnPromptPayload;
+}) {
+  const orchestrationStartedAt = Date.now();
+  const userContextBlock = buildUserContextBlock(params.prompt.userContextLines);
+  const signalPackBlock = shouldInjectSignalPack({
+    signalPackBlock: params.prompt.signalPackSourceBlock ?? null,
+    isSessionStart: params.prompt.isSessionStart,
+    intent: params.prompt.intent,
+    posture: params.prompt.posture,
+    pressure: params.prompt.pressure,
+    stance: params.prompt.stanceSelected,
+    riskLevel: params.prompt.riskLevel,
+    isUrgent: params.prompt.isUrgent,
+  })
+    ? params.prompt.signalPackSourceBlock ?? null
+    : null;
+  const governedContext = buildContextGovernorSelection({
+    userContextBlock,
+    signalPackBlock,
+    bridgeBlock: params.prompt.bridgeBlock,
+    handoverBlock: params.prompt.handoverBlock,
+    opsSnippetBlock: params.prompt.opsSnippetBlock,
+    intent: params.prompt.intent,
+    posture: params.prompt.posture,
+    pressure: params.prompt.pressure,
+    stance: params.prompt.stanceSelected,
+    riskLevel: params.prompt.riskLevel,
+  });
+  const entityProfileBlocks = buildEntityProfileBlocks({
+    packet: params.prompt.startbriefPacket,
+    handoverBlock: governedContext.handoverBlock,
+    signalPackBlock: governedContext.signalPackBlock,
+  });
+  const personaKernelForTurn =
+    params.prompt.stanceSelected === "clarity" && params.prompt.personaSlug === "creative"
+      ? await loadClarityPersonaKernel()
+      : params.prompt.persona;
+  const momentumGuardBlock = buildMomentumGuardBlock({
+    intent: params.prompt.intent,
+    posture: params.prompt.posture,
+    localHour: params.prompt.localHour,
+  });
+  const styleGuardBlock =
+    params.prompt.stanceSelected === "clarity"
+      ? null
+      : buildStyleGuardBlock({
+          stance: params.prompt.stanceSelected,
+          endearmentCooldownTurns: params.prompt.endearmentCooldownTurns,
+          cooldownActive: params.prompt.cooldownActive,
+        });
+  const crisisResponseTemplateBlock = buildCrisisResponseTemplateBlock({
+    riskLevel: params.prompt.riskLevel,
+  });
+  const promptForMessages = {
+    ...params.prompt,
+    persona: personaKernelForTurn,
+    momentumGuardBlock,
+    styleGuardBlock,
+    crisisResponseTemplateBlock,
+    userContextBlock: governedContext.userContextBlock,
+    signalPackBlock: governedContext.signalPackBlock,
+    bridgeBlock: governedContext.bridgeBlock,
+    handoverBlock: governedContext.handoverBlock,
+    entityProfileBlocks,
+    opsSnippetBlock: governedContext.opsSnippetBlock,
+  };
+  const messages = buildChatMessages(promptForMessages);
+  const systemBlockOrder = [
+    "persona",
+    ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
+    ...(governedContext.userContextBlock ? ["user_context"] : []),
+    ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
+    ...(params.prompt.stanceOverlayBlock ? ["stance_overlay"] : []),
+    ...(params.prompt.tacticOverlayBlock ? ["overlay"] : []),
+    ...(governedContext.bridgeBlock ? ["bridge"] : []),
+    ...(params.prompt.userNarrativeBlock ? ["user_narrative"] : []),
+    ...(governedContext.handoverBlock ? ["handover"] : []),
+    ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
+    ...(governedContext.opsSnippetBlock ? ["ops"] : []),
+    ...(params.prompt.supplementalContext ? ["supplemental"] : []),
+    ...(params.prompt.rollingSummary ? ["conversation_history"] : []),
+  ];
+
+  if (params.executionContext.featureFlags.mastraEnabled) {
+    try {
+      const mastraTurn = await runMastraTurn({
+        userId: params.prompt.promptWarningMeta.userId,
+        requestId: params.executionContext.requestId,
+        now: params.executionContext.now,
+        chosenModel: params.prompt.chosenModel,
+        instructions: personaKernelForTurn,
+        messages,
+      });
+
+      let debugPayload: Record<string, unknown> | undefined;
+      if (params.executionContext.debugContextEnabled) {
+        debugPayload = {
+          contextBlocks: params.prompt.debugContextBlocks ?? null,
+          composedPrompt: params.executionContext.debugPromptEnabled
+            ? {
+                chosenModel: params.prompt.chosenModel,
+                messages,
+              }
+            : undefined,
+          mastra: {
+            used: true,
+            toolCalls: mastraTurn.toolCalls,
+            toolResults: mastraTurn.toolResults,
+          },
+        };
+      }
+
+      return {
+        assistantText: mastraTurn.assistantText,
+        chosenModel: params.prompt.chosenModel,
+        timings: {
+          orchestration_ms: Math.max(0, Date.now() - orchestrationStartedAt),
+          llm_ms: mastraTurn.llm_ms,
+        },
+        generation: {
+          providerUsed: "openrouter",
+          modelUsed: params.prompt.chosenModel,
+          fallbackUsed: false,
+          emergencyUsed: false,
+          finalSafeTextUsed: false,
+        },
+        promptMetadata: {
+          systemBlockOrder,
+        },
+        tracePromptMetadata: {
+          system_blocks: systemBlockOrder,
+          startbrief_used: params.prompt.traceMetadata.startbriefUsed,
+          startbrief_fallback: params.prompt.traceMetadata.startbriefFallback,
+          startbrief_items_count: params.prompt.traceMetadata.startbriefItemsCount,
+          bridgeText_chars: params.prompt.traceMetadata.bridgeTextChars,
+          context_governor_used: governedContext.runtime.used,
+          context_governor_budget_chars: governedContext.runtime.budget_chars,
+          context_governor_candidates_total: governedContext.runtime.candidates_total,
+          context_governor_selected_total: governedContext.runtime.selected_total,
+          context_governor_selected_by_source: governedContext.runtime.selected_by_source,
+          context_governor_dropped_by_reason: governedContext.runtime.dropped_by_reason,
+          context_governor_selected_keys: governedContext.runtime.selected_keys,
+        },
+        ...(params.executionContext.debugPromptEnabled || params.executionContext.tracePromptPacket
+          ? { messages }
+          : {}),
+        ...(debugPayload ? { debugPayload } : {}),
+      } satisfies AssistantTurnResult;
+    } catch (error) {
+      console.warn("[mastra.turn.error]", {
+        requestId: params.executionContext.requestId,
+        traceId: params.executionContext.traceId,
+        model: params.prompt.chosenModel,
+        error,
+      });
+    }
+  }
+
+  return runCustomAssistantTurn(params);
 }

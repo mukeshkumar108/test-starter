@@ -5809,6 +5809,7 @@ export async function POST(request: NextRequest) {
     const chatOrchestratorV2ParityEnabled =
       env.FEATURE_CHAT_ORCHESTRATOR_V2_PARITY === "true" &&
       request.headers.get("x-debug-prompt") === "1";
+    const mastraEnabled = env.FEATURE_MASTRA_ENABLED === "true";
 
     const executionContext: AssistantExecutionContext = {
       requestId,
@@ -5823,6 +5824,7 @@ export async function POST(request: NextRequest) {
         librarianTraceEnabled: env.FEATURE_LIBRARIAN_TRACE === "true",
         chatOrchestratorV2Enabled,
         chatOrchestratorV2ParityEnabled,
+        mastraEnabled,
       },
       parityMode: {
         enabled: chatOrchestratorV2ParityEnabled,
