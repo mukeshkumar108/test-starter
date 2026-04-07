@@ -34,8 +34,10 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^6.36.7",
+    "@ai-sdk/openai": "^2.0.40",
     "@prisma/client": "6.15.0",
     "@vercel/blob": "^2.0.0",
+    "ai": "^6.0.149",
     "next": "16.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",

@@ -45,6 +45,8 @@ const envSchema = z.object({
   FEATURE_SYNAPSE_INGEST: z.string().optional(),
   FEATURE_SYNAPSE_SESSION_INGEST: z.string().optional(),
   FEATURE_LIBRARIAN_TRACE: z.string().optional(),
+  FEATURE_CHAT_ORCHESTRATOR_V2: z.string().optional(),
+  FEATURE_CHAT_ORCHESTRATOR_V2_PARITY: z.string().optional(),
   FEATURE_BOUNCER_AUTHORITY_REMAP_V1: z.string().optional(),
   FEATURE_BOUNCER_AUTHORITY_SHADOW_LOG: z.string().optional(),
   SESSION_ACTIVE_WINDOW_MS: z.string().optional(),

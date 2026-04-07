@@ -3,6 +3,10 @@ import { auth, verifyToken } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { transcribeAudio } from "@/lib/services/voice/sttService";
 import { generateResponse } from "@/lib/services/voice/llmService";
+import {
+  runAssistantTurn,
+  type AssistantExecutionContext,
+} from "@/lib/orchestrator/runAssistantTurn";
 import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
 import { loadCreativeKernelByFiles } from "@/lib/prompts/personaPromptLoader";
 import {
@@ -949,6 +953,7 @@ type ChatTimingSpans = {
   context_ms: number;
   librarian_ms: number;
   overlay_ms: number;
+  orchestration_ms: number;
   llm_ms: number;
   tts_ms: number;
   db_write_ms: number;
@@ -4830,6 +4835,7 @@ export async function POST(request: NextRequest) {
       context_ms: 0,
       librarian_ms: 0,
       overlay_ms: 0,
+      orchestration_ms: 0,
       llm_ms: 0,
       tts_ms: 0,
       db_write_ms: 0,
@@ -5909,9 +5915,32 @@ export async function POST(request: NextRequest) {
     const tracePromptPacket =
       env.FEATURE_LIBRARIAN_TRACE === "true" ||
       request.headers.get("x-debug-prompt") === "1";
+    const chatOrchestratorV2Enabled = env.FEATURE_CHAT_ORCHESTRATOR_V2 === "true";
+    const chatOrchestratorV2ParityEnabled =
+      env.FEATURE_CHAT_ORCHESTRATOR_V2_PARITY === "true" &&
+      request.headers.get("x-debug-prompt") === "1";
+
+    const executionContext: AssistantExecutionContext = {
+      requestId,
+      traceId,
+      now,
+      requestStartedAtMs: totalStartTime,
+      debugContextEnabled: debugEnabled,
+      debugPromptEnabled: promptDebugEnabled,
+      tracePromptPacket,
+      featureFlags: {
+        contextDebugEnabled: env.FEATURE_CONTEXT_DEBUG === "true",
+        librarianTraceEnabled: env.FEATURE_LIBRARIAN_TRACE === "true",
+        chatOrchestratorV2Enabled,
+        chatOrchestratorV2ParityEnabled,
+      },
+      parityMode: {
+        enabled: chatOrchestratorV2ParityEnabled,
+      },
+    };
 
     let debugPayload: Record<string, unknown> | undefined;
-    if (debugEnabled) {
+    if (debugEnabled && !chatOrchestratorV2Enabled) {
       debugPayload = {
         contextBlocks: {
           persona: context.persona,
@@ -5945,8 +5974,52 @@ export async function POST(request: NextRequest) {
       ...(rollingSummary ? ["conversation_history"] : []),
     ];
 
-    const llmResponse = await generateResponse(messages, persona.slug, model);
-    timings.llm_ms = llmResponse.duration_ms;
+    let assistantResponseText: string;
+    let promptPacketMessages = tracePromptPacket ? messages : undefined;
+    let generationMetadata:
+      | {
+          providerUsed: "openrouter" | "openai" | "safe_text";
+          modelUsed: string;
+          fallbackUsed: boolean;
+          emergencyUsed: boolean;
+          finalSafeTextUsed: boolean;
+        }
+      | undefined;
+
+    if (chatOrchestratorV2Enabled) {
+      const turnResult = await runAssistantTurn({
+        executionContext,
+        prompt: {
+          messages,
+          chosenModel: model,
+          personaSlug: persona.slug,
+          systemBlockOrder,
+          supplementalContext,
+          rollingSummary,
+          debugContextBlocks: {
+            persona: context.persona,
+            situationalContext: null,
+            supplementalContext,
+            rollingSummary,
+          },
+        },
+      });
+      assistantResponseText = turnResult.assistantText;
+      timings.orchestration_ms = turnResult.timings.orchestration_ms;
+      timings.llm_ms = turnResult.timings.llm_ms;
+      debugPayload = turnResult.debugPayload
+        ? {
+            ...turnResult.debugPayload,
+            startBrief: context.startBrief ?? null,
+          }
+        : debugPayload;
+      promptPacketMessages = turnResult.messages ?? promptPacketMessages;
+      generationMetadata = turnResult.generation;
+    } else {
+      const llmResponse = await generateResponse(messages, persona.slug, model);
+      assistantResponseText = llmResponse.content;
+      timings.llm_ms = llmResponse.duration_ms;
+    }
 
     if (tracePromptPacket) {
       void prisma.librarianTrace.create({
@@ -6015,6 +6088,12 @@ export async function POST(request: NextRequest) {
             curiosity_continuation_attempted: curiosityContinuationAttempted,
             curiosity_continuation_blocked_by_eligibility:
               curiosityContinuationBlockedByEligibility,
+            orchestration_ms: timings.orchestration_ms,
+            llm_provider: generationMetadata?.providerUsed ?? "legacy",
+            llm_model_used: generationMetadata?.modelUsed ?? model,
+            llm_fallback_used: generationMetadata?.fallbackUsed ?? false,
+            llm_emergency_used: generationMetadata?.emergencyUsed ?? false,
+            llm_final_safe_text_used: generationMetadata?.finalSafeTextUsed ?? false,
             ...buildBouncerAuthorityTraceFields({
               shadowLogEnabled: isBouncerAuthorityShadowLogEnabled(),
               authorityRemapEnabled,
@@ -6034,7 +6113,7 @@ export async function POST(request: NextRequest) {
             }),
           },
           memoryResponse: {
-            messages,
+            ...(promptPacketMessages ? { messages: promptPacketMessages } : {}),
           },
         },
       }).catch((error) => {
@@ -6043,7 +6122,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 4: Text-to-Speech
-    const ttsResult = await synthesizeSpeech(llmResponse.content, persona.ttsVoiceId, {
+    const ttsResult = await synthesizeSpeech(assistantResponseText, persona.ttsVoiceId, {
       localHour: zoned.hour,
     });
     timings.tts_ms = ttsResult.duration_ms;
@@ -6069,9 +6148,10 @@ export async function POST(request: NextRequest) {
         userId: user.id,
         personaId,
         role: "assistant", 
-        content: llmResponse.content,
+        content: assistantResponseText,
         audioUrl: ttsResult.audioUrl,
         metadata: {
+          orchestration_ms: timings.orchestration_ms,
           llm_ms: timings.llm_ms,
           tts_ms: timings.tts_ms,
           total_ms: Date.now() - totalStartTime,
@@ -6099,7 +6179,7 @@ export async function POST(request: NextRequest) {
         personaId,
         sessionId: session.id,
         transcript: sttResult.transcript,
-        assistantText: llmResponse.content,
+        assistantText: assistantResponseText,
       });
     }
 
@@ -6107,7 +6187,7 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       personaId,
       userMessage: sttResult.transcript,
-      assistantResponse: llmResponse.content,
+      assistantResponse: assistantResponseText,
       currentSessionState: undefined,
     });
 
@@ -6184,10 +6264,11 @@ export async function POST(request: NextRequest) {
     // Return fast response
     const payload = NextResponse.json({
       transcript: sttResult.transcript,
-      response: llmResponse.content,
+      response: assistantResponseText,
       audioUrl: ttsResult.audioUrl,
       timing: {
         stt_ms: timings.stt_ms,
+        orchestration_ms: timings.orchestration_ms,
         llm_ms: timings.llm_ms,
         tts_ms: timings.tts_ms,
         total_ms: timings.total_ms,
