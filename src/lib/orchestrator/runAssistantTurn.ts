@@ -58,7 +58,7 @@ export type AssistantTurnPromptPayload = {
   isUrgent: boolean;
   endearmentCooldownTurns: number;
   cooldownActive: boolean;
-  userContextBlock?: string | null;
+  userContextLines?: string[];
   signalPackSourceBlock?: string | null;
   stanceOverlayBlock?: string | null;
   tacticOverlayBlock?: string | null;
@@ -212,6 +212,11 @@ function buildSystemBlockOrder(params: AssistantTurnPromptPayload) {
   return [
     "persona",
   ];
+}
+
+function buildUserContextBlock(lines?: string[]) {
+  if (!lines || lines.length === 0) return null;
+  return `[USER_CONTEXT]\n${lines.map((line) => `- ${line}`).join("\n")}`;
 }
 
 function normalizeGovernorText(value: string) {
@@ -578,6 +583,7 @@ export async function runAssistantTurn(params: {
   prompt: AssistantTurnPromptPayload;
 }) {
   const orchestrationStartedAt = Date.now();
+  const userContextBlock = buildUserContextBlock(params.prompt.userContextLines);
   const signalPackBlock = shouldInjectSignalPack({
     signalPackBlock: params.prompt.signalPackSourceBlock ?? null,
     isSessionStart: params.prompt.isSessionStart,
@@ -591,7 +597,7 @@ export async function runAssistantTurn(params: {
     ? params.prompt.signalPackSourceBlock ?? null
     : null;
   const governedContext = buildContextGovernorSelection({
-    userContextBlock: params.prompt.userContextBlock,
+    userContextBlock,
     signalPackBlock,
     bridgeBlock: params.prompt.bridgeBlock,
     handoverBlock: params.prompt.handoverBlock,
@@ -721,7 +727,7 @@ export async function runAssistantTurn(params: {
     assistantText: completion.content,
     chosenModel: params.prompt.chosenModel,
     timings: {
-      orchestration_ms: Math.max(0, Date.now() - orchestrationStartedAt - completion.llm_ms),
+      orchestration_ms: Math.max(0, Date.now() - orchestrationStartedAt),
       llm_ms: completion.llm_ms,
     },
     generation: {

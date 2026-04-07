@@ -5633,15 +5633,6 @@ export async function POST(request: NextRequest) {
       }
       tacticOverlayBlock = `[OVERLAY]\n${overlayText}`;
     }
-    const styleGuardBlock =
-      stanceOverlayType === "clarity"
-        ? null
-        : buildStyleGuardBlock({
-            stance: stanceOverlayType,
-            endearmentCooldownTurns,
-            cooldownActive: cooldownTurnsRemaining > 0,
-          });
-    const crisisResponseTemplateBlock = buildCrisisResponseTemplateBlock({ riskLevel });
     endearmentCooldownTurns = nextEndearmentCooldownTurns(endearmentCooldownTurns, stanceOverlayType);
 
     const deferredProfileLines = buildDeferredProfileContextLines({
@@ -5672,10 +5663,6 @@ export async function POST(request: NextRequest) {
       recentInjectedContextKeys,
       selectedUserContext.map((item) => item.key)
     );
-    const userContextBlock =
-      userContextLines.length > 0
-        ? `[USER_CONTEXT]\n${userContextLines.map((line) => `- ${line}`).join("\n")}`
-        : null;
     const inferredRoutingMoment = deriveRoutingMoment({
       transcript: sttResult.transcript,
       selectedUserContext,
@@ -5888,7 +5875,7 @@ export async function POST(request: NextRequest) {
           isUrgent: effectiveSignals.isUrgent,
           endearmentCooldownTurns,
           cooldownActive: cooldownTurnsRemaining > 0,
-          userContextBlock,
+          userContextLines,
           signalPackSourceBlock: context.signalPackBlock ?? null,
           stanceOverlayBlock,
           tacticOverlayBlock,
@@ -5956,6 +5943,19 @@ export async function POST(request: NextRequest) {
         selected_keys: turnResult.tracePromptMetadata.context_governor_selected_keys,
       };
     } else {
+      const styleGuardBlock =
+        stanceOverlayType === "clarity"
+          ? null
+          : buildStyleGuardBlock({
+              stance: stanceOverlayType,
+              endearmentCooldownTurns,
+              cooldownActive: cooldownTurnsRemaining > 0,
+            });
+      const crisisResponseTemplateBlock = buildCrisisResponseTemplateBlock({ riskLevel });
+      const userContextBlock =
+        userContextLines.length > 0
+          ? `[USER_CONTEXT]\n${userContextLines.map((line) => `- ${line}`).join("\n")}`
+          : null;
       const signalPackBlock = shouldInjectSignalPack({
         signalPackBlock: context.signalPackBlock ?? null,
         isSessionStart: context.isSessionStart,
@@ -6089,7 +6089,24 @@ export async function POST(request: NextRequest) {
       timings.llm_ms = llmResponse.duration_ms;
       contextGovernorRuntime = governedContext.runtime;
     }
-    const tracePromptMetadata = turnResult?.tracePromptMetadata;
+    const tracePromptMetadata =
+      turnResult?.tracePromptMetadata ??
+      (contextGovernorRuntime
+        ? {
+            system_blocks: systemBlockOrder,
+            startbrief_used: Boolean(context.startBrief?.used),
+            startbrief_fallback: context.startBrief?.fallback ?? null,
+            startbrief_items_count: context.startBrief?.itemsCount ?? 0,
+            bridgeText_chars: context.startBrief?.bridgeTextChars ?? 0,
+            context_governor_used: contextGovernorRuntime.used,
+            context_governor_budget_chars: contextGovernorRuntime.budget_chars,
+            context_governor_candidates_total: contextGovernorRuntime.candidates_total,
+            context_governor_selected_total: contextGovernorRuntime.selected_total,
+            context_governor_selected_by_source: contextGovernorRuntime.selected_by_source,
+            context_governor_dropped_by_reason: contextGovernorRuntime.dropped_by_reason,
+            context_governor_selected_keys: contextGovernorRuntime.selected_keys,
+          }
+        : undefined);
 
     if (tracePromptPacket) {
       void prisma.librarianTrace.create({
@@ -6130,29 +6147,19 @@ export async function POST(request: NextRequest) {
               tracePromptMetadata?.startbrief_items_count ?? context.startBrief?.itemsCount ?? 0,
             bridgeText_chars:
               tracePromptMetadata?.bridgeText_chars ?? context.startBrief?.bridgeTextChars ?? 0,
-            context_governor_used:
-              tracePromptMetadata?.context_governor_used ?? contextGovernorRuntime?.used ?? true,
+            context_governor_used: tracePromptMetadata?.context_governor_used ?? true,
             context_governor_budget_chars:
-              tracePromptMetadata?.context_governor_budget_chars ??
-              contextGovernorRuntime?.budget_chars ??
-              999999,
+              tracePromptMetadata?.context_governor_budget_chars ?? 999999,
             context_governor_candidates_total:
-              tracePromptMetadata?.context_governor_candidates_total ??
-              contextGovernorRuntime?.candidates_total ??
-              0,
+              tracePromptMetadata?.context_governor_candidates_total ?? 0,
             context_governor_selected_total:
-              tracePromptMetadata?.context_governor_selected_total ??
-              contextGovernorRuntime?.selected_total ??
-              0,
+              tracePromptMetadata?.context_governor_selected_total ?? 0,
             context_governor_selected_by_source:
-              tracePromptMetadata?.context_governor_selected_by_source ??
-              contextGovernorRuntime?.selected_by_source,
+              tracePromptMetadata?.context_governor_selected_by_source,
             context_governor_dropped_by_reason:
-              tracePromptMetadata?.context_governor_dropped_by_reason ??
-              contextGovernorRuntime?.dropped_by_reason,
+              tracePromptMetadata?.context_governor_dropped_by_reason,
             context_governor_selected_keys:
-              tracePromptMetadata?.context_governor_selected_keys ??
-              contextGovernorRuntime?.selected_keys,
+              tracePromptMetadata?.context_governor_selected_keys,
             triage_output: triage,
             triage_source: triageSource,
             posture_source: postureSource,
