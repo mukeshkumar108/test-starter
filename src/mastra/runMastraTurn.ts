@@ -2,6 +2,23 @@ import type { AISDKMessage } from "@/lib/llm/aiSdkCompletion";
 import { createMastraRuntime } from "@/mastra";
 import type { MessageInput } from "@mastra/core/agent/message-list";
 
+function extractMemoryToolQuery(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  if ("args" in value && value.args && typeof value.args === "object" && "query" in value.args) {
+    const query = (value.args as { query?: unknown }).query;
+    return typeof query === "string" && query.trim() ? query.trim() : null;
+  }
+  if ("input" in value && value.input && typeof value.input === "object" && "query" in value.input) {
+    const query = (value.input as { query?: unknown }).query;
+    return typeof query === "string" && query.trim() ? query.trim() : null;
+  }
+  if ("output" in value && value.output && typeof value.output === "object" && "query" in value.output) {
+    const query = (value.output as { query?: unknown }).query;
+    return typeof query === "string" && query.trim() ? query.trim() : null;
+  }
+  return null;
+}
+
 export async function runMastraTurn(params: {
   userId: string;
   requestId: string;
@@ -35,10 +52,22 @@ export async function runMastraTurn(params: {
     },
   });
 
+  const memoryToolUsed =
+    result.toolCalls?.some((toolCall) =>
+      typeof toolCall === "object" &&
+      toolCall !== null &&
+      "toolName" in toolCall &&
+      toolCall.toolName === "memoryTool"
+    ) ?? false;
+  const memoryToolQuery =
+    result.toolCalls?.map(extractMemoryToolQuery).find((query) => Boolean(query)) ?? null;
+
   return {
     assistantText: result.text,
     llm_ms: Math.max(0, Date.now() - startedAt),
     toolCalls: result.toolCalls,
     toolResults: result.toolResults,
+    memoryToolUsed,
+    memoryToolQuery,
   };
 }

@@ -1026,6 +1026,12 @@ function buildChatTrace(params: {
   synapseSessionIngestError: string | null;
   timings: ChatTimingSpans;
   contextGovernor?: ContextGovernorRuntime | null;
+  mastra?: {
+    used: boolean;
+    memory_tool_used: boolean;
+    memory_tool_query: string | null;
+  };
+  librarianSkippedForMastra?: boolean;
 }) {
   return {
     trace_id: params.traceId,
@@ -1058,6 +1064,9 @@ function buildChatTrace(params: {
     synapse_session_ingest_error: params.synapseSessionIngestError,
     token_usage: null,
     context_governor: params.contextGovernor ?? null,
+    mastra_used: Boolean(params.mastra?.used),
+    mastra_memory_tool_used: Boolean(params.mastra?.memory_tool_used),
+    librarian_skipped_for_mastra: Boolean(params.librarianSkippedForMastra),
     counts: params.counts,
     timings: params.timings,
   };
@@ -4863,22 +4872,25 @@ export async function POST(request: NextRequest) {
 
     // Step 3: Generate LLM response
     const rollingSummary = context.rollingSummary ?? "";
+    const mastraEnabled = env.FEATURE_MASTRA_ENABLED === "true";
     const shouldTraceLibrarian =
       env.FEATURE_LIBRARIAN_TRACE === "true" ||
       request.headers.get("x-debug-librarian") === "1";
     const librarianStart = Date.now();
-    const librarianResult = await runLibrarianReflex({
-      requestId,
-      userId: user.id,
-      personaId,
-      sessionId: session.id,
-      transcript: sttResult.transcript,
-      recentMessages: context.recentMessages,
-      relationshipNames: context.deferredProfileContext?.relationshipNames ?? [],
-      now,
-      shouldTrace: shouldTraceLibrarian,
-    });
-    timings.librarian_ms = Date.now() - librarianStart;
+    const librarianResult = mastraEnabled
+      ? null
+      : await runLibrarianReflex({
+          requestId,
+          userId: user.id,
+          personaId,
+          sessionId: session.id,
+          transcript: sttResult.transcript,
+          recentMessages: context.recentMessages,
+          relationshipNames: context.deferredProfileContext?.relationshipNames ?? [],
+          now,
+          shouldTrace: shouldTraceLibrarian,
+        });
+    timings.librarian_ms = mastraEnabled ? 0 : Date.now() - librarianStart;
     const supplementalContext = librarianResult?.supplementalContext ?? null;
     const posture = librarianResult?.posture ?? DEFAULT_POSTURE;
     let pressure = librarianResult?.pressure ?? DEFAULT_PRESSURE;
@@ -5809,7 +5821,6 @@ export async function POST(request: NextRequest) {
     const chatOrchestratorV2ParityEnabled =
       env.FEATURE_CHAT_ORCHESTRATOR_V2_PARITY === "true" &&
       request.headers.get("x-debug-prompt") === "1";
-    const mastraEnabled = env.FEATURE_MASTRA_ENABLED === "true";
 
     const executionContext: AssistantExecutionContext = {
       requestId,
@@ -5845,6 +5856,13 @@ export async function POST(request: NextRequest) {
           fallbackUsed: boolean;
           emergencyUsed: boolean;
           finalSafeTextUsed: boolean;
+        }
+      | undefined;
+    let mastraTraceMetadata:
+      | {
+          used: boolean;
+          memoryToolUsed: boolean;
+          memoryToolQuery: string | null;
         }
       | undefined;
     let contextGovernorRuntime:
@@ -5935,6 +5953,7 @@ export async function POST(request: NextRequest) {
         : debugPayload;
       promptPacketMessages = turnResult.messages ?? promptPacketMessages;
       generationMetadata = turnResult.generation;
+      mastraTraceMetadata = turnResult.mastra;
       contextGovernorRuntime = {
         used: turnResult.tracePromptMetadata.context_governor_used,
         budget_chars: turnResult.tracePromptMetadata.context_governor_budget_chars,
@@ -6352,6 +6371,12 @@ export async function POST(request: NextRequest) {
       synapseSessionIngestOk,
       synapseSessionIngestError,
       timings,
+      mastra: {
+        used: mastraTraceMetadata?.used ?? false,
+        memory_tool_used: mastraTraceMetadata?.memoryToolUsed ?? false,
+        memory_tool_query: mastraTraceMetadata?.memoryToolQuery ?? null,
+      },
+      librarianSkippedForMastra: mastraEnabled,
     });
     console.log(
       "[chat.startbrief.trace]",

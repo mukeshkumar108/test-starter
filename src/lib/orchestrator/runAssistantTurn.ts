@@ -137,6 +137,11 @@ export type AssistantTurnResult = {
     context_governor_dropped_by_reason: Record<string, number>;
     context_governor_selected_keys: string[];
   };
+  mastra: {
+    used: boolean;
+    memoryToolUsed: boolean;
+    memoryToolQuery: string | null;
+  };
   messages?: AISDKMessage[];
   debugPayload?: Record<string, unknown>;
 };
@@ -756,6 +761,11 @@ async function runCustomAssistantTurn(params: {
       context_governor_dropped_by_reason: governedContext.runtime.dropped_by_reason,
       context_governor_selected_keys: governedContext.runtime.selected_keys,
     },
+    mastra: {
+      used: false,
+      memoryToolUsed: false,
+      memoryToolQuery: null,
+    },
     ...(params.executionContext.debugPromptEnabled || params.executionContext.tracePromptPacket
       ? { messages }
       : {}),
@@ -907,6 +917,11 @@ export async function runAssistantTurn(params: {
           context_governor_selected_by_source: governedContext.runtime.selected_by_source,
           context_governor_dropped_by_reason: governedContext.runtime.dropped_by_reason,
           context_governor_selected_keys: governedContext.runtime.selected_keys,
+        },
+        mastra: {
+          used: true,
+          memoryToolUsed: mastraTurn.memoryToolUsed,
+          memoryToolQuery: mastraTurn.memoryToolQuery,
         },
         ...(params.executionContext.debugPromptEnabled || params.executionContext.tracePromptPacket
           ? { messages }
