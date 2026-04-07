@@ -5809,47 +5809,6 @@ export async function POST(request: NextRequest) {
     }
     timings.overlay_ms = Date.now() - overlayStart;
 
-    const signalPackBlock = shouldInjectSignalPack({
-      signalPackBlock: context.signalPackBlock ?? null,
-      isSessionStart: context.isSessionStart,
-      intent: overlayIntent,
-      posture,
-      pressure,
-      stance: stanceOverlayType,
-      riskLevel,
-      isUrgent: effectiveSignals.isUrgent,
-    })
-      ? context.signalPackBlock ?? null
-      : null;
-
-    const governedContext = buildContextGovernorSelection({
-      userContextBlock,
-      signalPackBlock,
-      bridgeBlock,
-      handoverBlock,
-      opsSnippetBlock,
-      intent: overlayIntent,
-      posture,
-      pressure,
-      stance: stanceOverlayType,
-      riskLevel,
-    });
-    const entityProfileBlocks = buildEntityProfileBlocks({
-      packet: context.startbriefPacket,
-      handoverBlock: governedContext.handoverBlock,
-      signalPackBlock: governedContext.signalPackBlock,
-    });
-
-    const personaKernelForTurn =
-      stanceOverlayType === "clarity" && persona.slug === "creative"
-        ? await loadClarityPersonaKernel()
-        : context.persona;
-    const momentumGuardBlock = buildMomentumGuardBlock({
-      intent: overlayIntent,
-      posture,
-      localHour: zoned.hour,
-    });
-
     const debugEnabled =
       env.FEATURE_CONTEXT_DEBUG === "true" &&
       request.headers.get("x-debug-context") === "1";
@@ -5899,6 +5858,17 @@ export async function POST(request: NextRequest) {
           finalSafeTextUsed: boolean;
         }
       | undefined;
+    let contextGovernorRuntime:
+      | {
+          used: true;
+          budget_chars: number;
+          candidates_total: number;
+          selected_total: number;
+          selected_by_source: Record<string, number>;
+          dropped_by_reason: Record<string, number>;
+          selected_keys: string[];
+        }
+      | undefined;
     let turnResult:
       | Awaited<ReturnType<typeof runAssistantTurn>>
       | undefined;
@@ -5907,19 +5877,26 @@ export async function POST(request: NextRequest) {
       turnResult = await runAssistantTurn({
         executionContext,
         prompt: {
-          persona: personaKernelForTurn,
-          momentumGuardBlock,
-          styleGuardBlock,
-          crisisResponseTemplateBlock,
-          userContextBlock: governedContext.userContextBlock,
-          signalPackBlock: governedContext.signalPackBlock,
+          persona: context.persona,
+          riskLevel,
+          intent: overlayIntent,
+          posture,
+          pressure,
+          stanceSelected: stanceOverlayType,
+          localHour: zoned.hour,
+          isSessionStart: context.isSessionStart,
+          isUrgent: effectiveSignals.isUrgent,
+          endearmentCooldownTurns,
+          cooldownActive: cooldownTurnsRemaining > 0,
+          userContextBlock,
+          signalPackSourceBlock: context.signalPackBlock ?? null,
           stanceOverlayBlock,
           tacticOverlayBlock,
-          bridgeBlock: governedContext.bridgeBlock,
+          bridgeBlock,
           userNarrativeBlock,
-          handoverBlock: governedContext.handoverBlock,
-          entityProfileBlocks,
-          opsSnippetBlock: governedContext.opsSnippetBlock,
+          handoverBlock,
+          opsSnippetBlock,
+          startbriefPacket: context.startbriefPacket,
           supplementalContext,
           rollingSummary,
           recentMessages: context.recentMessages,
@@ -5954,7 +5931,6 @@ export async function POST(request: NextRequest) {
             startbriefFallback: context.startBrief?.fallback ?? null,
             startbriefItemsCount: context.startBrief?.itemsCount ?? 0,
             bridgeTextChars: context.startBrief?.bridgeTextChars ?? 0,
-            contextGovernor: governedContext.runtime,
           },
         },
       });
@@ -5970,7 +5946,56 @@ export async function POST(request: NextRequest) {
         : debugPayload;
       promptPacketMessages = turnResult.messages ?? promptPacketMessages;
       generationMetadata = turnResult.generation;
+      contextGovernorRuntime = {
+        used: turnResult.tracePromptMetadata.context_governor_used,
+        budget_chars: turnResult.tracePromptMetadata.context_governor_budget_chars,
+        candidates_total: turnResult.tracePromptMetadata.context_governor_candidates_total,
+        selected_total: turnResult.tracePromptMetadata.context_governor_selected_total,
+        selected_by_source: turnResult.tracePromptMetadata.context_governor_selected_by_source,
+        dropped_by_reason: turnResult.tracePromptMetadata.context_governor_dropped_by_reason,
+        selected_keys: turnResult.tracePromptMetadata.context_governor_selected_keys,
+      };
     } else {
+      const signalPackBlock = shouldInjectSignalPack({
+        signalPackBlock: context.signalPackBlock ?? null,
+        isSessionStart: context.isSessionStart,
+        intent: overlayIntent,
+        posture,
+        pressure,
+        stance: stanceOverlayType,
+        riskLevel,
+        isUrgent: effectiveSignals.isUrgent,
+      })
+        ? context.signalPackBlock ?? null
+        : null;
+
+      const governedContext = buildContextGovernorSelection({
+        userContextBlock,
+        signalPackBlock,
+        bridgeBlock,
+        handoverBlock,
+        opsSnippetBlock,
+        intent: overlayIntent,
+        posture,
+        pressure,
+        stance: stanceOverlayType,
+        riskLevel,
+      });
+      const entityProfileBlocks = buildEntityProfileBlocks({
+        packet: context.startbriefPacket,
+        handoverBlock: governedContext.handoverBlock,
+        signalPackBlock: governedContext.signalPackBlock,
+      });
+
+      const personaKernelForTurn =
+        stanceOverlayType === "clarity" && persona.slug === "creative"
+          ? await loadClarityPersonaKernel()
+          : context.persona;
+      const momentumGuardBlock = buildMomentumGuardBlock({
+        intent: overlayIntent,
+        posture,
+        localHour: zoned.hour,
+      });
       const messages = buildChatMessages({
         persona: personaKernelForTurn,
         momentumGuardBlock,
@@ -6062,6 +6087,7 @@ export async function POST(request: NextRequest) {
       const llmResponse = await generateResponse(messages, persona.slug, model);
       assistantResponseText = llmResponse.content;
       timings.llm_ms = llmResponse.duration_ms;
+      contextGovernorRuntime = governedContext.runtime;
     }
     const tracePromptMetadata = turnResult?.tracePromptMetadata;
 
@@ -6105,21 +6131,28 @@ export async function POST(request: NextRequest) {
             bridgeText_chars:
               tracePromptMetadata?.bridgeText_chars ?? context.startBrief?.bridgeTextChars ?? 0,
             context_governor_used:
-              tracePromptMetadata?.context_governor_used ?? governedContext.runtime.used,
+              tracePromptMetadata?.context_governor_used ?? contextGovernorRuntime?.used ?? true,
             context_governor_budget_chars:
-              tracePromptMetadata?.context_governor_budget_chars ?? governedContext.runtime.budget_chars,
+              tracePromptMetadata?.context_governor_budget_chars ??
+              contextGovernorRuntime?.budget_chars ??
+              999999,
             context_governor_candidates_total:
-              tracePromptMetadata?.context_governor_candidates_total ?? governedContext.runtime.candidates_total,
+              tracePromptMetadata?.context_governor_candidates_total ??
+              contextGovernorRuntime?.candidates_total ??
+              0,
             context_governor_selected_total:
-              tracePromptMetadata?.context_governor_selected_total ?? governedContext.runtime.selected_total,
+              tracePromptMetadata?.context_governor_selected_total ??
+              contextGovernorRuntime?.selected_total ??
+              0,
             context_governor_selected_by_source:
               tracePromptMetadata?.context_governor_selected_by_source ??
-              governedContext.runtime.selected_by_source,
+              contextGovernorRuntime?.selected_by_source,
             context_governor_dropped_by_reason:
               tracePromptMetadata?.context_governor_dropped_by_reason ??
-              governedContext.runtime.dropped_by_reason,
+              contextGovernorRuntime?.dropped_by_reason,
             context_governor_selected_keys:
-              tracePromptMetadata?.context_governor_selected_keys ?? governedContext.runtime.selected_keys,
+              tracePromptMetadata?.context_governor_selected_keys ??
+              contextGovernorRuntime?.selected_keys,
             triage_output: triage,
             triage_source: triageSource,
             posture_source: postureSource,
@@ -6306,7 +6339,7 @@ export async function POST(request: NextRequest) {
         supplementalContext: supplementalContext ? 1 : 0,
         rollingSummary: rollingSummary ? 1 : 0,
       },
-      contextGovernor: governedContext.runtime,
+      contextGovernor: contextGovernorRuntime,
       synapseSessionIngestOk,
       synapseSessionIngestError,
       timings,
