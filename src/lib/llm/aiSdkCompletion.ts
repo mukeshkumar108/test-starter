@@ -72,7 +72,7 @@ async function openRouterChatViaAISDK(
 ) {
   const provider = getOpenRouterProvider();
   const result = await generateText({
-    model: provider(options.model),
+    model: provider.chat(options.model),
     messages,
     temperature: options.temperature,
     maxOutputTokens: options.maxTokens,
@@ -142,7 +142,7 @@ async function openAIChatFallback(
   options: Omit<AISDKCompletionOptions, "model">
 ) {
   const result = await generateText({
-    model: openai(EMERGENCY_MODEL),
+    model: openai.chat(EMERGENCY_MODEL),
     messages,
     temperature: options.temperature,
     maxOutputTokens: options.maxTokens,
