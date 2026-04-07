@@ -113,7 +113,7 @@ export function createMemoryTool(params: {
   return createTool({
     id: "get-memory-context",
     description:
-      "Retrieve relevant long-term memory context from Synapse when prior conversation context would help answer well.",
+      "Retrieves relevant past user information and conversation history. Use this tool when answering questions about people, relationships, past events, what the user said previously, or when you need to verify user-specific facts so the answer stays accurate and up to date.",
     inputSchema: z.object({
       query: z.string().min(1).max(120).describe("A short semantic memory retrieval query."),
     }),
