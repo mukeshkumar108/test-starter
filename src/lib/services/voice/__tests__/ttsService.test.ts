@@ -58,7 +58,11 @@ async function runTest(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
-  const { __test__isNightVoiceWindow, __test__resolveVoiceSettings } = await import("../ttsService");
+  const {
+    __test__isNightVoiceWindow,
+    __test__resolveVoiceSettings,
+    __test__sanitizeForVoice,
+  } = await import("../ttsService");
 
   await runTest("night window true at 23:00", () => {
     expect(__test__isNightVoiceWindow(23)).toBe(true);
@@ -90,6 +94,13 @@ async function main() {
     const nightPlain = __test__resolveVoiceSettings({ text: "hello there", localHour: 1 });
     const nightLaugh = __test__resolveVoiceSettings({ text: "haha hello there", localHour: 1 });
     expect(nightLaugh.style).toBeGreaterThan(nightPlain.style);
+  });
+
+  await runTest("sanitizeForVoice strips source readout and urls", () => {
+    const spoken = __test__sanitizeForVoice(
+      "Quick update. Sources: - BBC (https://bbc.com) - Reuters (https://reuters.com)"
+    );
+    expect(spoken).toBe("Quick update.");
   });
 
   const failed = results.filter((result) => !result.passed);

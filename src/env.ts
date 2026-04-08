@@ -23,6 +23,7 @@ const envSchema = z.object({
   ELEVENLABS_VOICE_ISABELLA: z.string().min(1).optional(),
   ELEVENLABS_VOICE_SOPHIE: z.string().min(1).optional(),
   ELEVENLABS_VOICE_ALEXANDER: z.string().min(1).optional(),
+  ELEVENLABS_TTS_MODEL_ID: z.string().min(1).optional(),
   LEMONFOX_API_KEY: z.string().min(1),
   OPENAI_API_KEY: z.string().min(1), // For embeddings
   SYNAPSE_BASE_URL: z.string().min(1).optional(),

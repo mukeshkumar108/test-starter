@@ -962,6 +962,9 @@ type ChatTimingSpans = {
   web_prefetch_ms?: number;
   final_generation_ms?: number;
   tts_ms: number;
+  tts_synthesis_ms?: number;
+  tts_upload_ms?: number;
+  tts_text_chars?: number;
   db_write_ms: number;
   total_ms: number;
 };
@@ -6263,6 +6266,9 @@ export async function POST(request: NextRequest) {
       localHour: zoned.hour,
     });
     timings.tts_ms = ttsResult.duration_ms;
+    timings.tts_synthesis_ms = ttsResult.synthesis_ms;
+    timings.tts_upload_ms = ttsResult.upload_ms;
+    timings.tts_text_chars = ttsResult.text_chars;
 
     // Step 5: Store message with timing metadata
     const dbWriteStart = Date.now();
@@ -6291,6 +6297,9 @@ export async function POST(request: NextRequest) {
           orchestration_ms: timings.orchestration_ms,
           llm_ms: timings.llm_ms,
           tts_ms: timings.tts_ms,
+          tts_synthesis_ms: timings.tts_synthesis_ms,
+          tts_upload_ms: timings.tts_upload_ms,
+          tts_text_chars: timings.tts_text_chars,
           total_ms: Date.now() - totalStartTime,
           request_id: requestId,
         },
@@ -6417,6 +6426,9 @@ export async function POST(request: NextRequest) {
         orchestration_ms: timings.orchestration_ms,
         llm_ms: timings.llm_ms,
         tts_ms: timings.tts_ms,
+        tts_synthesis_ms: timings.tts_synthesis_ms,
+        tts_upload_ms: timings.tts_upload_ms,
+        tts_text_chars: timings.tts_text_chars,
         total_ms: timings.total_ms,
       },
       requestId,

@@ -4,6 +4,10 @@ import { put } from "@vercel/blob";
 export interface TTSResult {
   audioUrl: string;
   duration_ms: number;
+  synthesis_ms: number;
+  upload_ms: number;
+  text_chars: number;
+  model_id: string;
 }
 
 type TTSOptions = {
@@ -17,8 +21,49 @@ type VoiceSettings = {
   use_speaker_boost: boolean;
 };
 
+const DEFAULT_TTS_MODEL = "eleven_turbo_v2_5";
+const MAX_TTS_SENTENCES = 3;
+const MAX_TTS_CHARS = 420;
+
+function stripUrls(text: string) {
+  return text.replace(/https?:\/\/\S+/gi, "");
+}
+
+function stripReadoutSections(text: string) {
+  return text
+    .replace(/\bSources:[\s\S]*$/i, "")
+    .replace(/\bSource:[\s\S]*$/i, "");
+}
+
+function limitSentences(text: string, maxSentences: number) {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  if (sentences.length <= maxSentences) return text.trim();
+  return sentences.slice(0, maxSentences).join(" ").trim();
+}
+
+function capVoiceText(text: string, maxChars: number) {
+  if (text.length <= maxChars) return text;
+  const capped = text.slice(0, maxChars);
+  const lastBoundary = Math.max(capped.lastIndexOf("."), capped.lastIndexOf("!"), capped.lastIndexOf("?"));
+  if (lastBoundary > 120) {
+    return capped.slice(0, lastBoundary + 1).trim();
+  }
+  return `${capped.trim()}...`;
+}
+
 function sanitizeForVoice(text: string): string {
-  return text.replace(/[*_`#\[\]]/g, "").replace(/\s{2,}/g, " ").trim();
+  const withoutReadouts = stripReadoutSections(text);
+  const withoutUrls = stripUrls(withoutReadouts);
+  const normalized = withoutUrls
+    .replace(/[*_`#\[\]]/g, "")
+    .replace(/^[\-\u2022]\s+/gm, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const sentenceLimited = limitSentences(normalized, MAX_TTS_SENTENCES);
+  return capVoiceText(sentenceLimited, MAX_TTS_CHARS);
 }
 
 function isNightVoiceWindow(localHour?: number) {
@@ -60,8 +105,10 @@ export async function synthesizeSpeech(
     text: ttsText,
     localHour: options.localHour,
   });
+  const modelId = env.ELEVENLABS_TTS_MODEL_ID?.trim() || DEFAULT_TTS_MODEL;
   
   try {
+    const synthStartedAt = Date.now();
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: "POST",
       headers: {
@@ -71,7 +118,7 @@ export async function synthesizeSpeech(
       },
       body: JSON.stringify({
         text: ttsText,
-        model_id: "eleven_monolingual_v1",
+        model_id: modelId,
         voice_settings: voiceSettings,
       }),
     });
@@ -90,17 +137,36 @@ export async function synthesizeSpeech(
 
     // Get audio blob
     const audioBlob = await response.blob();
+    const synthesisMs = Math.max(0, Date.now() - synthStartedAt);
     
     // Upload to Vercel blob storage
+    const uploadStartedAt = Date.now();
     const filename = `tts-${Date.now()}.mp3`;
     const blob = await put(filename, audioBlob, {
       access: "public",
       contentType: "audio/mpeg",
     });
+    const uploadMs = Math.max(0, Date.now() - uploadStartedAt);
+
+    console.log(
+      "[tts.trace]",
+      JSON.stringify({
+        provider: "elevenlabs",
+        model_id: modelId,
+        text_chars: ttsText.length,
+        synthesis_ms: synthesisMs,
+        upload_ms: uploadMs,
+        total_ms: Math.max(0, Date.now() - startTime),
+      })
+    );
 
     return {
       audioUrl: blob.url,
       duration_ms: Date.now() - startTime,
+      synthesis_ms: synthesisMs,
+      upload_ms: uploadMs,
+      text_chars: ttsText.length,
+      model_id: modelId,
     };
   } catch (error) {
     console.error("TTS Service Error:", error);
@@ -110,3 +176,4 @@ export async function synthesizeSpeech(
 
 export const __test__isNightVoiceWindow = isNightVoiceWindow;
 export const __test__resolveVoiceSettings = resolveVoiceSettings;
+export const __test__sanitizeForVoice = sanitizeForVoice;
