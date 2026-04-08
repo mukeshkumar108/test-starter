@@ -168,6 +168,22 @@ pnpm synth:resume-packet:repair
 
 These are the highest-signal checks for the current continuity architecture.
 
+Remote deployed smoke:
+
+```bash
+BASE_URL=https://your-app.vercel.app \
+ADMIN_SECRET=... \
+pnpm smoke:remote:session-start
+```
+
+Important files:
+
+- [src/app/api/admin/session-start-smoke/route.ts](/Users/mukeshkumar/play/test-starter/src/app/api/admin/session-start-smoke/route.ts)
+- [src/lib/admin/sessionStartSmoke.ts](/Users/mukeshkumar/play/test-starter/src/lib/admin/sessionStartSmoke.ts)
+- [scripts/admin/remote-session-start-smoke.ts](/Users/mukeshkumar/play/test-starter/scripts/admin/remote-session-start-smoke.ts)
+
+This is the correct way to check deployed timing/prod continuity behavior without going through STT/TTS.
+
 ## Prisma migration added recently
 
 Migration:

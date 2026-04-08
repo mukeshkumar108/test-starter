@@ -220,6 +220,35 @@ These are the best fast checks for:
 - session-start handshake behavior
 - repair flow
 
+### Remote prod smoke
+
+Admin-only remote smoke for deployed Vercel:
+
+```bash
+BASE_URL=https://your-app.vercel.app \
+ADMIN_SECRET=your-admin-secret \
+pnpm smoke:remote:session-start
+```
+
+Optional:
+
+- `SMOKE_SCENARIO=session-start`
+- `SMOKE_SCENARIO=repair`
+- `SMOKE_PERSONA_SLUG=creative`
+
+This hits:
+
+- [src/app/api/admin/session-start-smoke/route.ts](/Users/mukeshkumar/play/test-starter/src/app/api/admin/session-start-smoke/route.ts)
+
+and returns JSON covering:
+
+- session-close timing
+- resume-packet availability
+- `ensureActiveSession` timing probe
+- `buildContext` timing probes
+- lightweight vs substantive first-turn behavior
+- whether the deployed app thinks maintenance mode is `inngest` or `fallback`
+
 ## Safe deploy checklist
 
 1. push code
