@@ -46,6 +46,35 @@ function looksLikeCurrentInfoQuestion(text: string) {
   );
 }
 
+function looksLikeDeepResearchQuestion(text: string) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("deep research") ||
+    normalized.includes("deep dive") ||
+    normalized.includes("research") ||
+    normalized.includes("analyze") ||
+    normalized.includes("analysis") ||
+    normalized.includes("compare") ||
+    normalized.includes("comprehensive")
+  );
+}
+
+function isLikelyTemporalReminder(text: string) {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized.includes("remember, it's") ||
+    normalized.includes("remember it is") ||
+    normalized.includes("remember, it is") ||
+    normalized.includes("remember - it's") ||
+    normalized.includes("remember that it's")
+  );
+}
+
+function shouldPrefetchWeb(text: string) {
+  return looksLikeCurrentInfoQuestion(text);
+}
+
 async function buildPrefetchedSupplementalContext(params: {
   userId: string;
   requestId: string;
@@ -64,42 +93,60 @@ async function buildPrefetchedSupplementalContext(params: {
   let webLookupReason: string | null = null;
   let memoryPrefetchMs = 0;
   let webPrefetchMs = 0;
+  const shouldRunMemory = shouldPrefetchMemory(params.lastUserMessage);
+  const shouldRunWeb = shouldPrefetchWeb(params.lastUserMessage);
+  const webMode = looksLikeDeepResearchQuestion(params.lastUserMessage)
+    ? "deep_research"
+    : "voice_fast";
 
-  if (looksLikeRecallQuestion(params.lastUserMessage)) {
+  const tasks: Array<Promise<void>> = [];
+
+  if (shouldRunMemory) {
     memoryLookupAttempted = true;
-    const memoryStartedAt = Date.now();
-    const memoryResult = await runMemoryLookup({
-      userId: params.userId,
-      requestId: params.requestId,
-      now: params.now,
-      query: params.lastUserMessage,
-    });
-    memoryPrefetchMs = Math.max(0, Date.now() - memoryStartedAt);
-    if (memoryResult.used && memoryResult.supplementalContext) {
-      memoryPrefetchUsed = true;
-      memoryPrefetchQuery = memoryResult.query;
-      sections.push(`[VERIFIED_MEMORY]\n${memoryResult.supplementalContext}`);
-    } else {
-      memoryLookupReason = memoryResult.reason;
-    }
+    tasks.push(
+      (async () => {
+        const memoryStartedAt = Date.now();
+        const memoryResult = await runMemoryLookup({
+          userId: params.userId,
+          requestId: params.requestId,
+          now: params.now,
+          query: params.lastUserMessage,
+        });
+        memoryPrefetchMs = Math.max(0, Date.now() - memoryStartedAt);
+        if (memoryResult.used && memoryResult.supplementalContext) {
+          memoryPrefetchUsed = true;
+          memoryPrefetchQuery = memoryResult.query;
+          sections.push(`[VERIFIED_MEMORY]\n${memoryResult.supplementalContext}`);
+        } else {
+          memoryLookupReason = memoryResult.reason;
+        }
+      })()
+    );
   }
 
-  if (looksLikeCurrentInfoQuestion(params.lastUserMessage)) {
+  if (shouldRunWeb) {
     webLookupAttempted = true;
-    const webStartedAt = Date.now();
-    const webResult = await runWebSearch({
-      requestId: params.requestId,
-      query: params.lastUserMessage,
-    });
-    webPrefetchMs = Math.max(0, Date.now() - webStartedAt);
-    if (webResult.used && webResult.supplementalContext) {
-      webPrefetchUsed = true;
-      webPrefetchQuery = webResult.query;
-      sections.push(`[VERIFIED_WEB]\n${webResult.supplementalContext}`);
-    } else {
-      webLookupReason = webResult.reason;
-    }
+    tasks.push(
+      (async () => {
+        const webStartedAt = Date.now();
+        const webResult = await runWebSearch({
+          requestId: params.requestId,
+          query: params.lastUserMessage,
+          mode: webMode,
+        });
+        webPrefetchMs = Math.max(0, Date.now() - webStartedAt);
+        if (webResult.used && webResult.supplementalContext) {
+          webPrefetchUsed = true;
+          webPrefetchQuery = webResult.query;
+          sections.push(`[VERIFIED_WEB]\n${webResult.supplementalContext}`);
+        } else {
+          webLookupReason = webResult.reason;
+        }
+      })()
+    );
   }
+
+  await Promise.all(tasks);
 
   return {
     supplementalContext: sections.length > 0 ? sections.join("\n\n") : null,
@@ -130,6 +177,9 @@ function extractLastUserMessage(messages: AISDKMessage[]) {
 function looksLikeRecallQuestion(text: string) {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
+  if (looksLikeCurrentInfoQuestion(text) && isLikelyTemporalReminder(text)) {
+    return false;
+  }
   return (
     normalized.includes("remember") ||
     normalized.includes("earlier") ||
@@ -143,6 +193,26 @@ function looksLikeRecallQuestion(text: string) {
     normalized.includes("my ex") ||
     normalized.includes("my partner")
   );
+}
+
+function shouldPrefetchMemory(text: string) {
+  const currentInfo = looksLikeCurrentInfoQuestion(text);
+  const recall = looksLikeRecallQuestion(text);
+  if (!recall) return false;
+  if (!currentInfo) return true;
+
+  const normalized = text.trim().toLowerCase();
+  const explicitMixedSignals = [
+    "what did i say",
+    "what was i saying",
+    "earlier",
+    "previously",
+    "before that",
+    "since then",
+    "what changed",
+    "and what's happened since",
+  ];
+  return explicitMixedSignals.some((signal) => normalized.includes(signal));
 }
 
 export async function runMastraTurn(params: {

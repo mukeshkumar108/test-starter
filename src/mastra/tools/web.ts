@@ -14,6 +14,8 @@ type TavilySearchResponse = {
   }>;
 };
 
+type WebSearchMode = "voice_fast" | "deep_research";
+
 function cleanString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -49,6 +51,7 @@ function buildWebResultSheet(params: {
 export async function runWebSearch(params: {
   requestId: string;
   query: string;
+  mode?: WebSearchMode;
 }) {
   if (!env.TAVILY_API_KEY) {
     return {
@@ -67,9 +70,9 @@ export async function runWebSearch(params: {
     body: JSON.stringify({
       api_key: env.TAVILY_API_KEY,
       query: params.query,
-      search_depth: "advanced",
+      search_depth: params.mode === "deep_research" ? "advanced" : "basic",
       include_answer: true,
-      max_results: 5,
+      max_results: params.mode === "deep_research" ? 5 : 3,
     }),
   });
 
@@ -143,6 +146,7 @@ export function createWebSearchTool(params: {
       runWebSearch({
         requestId: params.requestId,
         query,
+        mode: "voice_fast",
       }),
   });
 }
