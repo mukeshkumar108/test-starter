@@ -112,8 +112,13 @@ Current model:
 - session closes
 - one maintenance lane handles:
   - Synapse session ingest
-  - resume packet refresh
   - session summary generation
+
+Important current detail:
+
+- `requestSessionClosedMaintenance(...)` now also triggers a separate fast-path `resume_packet` refresh request immediately on session close
+- `runSessionClosedMaintenance(...)` is now for slower follow-on work, mainly session summary + Synapse session ingest
+- this split is deliberate to improve packet readiness without touching request-path behavior
 
 Code:
 

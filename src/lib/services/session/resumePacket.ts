@@ -584,6 +584,19 @@ export async function persistResumePacket(params: {
     update: { state: nextState as any, updatedAt: new Date() },
     create: { userId: params.userId, personaId: params.personaId, state: nextState as any },
   });
+  const readyMs = params.packet.last_session_ended_at
+    ? Math.max(0, Date.now() - Date.parse(params.packet.last_session_ended_at))
+    : null;
+  console.log("[resume.packet.persisted]", {
+    userId: params.userId,
+    personaId: params.personaId,
+    sourceSessionId: params.packet.source_session_id,
+    usable: params.packet.usable,
+    quality: params.packet.quality,
+    source: params.packet.source,
+    updated_at: params.packet.updated_at,
+    ready_ms_from_session_close: Number.isFinite(readyMs) ? readyMs : null,
+  });
 }
 
 async function refreshResumePacketDirect(params: {
@@ -591,10 +604,19 @@ async function refreshResumePacketDirect(params: {
   personaId: string;
   sourceSessionId?: string | null;
   lastSessionEndedAt?: string | null;
+  reason?: string | null;
 }) {
   if (!env.SYNAPSE_BASE_URL) return;
+  const startedAtMs = Date.now();
   let sourceSessionId = cleanString(params.sourceSessionId);
   let lastSessionEndedAt = cleanString(params.lastSessionEndedAt);
+  console.log("[resume.packet.refresh.start]", {
+    userId: params.userId,
+    personaId: params.personaId,
+    sourceSessionId,
+    lastSessionEndedAt,
+    reason: params.reason ?? null,
+  });
   if (!sourceSessionId || !lastSessionEndedAt) {
     const latestEnded = await prisma.session.findFirst({
       where: {
@@ -608,7 +630,17 @@ async function refreshResumePacketDirect(params: {
     sourceSessionId = latestEnded?.id ?? null;
     lastSessionEndedAt = latestEnded?.endedAt?.toISOString() ?? null;
   }
-  if (!sourceSessionId || !lastSessionEndedAt) return;
+  if (!sourceSessionId || !lastSessionEndedAt) {
+    console.warn("[resume.packet.refresh.skip]", {
+      userId: params.userId,
+      personaId: params.personaId,
+      sourceSessionId,
+      lastSessionEndedAt,
+      reason: params.reason ?? null,
+      refresh_ms: Date.now() - startedAtMs,
+    });
+    return;
+  }
   const { packet, userModel, dailyAnalysis, signalsPack } = await buildResumePacket({
     userId: params.userId,
     personaId: params.personaId,
@@ -623,6 +655,16 @@ async function refreshResumePacketDirect(params: {
     dailyAnalysis,
     signalsPack,
   });
+  console.log("[resume.packet.refresh.done]", {
+    userId: params.userId,
+    personaId: params.personaId,
+    sourceSessionId,
+    lastSessionEndedAt,
+    reason: params.reason ?? null,
+    usable: packet.usable,
+    quality: packet.quality,
+    refresh_ms: Date.now() - startedAtMs,
+  });
 }
 
 export async function refreshResumePacket(params: {
@@ -630,6 +672,7 @@ export async function refreshResumePacket(params: {
   personaId: string;
   sourceSessionId?: string | null;
   lastSessionEndedAt?: string | null;
+  reason?: string | null;
 }) {
   await refreshResumePacketDirect(params);
 }
@@ -709,6 +752,13 @@ async function sendResumePacketEvent(params: {
   reason: string;
 }) {
   const { inngest } = await import("@/inngest/client");
+  console.log("[resume.packet.enqueue.start]", {
+    userId: params.userId,
+    personaId: params.personaId,
+    sourceSessionId: params.sourceSessionId ?? null,
+    lastSessionEndedAt: params.lastSessionEndedAt ?? null,
+    reason: params.reason,
+  });
   await inngest.send({
     name: "app/resume-packet.refresh.requested",
     data: {
@@ -718,6 +768,13 @@ async function sendResumePacketEvent(params: {
       lastSessionEndedAt: params.lastSessionEndedAt ?? null,
       reason: params.reason,
     },
+  });
+  console.log("[resume.packet.enqueue.ok]", {
+    userId: params.userId,
+    personaId: params.personaId,
+    sourceSessionId: params.sourceSessionId ?? null,
+    lastSessionEndedAt: params.lastSessionEndedAt ?? null,
+    reason: params.reason,
   });
 }
 

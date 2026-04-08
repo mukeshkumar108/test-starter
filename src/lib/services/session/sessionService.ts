@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
 import { summarizeRollingSessionFromMessages, summarizeSession } from "@/lib/services/session/sessionSummarizer";
 import * as synapseClient from "@/lib/services/synapseClient";
-import { refreshResumePacket, requestResumePacketRefresh } from "@/lib/services/session/resumePacket";
+import { requestResumePacketRefresh } from "@/lib/services/session/resumePacket";
 import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
 import { recordTimingProbe } from "@/lib/debug/timingProbe";
 
@@ -523,6 +523,12 @@ async function sendSessionClosedEvent(session: {
   lastActivityAt: Date;
 }) {
   const { inngest } = await import("@/inngest/client");
+  console.log("[session.closed.enqueue.start]", {
+    sessionId: session.id,
+    userId: session.userId,
+    personaId: session.personaId,
+    endedAt: session.endedAt.toISOString(),
+  });
   await inngest.send({
     name: "app/session.closed",
     data: {
@@ -534,6 +540,12 @@ async function sendSessionClosedEvent(session: {
       lastActivityAt: session.lastActivityAt.toISOString(),
     },
   });
+  console.log("[session.closed.enqueue.ok]", {
+    sessionId: session.id,
+    userId: session.userId,
+    personaId: session.personaId,
+    endedAt: session.endedAt.toISOString(),
+  });
 }
 
 export async function runSessionClosedMaintenance(session: {
@@ -544,50 +556,92 @@ export async function runSessionClosedMaintenance(session: {
   endedAt: Date;
   lastActivityAt: Date;
 }) {
+  const startedAtMs = Date.now();
+  console.log("[session.closed.maintenance.start]", {
+    sessionId: session.id,
+    userId: session.userId,
+    personaId: session.personaId,
+    endedAt: session.endedAt.toISOString(),
+  });
   const tasks: Promise<unknown>[] = [];
-
-  if (process.env.NODE_ENV !== "test") {
-    tasks.push(
-      refreshResumePacket({
-        userId: session.userId,
-        personaId: session.personaId,
-        sourceSessionId: session.id,
-        lastSessionEndedAt: session.endedAt.toISOString(),
-      }).catch((error) => {
-        console.warn("[resume.packet.refresh.error]", {
-          userId: session.userId,
-          personaId: session.personaId,
-          sourceSessionId: session.id,
-          reason: "session_closed_maintenance",
-          error,
-        });
-      })
-    );
-  }
 
   if (isSummaryEnabled()) {
     tasks.push(
-      createSessionSummary({
-        id: session.id,
-        userId: session.userId,
-        personaId: session.personaId,
-        startedAt: session.startedAt,
-        lastActivityAt: session.lastActivityAt,
-      }).catch((error) => {
-        console.warn("[session.summary] failed", error);
-      })
+      (async () => {
+        const summaryStartedAtMs = Date.now();
+        console.log("[session.summary.start]", {
+          sessionId: session.id,
+          userId: session.userId,
+          personaId: session.personaId,
+        });
+        try {
+          await createSessionSummary({
+            id: session.id,
+            userId: session.userId,
+            personaId: session.personaId,
+            startedAt: session.startedAt,
+            lastActivityAt: session.lastActivityAt,
+          });
+          console.log("[session.summary.done]", {
+            sessionId: session.id,
+            userId: session.userId,
+            personaId: session.personaId,
+            ok: true,
+            ms: Date.now() - summaryStartedAtMs,
+          });
+        } catch (error) {
+          console.warn("[session.summary.done]", {
+            sessionId: session.id,
+            userId: session.userId,
+            personaId: session.personaId,
+            ok: false,
+            ms: Date.now() - summaryStartedAtMs,
+            error,
+          });
+        }
+      })()
     );
   }
 
   if (env.FEATURE_SYNAPSE_SESSION_INGEST === "true") {
     tasks.push(
-      runSynapseSessionIngest(session).catch((error) => {
-        console.warn("[synapse.session.ingest.error]", { sessionId: session.id, error });
-      })
+      (async () => {
+        const ingestStartedAtMs = Date.now();
+        console.log("[synapse.session.ingest.start]", {
+          sessionId: session.id,
+          userId: session.userId,
+          personaId: session.personaId,
+        });
+        try {
+          await runSynapseSessionIngest(session);
+          console.log("[synapse.session.ingest.done]", {
+            sessionId: session.id,
+            userId: session.userId,
+            personaId: session.personaId,
+            ok: true,
+            ms: Date.now() - ingestStartedAtMs,
+          });
+        } catch (error) {
+          console.warn("[synapse.session.ingest.done]", {
+            sessionId: session.id,
+            userId: session.userId,
+            personaId: session.personaId,
+            ok: false,
+            ms: Date.now() - ingestStartedAtMs,
+            error,
+          });
+        }
+      })()
     );
   }
 
   await Promise.allSettled(tasks);
+  console.log("[session.closed.maintenance.done]", {
+    sessionId: session.id,
+    userId: session.userId,
+    personaId: session.personaId,
+    total_ms: Date.now() - startedAtMs,
+  });
 }
 
 function requestSessionClosedMaintenance(session: {
@@ -599,6 +653,15 @@ function requestSessionClosedMaintenance(session: {
   lastActivityAt: Date;
 }) {
   void (async () => {
+    if (process.env.NODE_ENV !== "test") {
+      requestResumePacketRefresh({
+        userId: session.userId,
+        personaId: session.personaId,
+        sourceSessionId: session.id,
+        lastSessionEndedAt: session.endedAt.toISOString(),
+        reason: "session_closed_fast_path",
+      });
+    }
     try {
       if (env.INNGEST_EVENT_KEY || env.INNGEST_DEV === "1") {
         await sendSessionClosedEvent(session);

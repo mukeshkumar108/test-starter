@@ -158,6 +158,12 @@ Session-close maintenance now owns:
 - session summary generation
 - Synapse session ingest
 
+Important current detail:
+
+- `resume_packet` refresh is now requested immediately as a fast path on session close
+- broader session-close maintenance still handles summary + Synapse ingest
+- this is intentional so next-session continuity is not blocked behind slower maintenance work
+
 If Inngest is configured:
 
 - session close emits `app/session.closed`

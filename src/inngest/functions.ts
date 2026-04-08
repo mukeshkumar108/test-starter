@@ -8,14 +8,32 @@ export const refreshResumePacketFunction = inngest.createFunction(
     triggers: [{ event: "app/resume-packet.refresh.requested" }],
   },
   async ({ event, step }) => {
+    const functionStartedAtMs = Date.now();
+    console.log("[resume.packet.function.start]", {
+      userId: event.data.userId,
+      personaId: event.data.personaId,
+      sourceSessionId: event.data.sourceSessionId ?? null,
+      lastSessionEndedAt: event.data.lastSessionEndedAt ?? null,
+      reason: event.data.reason ?? null,
+    });
     await step.run("refresh-resume-packet", async () => {
       await refreshResumePacket({
         userId: event.data.userId,
         personaId: event.data.personaId,
         sourceSessionId: event.data.sourceSessionId ?? null,
         lastSessionEndedAt: event.data.lastSessionEndedAt ?? null,
+        reason: event.data.reason ?? null,
       });
       return { ok: true };
+    });
+
+    console.log("[resume.packet.function.done]", {
+      userId: event.data.userId,
+      personaId: event.data.personaId,
+      sourceSessionId: event.data.sourceSessionId ?? null,
+      lastSessionEndedAt: event.data.lastSessionEndedAt ?? null,
+      reason: event.data.reason ?? null,
+      total_ms: Date.now() - functionStartedAtMs,
     });
 
     return { ok: true };
@@ -28,6 +46,13 @@ export const sessionClosedMaintenanceFunction = inngest.createFunction(
     triggers: [{ event: "app/session.closed" }],
   },
   async ({ event, step }) => {
+    const functionStartedAtMs = Date.now();
+    console.log("[session.closed.function.start]", {
+      sessionId: event.data.sessionId,
+      userId: event.data.userId,
+      personaId: event.data.personaId,
+      endedAt: event.data.endedAt,
+    });
     await step.run("run-session-closed-maintenance", async () => {
       await runSessionClosedMaintenance({
         id: event.data.sessionId,
@@ -38,6 +63,14 @@ export const sessionClosedMaintenanceFunction = inngest.createFunction(
         lastActivityAt: new Date(event.data.lastActivityAt),
       });
       return { ok: true };
+    });
+
+    console.log("[session.closed.function.done]", {
+      sessionId: event.data.sessionId,
+      userId: event.data.userId,
+      personaId: event.data.personaId,
+      endedAt: event.data.endedAt,
+      total_ms: Date.now() - functionStartedAtMs,
     });
 
     return { ok: true };
