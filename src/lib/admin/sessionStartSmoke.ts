@@ -4,7 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { clearTimingProbes, getLatestTimingProbe } from "@/lib/debug/timingProbe";
 import { buildContext } from "@/lib/services/memory/contextBuilder";
 import { getResumePacketFromState, refreshResumePacket, type ResumePacket } from "@/lib/services/session/resumePacket";
-import { closeSessionOnExplicitEnd, ensureActiveSession } from "@/lib/services/session/sessionService";
+import { ensureActiveSession } from "@/lib/services/session/sessionService";
+import { closeCurrentSessionForClerkUser } from "@/lib/services/session/closeCurrentSession";
 import { env } from "@/env";
 
 type SmokeScenario = "session-start" | "repair";
@@ -184,6 +185,13 @@ async function timeBuildContext(userId: string, personaId: string, transcript: s
 }
 
 async function runSessionStartScenario(userId: string, personaId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { clerkUserId: true },
+  });
+  if (!user?.clerkUserId) {
+    throw new Error("QA user missing clerkUserId for session-start smoke");
+  }
   const sessionCloseTime = new Date(Date.now() - 2 * 60_000);
   const seeded = await seedSessionConversation({
     userId,
@@ -205,8 +213,15 @@ async function runSessionStartScenario(userId: string, personaId: string) {
   });
 
   const closeStarted = Date.now();
-  await closeSessionOnExplicitEnd(userId, personaId, sessionCloseTime);
+  const closeResult = await closeCurrentSessionForClerkUser({
+    clerkUserId: user.clerkUserId,
+    personaId,
+    now: sessionCloseTime,
+  });
   const closeSessionMs = Date.now() - closeStarted;
+  if (!closeResult.closed) {
+    throw new Error(`Expected explicit session close to close a session, got ${closeResult.reason ?? "unknown"}`);
+  }
 
   const packetWait = await waitForResumePacket({ userId, personaId, timeoutMs: 20_000 });
   const ingestWait =
@@ -263,6 +278,13 @@ async function runSessionStartScenario(userId: string, personaId: string) {
 }
 
 async function runRepairScenario(userId: string, personaId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { clerkUserId: true },
+  });
+  if (!user?.clerkUserId) {
+    throw new Error("QA user missing clerkUserId for repair smoke");
+  }
   const sessionCloseTime = new Date(Date.now() - 2 * 60_000);
   const sourceSession = await seedSessionConversation({
     userId,
@@ -283,7 +305,14 @@ async function runRepairScenario(userId: string, personaId: string) {
     ],
   });
 
-  await closeSessionOnExplicitEnd(userId, personaId, sessionCloseTime);
+  const initialClose = await closeCurrentSessionForClerkUser({
+    clerkUserId: user.clerkUserId,
+    personaId,
+    now: sessionCloseTime,
+  });
+  if (!initialClose.closed) {
+    throw new Error(`Expected initial explicit session close, got ${initialClose.reason ?? "unknown"}`);
+  }
   const initialWait = await waitForResumePacket({ userId, personaId, timeoutMs: 20_000 });
 
   await clearResumePacket(userId, personaId);
@@ -306,8 +335,15 @@ async function runRepairScenario(userId: string, personaId: string) {
   const repairedPacket = await readResumePacket(userId, personaId);
 
   const closeRepairedStarted = Date.now();
-  await closeSessionOnExplicitEnd(userId, personaId, new Date());
+  const repairedClose = await closeCurrentSessionForClerkUser({
+    clerkUserId: user.clerkUserId,
+    personaId,
+    now: new Date(),
+  });
   const closeRepairedSessionMs = Date.now() - closeRepairedStarted;
+  if (!repairedClose.closed) {
+    throw new Error(`Expected repaired explicit session close, got ${repairedClose.reason ?? "unknown"}`);
+  }
 
   clearTimingProbes("ensureActiveSession");
   const ensureSecondStarted = Date.now();

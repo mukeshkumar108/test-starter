@@ -127,6 +127,29 @@ Live Synapse startbrief is now fallback-only behavior, not the default handshake
 - TTS
 - persistence
 
+## Explicit session close
+
+There is now a user-facing close endpoint:
+
+- [route.ts](/Users/mukeshkumar/play/test-starter/src/app/api/session/close/route.ts)
+
+It accepts:
+
+```json
+{ "personaId": "..." }
+```
+
+Auth:
+
+- Clerk cookie auth
+- or bearer token verified with Clerk, same as the chat route
+
+Purpose:
+
+- let frontend explicitly end the current session
+- trigger session-close maintenance immediately
+- avoid waiting for the inactivity sweeper during product use or testing
+
 ## What now happens in background / maintenance
 
 Session-close maintenance now owns:

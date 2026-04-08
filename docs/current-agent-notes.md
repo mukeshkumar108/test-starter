@@ -133,6 +133,18 @@ If Inngest is not configured:
 
 - maintenance runs locally in fallback mode
 
+## Explicit close endpoint
+
+New endpoint:
+
+- [route.ts](/Users/mukeshkumar/play/test-starter/src/app/api/session/close/route.ts)
+
+Shared helper:
+
+- [closeCurrentSession.ts](/Users/mukeshkumar/play/test-starter/src/lib/services/session/closeCurrentSession.ts)
+
+Use this for frontend explicit-close UI rather than duplicating session-close logic.
+
 Do not assume Inngest is active unless envs are actually set.
 
 ## Inngest
