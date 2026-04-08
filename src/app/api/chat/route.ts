@@ -1029,8 +1029,11 @@ function buildChatTrace(params: {
   contextGovernor?: ContextGovernorRuntime | null;
   mastra?: {
     used: boolean;
+    model_used: string | null;
     memory_tool_used: boolean;
     memory_tool_query: string | null;
+    web_tool_used: boolean;
+    web_tool_query: string | null;
   };
   librarianSkippedForMastra?: boolean;
 }) {
@@ -1066,7 +1069,9 @@ function buildChatTrace(params: {
     token_usage: null,
     context_governor: params.contextGovernor ?? null,
     mastra_used: Boolean(params.mastra?.used),
+    mastra_model_used: params.mastra?.model_used ?? null,
     mastra_memory_tool_used: Boolean(params.mastra?.memory_tool_used),
+    mastra_web_tool_used: Boolean(params.mastra?.web_tool_used),
     librarian_skipped_for_mastra: Boolean(params.librarianSkippedForMastra),
     counts: params.counts,
     timings: params.timings,
@@ -5863,8 +5868,11 @@ export async function POST(request: NextRequest) {
     let mastraTraceMetadata:
       | {
           used: boolean;
+          modelUsed: string | null;
           memoryToolUsed: boolean;
           memoryToolQuery: string | null;
+          webToolUsed: boolean;
+          webToolQuery: string | null;
         }
       | undefined;
     let contextGovernorRuntime:
@@ -6375,8 +6383,11 @@ export async function POST(request: NextRequest) {
       timings,
       mastra: {
         used: mastraTraceMetadata?.used ?? false,
+        model_used: mastraTraceMetadata?.modelUsed ?? null,
         memory_tool_used: mastraTraceMetadata?.memoryToolUsed ?? false,
         memory_tool_query: mastraTraceMetadata?.memoryToolQuery ?? null,
+        web_tool_used: mastraTraceMetadata?.webToolUsed ?? false,
+        web_tool_query: mastraTraceMetadata?.webToolQuery ?? null,
       },
       librarianSkippedForMastra: mastraEnabled,
     });

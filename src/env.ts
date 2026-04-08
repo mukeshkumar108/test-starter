@@ -58,6 +58,8 @@ const envSchema = z.object({
   POSTURE_RESET_GAP_MINUTES: z.string().optional(),
   USER_STATE_RESET_GAP_MINUTES: z.string().optional(),
   SYNAPSE_SESSION_INGEST_TIMEOUT_MS: z.string().optional(),
+  TAVILY_API_KEY: z.string().min(1).optional(),
+  MASTRA_ORCHESTRATION_MODEL: z.string().optional(),
   FEATURE_ROLLING_SUMMARY: z.string().optional(),
   SUMMARY_TIMEOUT_MS: z.string().optional(),
 });

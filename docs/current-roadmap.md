@@ -39,6 +39,11 @@ High-value tools to add through Mastra:
 - explicit memory save
 - reminder / follow-up scheduling
 
+Current state:
+
+- Tavily-backed web search is now wired into the Mastra path
+- next tool slices are explicit memory save and reminder/follow-up scheduling
+
 ### 2. Frontend explicit session close
 
 Backend endpoint exists.
@@ -88,7 +93,7 @@ Do not do these yet unless there is a strong reason:
 - replace Synapse memory with a framework-native memory store
 - move STT/TTS into Mastra
 - rewrite `route.ts` broadly
-- move model choice into Mastra right now
+- fully move model choice into Mastra right now
 - add many tools at once
 
 ## Success Criteria For Next Phase

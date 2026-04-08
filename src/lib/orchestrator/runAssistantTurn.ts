@@ -139,8 +139,11 @@ export type AssistantTurnResult = {
   };
   mastra: {
     used: boolean;
+    modelUsed: string | null;
     memoryToolUsed: boolean;
     memoryToolQuery: string | null;
+    webToolUsed: boolean;
+    webToolQuery: string | null;
   };
   messages?: AISDKMessage[];
   debugPayload?: Record<string, unknown>;
@@ -763,8 +766,11 @@ async function runCustomAssistantTurn(params: {
     },
     mastra: {
       used: false,
+      modelUsed: null,
       memoryToolUsed: false,
       memoryToolQuery: null,
+      webToolUsed: false,
+      webToolQuery: null,
     },
     ...(params.executionContext.debugPromptEnabled || params.executionContext.tracePromptPacket
       ? { messages }
@@ -920,8 +926,11 @@ export async function runAssistantTurn(params: {
         },
         mastra: {
           used: true,
+          modelUsed: mastraTurn.modelUsed,
           memoryToolUsed: mastraTurn.memoryToolUsed,
           memoryToolQuery: mastraTurn.memoryToolQuery,
+          webToolUsed: mastraTurn.webToolUsed,
+          webToolQuery: mastraTurn.webToolQuery,
         },
         ...(params.executionContext.debugPromptEnabled || params.executionContext.tracePromptPacket
           ? { messages }

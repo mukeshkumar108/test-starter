@@ -35,15 +35,22 @@ The live request path is still:
 Mastra currently owns:
 
 - memory-use decisioning on the Mastra path
+- web-search decisioning on the Mastra path
 - whether to call the thin memory tool
+- whether to call the Tavily-backed web tool
 - final reply generation on the Mastra path
 
 Mastra does **not** currently own:
 
-- model choice
+- shell-side tier routing by default, unless `MASTRA_ORCHESTRATION_MODEL` is set
 - shell stance/burst/clarity routing
 - STT/TTS
 - session lifecycle
+
+Important current detail:
+
+- if `MASTRA_ORCHESTRATION_MODEL` is set, Mastra uses that OpenRouter model as a stable orchestration model
+- if it is unset, Mastra still falls back to the shell-chosen model for the turn
 
 ### Session-start continuity
 
@@ -183,6 +190,28 @@ Production envs needed for real Inngest usage:
 - `INNGEST_SIGNING_KEY`
 
 Without them, the code falls back to local execution.
+
+## Tavily web search
+
+Current tool:
+
+- [web.ts](/Users/mukeshkumar/play/test-starter/src/mastra/tools/web.ts)
+
+Env:
+
+- `TAVILY_API_KEY`
+
+Behavior:
+
+- Mastra can call `searchWeb` for live/current external information
+- the tool returns a compact supplemental context block built from Tavily results
+- if Tavily is unconfigured, the tool returns `used=false` and the agent falls back to direct answering
+
+Trace fields now include:
+
+- `mastra_model_used`
+- `mastra_memory_tool_used`
+- `mastra_web_tool_used`
 
 ## Tests / synths that matter right now
 

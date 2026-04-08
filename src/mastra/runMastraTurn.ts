@@ -1,5 +1,6 @@
 import type { AISDKMessage } from "@/lib/llm/aiSdkCompletion";
 import { createMastraRuntime } from "@/mastra";
+import { env } from "@/env";
 import type { MessageInput } from "@mastra/core/agent/message-list";
 
 function extractMemoryToolQuery(value: unknown): string | null {
@@ -17,6 +18,10 @@ function extractMemoryToolQuery(value: unknown): string | null {
     return typeof query === "string" && query.trim() ? query.trim() : null;
   }
   return null;
+}
+
+function extractWebToolQuery(value: unknown): string | null {
+  return extractMemoryToolQuery(value);
 }
 
 function extractLastUserMessage(messages: AISDKMessage[]) {
@@ -56,17 +61,18 @@ export async function runMastraTurn(params: {
   messages: AISDKMessage[];
 }) {
   const startedAt = Date.now();
+  const orchestrationModel = env.MASTRA_ORCHESTRATION_MODEL?.trim() || params.chosenModel;
   const { assistant } = createMastraRuntime({
     userId: params.userId,
     requestId: params.requestId,
     now: params.now,
     instructions: params.instructions,
-    model: params.chosenModel,
+    model: orchestrationModel,
   });
 
   const result = await assistant.generate(params.messages as unknown as MessageInput[], {
     model: {
-      id: params.chosenModel as `${string}/${string}`,
+      id: orchestrationModel as `${string}/${string}`,
       url: "https://openrouter.ai/api/v1",
       apiKey: process.env.OPENROUTER_API_KEY,
       headers: {
@@ -87,8 +93,17 @@ export async function runMastraTurn(params: {
       "toolName" in toolCall &&
       toolCall.toolName === "memoryTool"
     ) ?? false;
+  const webToolUsed =
+    result.toolCalls?.some((toolCall) =>
+      typeof toolCall === "object" &&
+      toolCall !== null &&
+      "toolName" in toolCall &&
+      toolCall.toolName === "searchWeb"
+    ) ?? false;
   const memoryToolQuery =
     result.toolCalls?.map(extractMemoryToolQuery).find((query) => Boolean(query)) ?? null;
+  const webToolQuery =
+    result.toolCalls?.map(extractWebToolQuery).find((query) => Boolean(query)) ?? null;
   const lastUserMessage = extractLastUserMessage(params.messages);
 
   if (!memoryToolUsed && looksLikeRecallQuestion(lastUserMessage)) {
@@ -97,7 +112,7 @@ export async function runMastraTurn(params: {
       JSON.stringify({
         requestId: params.requestId,
         used_memory_tool: false,
-        chosenModel: params.chosenModel,
+        chosenModel: orchestrationModel,
         user_message: lastUserMessage,
       })
     );
@@ -108,7 +123,10 @@ export async function runMastraTurn(params: {
     llm_ms: Math.max(0, Date.now() - startedAt),
     toolCalls: result.toolCalls,
     toolResults: result.toolResults,
+    modelUsed: orchestrationModel,
     memoryToolUsed,
     memoryToolQuery,
+    webToolUsed,
+    webToolQuery,
   };
 }

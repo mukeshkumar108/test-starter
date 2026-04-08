@@ -20,6 +20,7 @@ Many older docs in this repo are historical and do not describe the current sess
 The big changes are:
 
 - Mastra now owns turn-time memory decisioning.
+- Mastra can now also own live web-search decisioning when Tavily is configured.
 - old librarian decisioning is bypassed on the Mastra path.
 - session start no longer depends on a live Synapse startbrief fetch when cached continuity exists.
 - session continuity now uses:
@@ -208,11 +209,27 @@ These are the main ones relevant to the current system:
 - `FEATURE_SYNAPSE_SESSION_INGEST=true`
 - `FEATURE_SESSION_SUMMARY=true` if you want session summaries
 - `FEATURE_ROLLING_SUMMARY=true` if you want rolling summary behavior
+- `TAVILY_API_KEY` if you want live web search through Mastra
+- `MASTRA_ORCHESTRATION_MODEL` if you want Mastra to use one stable OpenRouter model instead of inheriting the shell's chosen model
 
 Also required for continuity:
 
 - `SYNAPSE_BASE_URL`
 - `SYNAPSE_TENANT_ID`
+
+## Mastra web search
+
+There is now a Tavily-backed Mastra web-search tool.
+
+Purpose:
+
+- let Sophie look up current external information
+- keep web access inside the same Mastra tool-calling pattern as memory
+
+Important detail:
+
+- if `TAVILY_API_KEY` is missing, the app still works
+- the web tool simply becomes unavailable and Sophie answers without it
 
 ## Prisma / DB reminder
 
