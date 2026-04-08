@@ -303,8 +303,7 @@ async function main() {
   if (context.signalPackBlock) {
     throw new Error("Did not expect signal pack block on session-start turn");
   }
-  expect(signalsPackPayload?.tenantId ?? null).toBe("tenant-test");
-  expect(signalsPackPayload?.sessionId ?? null).toBe("session-1");
+  expect(signalsPackPayload ?? null).toBe(null);
   const openLoops = context.overlayContext?.openLoops ?? [];
   const commitments = context.overlayContext?.commitments ?? [];
   expect(openLoops.length).toBe(2);
@@ -339,7 +338,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue with the implementation details?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => null;
   (prisma.sessionState.upsert as any) = async () => ({ id: "state-startbrief-weak-1" });
 
@@ -365,7 +364,7 @@ async function main() {
   const context = await buildContextFromSynapse(
     "user-startbrief-weak-1",
     "persona-startbrief-weak-1",
-    "hello",
+    "Can we continue with the implementation details?",
     "session-startbrief-weak-1",
     true
   );
@@ -394,7 +393,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => null;
   (prisma.sessionState.upsert as any) = async () => ({ id: "state-da-1" });
 
@@ -417,7 +416,7 @@ async function main() {
   const context = await buildContextFromSynapse(
     "user-da-1",
     "persona-da-1",
-    "hello",
+    "Can we continue where we left off?",
     "session-da-1",
     true
   );
@@ -449,7 +448,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => null;
   (prisma.sessionState.upsert as any) = async () => ({ id: "state-da-2" });
 
@@ -471,7 +470,7 @@ async function main() {
   const context = await buildContextFromSynapse(
     "user-da-2",
     "persona-da-2",
-    "hello",
+    "Can we continue where we left off?",
     "session-da-2",
     true
   );
@@ -503,7 +502,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.upsert as any) = async () => ({ id: "state-da-3" });
 
   (prisma.sessionState.findUnique as any) = async () => null;
@@ -520,7 +519,7 @@ async function main() {
   const contextWithNoAnalysis = await buildContextFromSynapse(
     "user-da-3",
     "persona-da-3",
-    "hello",
+    "Can we continue where we left off?",
     "session-da-3",
     true
   );
@@ -537,7 +536,7 @@ async function main() {
   const contextWithError = await buildContextFromSynapse(
     "user-da-4",
     "persona-da-4",
-    "hello",
+    "Can we continue where we left off?",
     "session-da-4",
     true
   );
@@ -569,7 +568,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => null;
   (prisma.sessionState.upsert as any) = async () => ({ id: "state-legacy" });
 
@@ -600,7 +599,7 @@ async function main() {
   const context = await buildContextFromSynapse(
     "user-legacy",
     "persona-legacy",
-    "hello",
+    "Can we continue where we left off?",
     "session-legacy",
     true
   );
@@ -638,7 +637,7 @@ async function main() {
   };
   (globalThis as any).__buildContextLocalOverride = async () => sentinel;
 
-  const context = await buildContext("user-1", "persona-1", "hello");
+  const context = await buildContext("user-1", "persona-1", "Can we continue where we left off?");
 
   delete (globalThis as any).__synapseStartBriefOverride;
   delete (globalThis as any).__synapseBriefOverride;
@@ -687,7 +686,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Morning", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => ({
     rollingSummary: null,
     state: {
@@ -714,7 +713,7 @@ async function main() {
   const context = await buildContextFromSynapse(
     "user-2",
     "persona-2",
-    "hello",
+    "Can we continue where we left off?",
     "session-2",
     true
   );
@@ -744,7 +743,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => ({
     rollingSummary: "same-session-summary",
     state: {
@@ -763,7 +762,7 @@ async function main() {
   const context = await buildContextFromSynapse(
     "user-3",
     "persona-3",
-    "hello",
+    "Can we continue where we left off?",
     "session-match",
     true
   );
@@ -787,7 +786,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () => ({
     rollingSummary: "old-session-summary",
     state: {
@@ -806,7 +805,7 @@ async function main() {
   const context = await buildContextFromSynapse(
     "user-4",
     "persona-4",
-    "hello",
+    "Can we continue where we left off?",
     "session-new",
     true
   );
@@ -831,7 +830,7 @@ async function main() {
     startedAt: new Date(Date.now() - 5 * 60 * 1000),
     endedAt: null,
   });
-  (prisma.message.findMany as any) = async () => [{ role: "user", content: "hello", createdAt: new Date() }];
+  (prisma.message.findMany as any) = async () => [{ role: "user", content: "Can we continue where we left off?", createdAt: new Date() }];
   (prisma.sessionState.findUnique as any) = async () =>
     persistedState ? { rollingSummary: null, state: persistedState } : null;
   (prisma.sessionState.upsert as any) = async (args: any) => {
@@ -891,7 +890,7 @@ async function main() {
   const first = await buildContextFromSynapse(
     "user-cache-1",
     "persona-cache-1",
-    "hello",
+    "Can we continue where we left off?",
     "session-cache-1",
     true
   );
@@ -910,27 +909,104 @@ async function main() {
   delete (globalThis as any).__synapseDailyAnalysisOverride;
   (globalThis as any).__synapseSignalsPackOverride = async () => null;
 
-  expect(signalsPackCalls).toBe(1);
+  expect(signalsPackCalls).toBe(0);
   if (first?.signalPackBlock) {
     throw new Error("Did not expect first call (session start) to include signal pack block");
   }
-  if (!second?.signalPackBlock?.includes("Signal Pack (private):")) {
-    throw new Error("Expected second call to include cached signal pack block");
+  if (second?.signalPackBlock) {
+    throw new Error("Did not expect cached signal pack block without a background fetch");
   }
-  if (!second.signalPackBlock.includes("[identity] Prefers concise responses.")) {
-    throw new Error("Expected cached signal pack line on second call");
+  });
+
+  await runTest("buildContextFromSynapse uses cached resume packet for lightweight and substantive session starts", async () => {
+  const { prisma } = await import("../../../prisma");
+  const { buildContextFromSynapse } = await import("../contextBuilder");
+
+  const tmpDir = join(process.cwd(), "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const promptPath = join("tmp", "synapse-prompt-resume-packet.txt");
+  await writeFile(join(process.cwd(), promptPath), "TEST PROMPT", "utf-8");
+
+  (prisma.personaProfile.findUnique as any) = async () => ({ promptPath });
+  (prisma.session.findUnique as any) = async () => ({
+    startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    endedAt: null,
+  });
+  (prisma.message.findMany as any) = async () => [];
+  (prisma.sessionState.findUnique as any) = async () => ({
+    rollingSummary: null,
+    state: {
+      resumePacketData: {
+        version: 1,
+        updated_at: "2026-04-08T09:00:00.000Z",
+        user_id: "user-rp",
+        persona_id: "persona-rp",
+        source_session_id: "session-prev",
+        last_session_ended_at: "2026-04-08T08:55:00.000Z",
+        usable: true,
+        quality: "usable",
+        source: "synapse_startbrief",
+        handover_text: "Continue the roadmap thread with concrete next steps.",
+        narrative: "User has been iterating on continuity and product feel.",
+        bridge_text: "You were mid-thought on the roadmap.",
+        entity_profiles: [{ name: "Ashley", profile_text: "Close relationship contact." }],
+        ops_context: {
+          top_loops_today: [{ text: "Ship the continuity refactor", type: "OPEN_LOOP", time_horizon: "today", salience: 0.9 }],
+          waiting_on: [],
+          steering_note: "Stay concrete.",
+        },
+        items: [{ kind: "loop", text: "Ship the continuity refactor", type: "OPEN_LOOP", time_horizon: "today", due_date: null, salience: 0.9, last_seen_at: null }],
+        profile_snapshot: {
+          relationships_line: "Known relationships: Ashley.",
+          pattern_line: null,
+          work_context_line: "Current work focus: Ship continuity improvements.",
+          long_term_direction_line: null,
+          communication_preference_line: null,
+          daily_anchors_line: null,
+          recent_signals_line: null,
+        },
+        daily_analysis_snapshot: { steering_note: "Stay concrete." },
+        signal_pack_snapshot: { block: null },
+        freshness: {
+          generated_at: new Date().toISOString(),
+          stale_after_ms: 1000 * 60 * 60,
+        },
+      },
+    },
+  });
+
+  let startBriefCalls = 0;
+  (globalThis as any).__synapseStartBriefOverride = async () => {
+    startBriefCalls += 1;
+    return null;
+  };
+
+  const lightweight = await buildContextFromSynapse(
+    "user-rp",
+    "persona-rp",
+    "hello",
+    "session-new-rp",
+    true
+  );
+  const substantive = await buildContextFromSynapse(
+    "user-rp",
+    "persona-rp",
+    "Can we continue with the roadmap plan?",
+    "session-new-rp",
+    true
+  );
+
+  delete (globalThis as any).__synapseStartBriefOverride;
+
+  expect(startBriefCalls).toBe(0);
+  expect(lightweight?.startBrief?.used ?? null).toBe(false);
+  if (!(lightweight?.startbriefPacket?.resume?.bridge_text ?? "").trim()) {
+    throw new Error("Expected lightweight start to derive a bridge hint from cached resume data");
   }
-  if (!second.signalPackBlock.includes("[relationships] Jasmine (daughter): active")) {
-    throw new Error("Expected well-formed relationship signal to be included");
-  }
-  if (second.signalPackBlock.includes("[relationships] and (brother): active")) {
-    throw new Error("Did not expect malformed relationship signal to be included");
-  }
-  if (second.signalPackBlock.includes("Sensitive private detail.")) {
-    throw new Error("Did not expect sensitive signal text to appear verbatim");
-  }
-  if (!second.signalPackBlock.includes("[open_loops] Sensitive item present")) {
-    throw new Error("Expected sensitive steering note for cached signal pack");
+  expect(substantive?.startBrief?.used ?? null).toBe(true);
+  expect(substantive?.startbriefPacket?.handover_text ?? null).toBe("Continue the roadmap thread with concrete next steps.");
+  if (!substantive?.deferredProfileContext?.workContextLine?.includes("Ship continuity improvements")) {
+    throw new Error("Expected substantive start to use cached resume packet profile snapshot");
   }
   });
 

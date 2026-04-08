@@ -44,6 +44,7 @@ import {
   type RoutingMoment,
 } from "@/lib/providers/models";
 import { ensureActiveSession, maybeUpdateRollingSummary } from "@/lib/services/session/sessionService";
+import { clearResumePacketInState } from "@/lib/services/session/resumePacket";
 import * as synapseClient from "@/lib/services/synapseClient";
 import type { SynapseStartBriefResponse } from "@/lib/services/synapseClient";
 import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
@@ -3771,10 +3772,11 @@ async function clearStartBriefForSession(userId: string, personaId: string, sess
   if (baseState.startBriefSessionId !== sessionId) return;
   delete baseState.startBriefSessionId;
   delete baseState.startBriefData;
+  const nextState = clearResumePacketInState(baseState);
   await prisma.sessionState.upsert({
     where: { userId_personaId: { userId, personaId } },
-    update: { state: baseState as any, updatedAt: new Date() },
-    create: { userId, personaId, state: baseState as any },
+    update: { state: nextState as any, updatedAt: new Date() },
+    create: { userId, personaId, state: nextState as any },
   });
 }
 

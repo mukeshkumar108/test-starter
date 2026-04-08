@@ -15,6 +15,17 @@ import type {
 import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
 import { queryRouter, type QueryRouterResult } from "@/lib/services/queryRouter";
 import { loadPersonaPrompt } from "@/lib/prompts/personaPromptLoader";
+import { recordTimingProbe } from "@/lib/debug/timingProbe";
+import {
+  deriveHandshakeView,
+  getResumePacketFromState,
+  handshakeViewToStartbriefPacket,
+  isResumePacketStale,
+  isUsableResumePacket,
+  requestResumePacketRefresh,
+  resumePacketToStartbriefPacket,
+  type ResumePacket,
+} from "@/lib/services/session/resumePacket";
 
 export type SessionStartHandoff = {
   opener?: string;
@@ -116,6 +127,26 @@ type SignalsPackRuntime = {
 type CachedSignalsPack = Omit<SynapseSignalsPackResponse, "debug"> & {
   debug: null;
 };
+
+function isLightweightSessionGreeting(transcript: string) {
+  const normalized = transcript.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!normalized) return true;
+  const lowSignalPatterns = new Set([
+    "hey",
+    "hi",
+    "hello",
+    "hey there",
+    "hi there",
+    "are you there",
+    "you there",
+    "yo",
+    "sup",
+    "morning",
+    "good morning",
+    "good evening",
+  ]);
+  return lowSignalPatterns.has(normalized);
+}
 
 function createEmptySignalsPackCounts(): SignalsPackEmittedCounts {
   return {
@@ -559,6 +590,74 @@ function getOverlayContextFromStartBrief(
     currentFocus: trajectory?.todayFocus ?? undefined,
     weeklyNorthStar: trajectory?.weeklyNorthStar ?? undefined,
     hasHighPriorityLoop: false,
+  };
+}
+
+function buildDeferredProfileContextFromResumePacket(packet: ResumePacket): DeferredProfileContext | undefined {
+  const snapshot = packet.profile_snapshot;
+  if (!snapshot) return undefined;
+  return {
+    relationshipNames: packet.entity_profiles.map((profile) => profile.name).slice(0, 6),
+    relationshipsLine: snapshot.relationships_line ?? undefined,
+    patternLine: snapshot.pattern_line ?? undefined,
+    workContextLine: snapshot.work_context_line ?? undefined,
+    longTermDirectionLine: snapshot.long_term_direction_line ?? undefined,
+    communicationPreferenceLine: snapshot.communication_preference_line ?? undefined,
+    dailyAnchorsLine: snapshot.daily_anchors_line ?? undefined,
+    recentSignalsLine: snapshot.recent_signals_line ?? undefined,
+  };
+}
+
+function buildOverlayContextFromResumePacket(
+  packet: ResumePacket,
+  recentMessages: Array<{ content: string }>,
+  localTrajectory?: { todayFocus?: string | null; weeklyNorthStar?: string | null } | null
+) {
+  const loopTexts = [
+    ...packet.ops_context.top_loops_today.map((item) => item.text),
+    ...packet.items
+      .filter((item) => item.kind.toLowerCase() === "loop")
+      .map((item) => item.text),
+  ];
+  const commitments = packet.items
+    .filter((item) => item.kind.toLowerCase() === "commitment")
+    .map((item) => item.text);
+  return {
+    openLoops: buildOverlayItems(loopTexts, recentMessages),
+    commitments: buildOverlayItems(commitments, recentMessages),
+    currentFocus: localTrajectory?.todayFocus ?? undefined,
+    weeklyNorthStar: localTrajectory?.weeklyNorthStar ?? undefined,
+    hasHighPriorityLoop: loopTexts.length > 0,
+  };
+}
+
+async function getSessionStartHandshakeMeta(userId: string, personaId: string, now: Date) {
+  if (process.env.NODE_ENV === "test") {
+    return {
+      userName: null,
+      sessionsToday: null,
+      firstSessionToday: null,
+    };
+  }
+  const startedToday = new Date(now);
+  startedToday.setHours(0, 0, 0, 0);
+  let sessionsToday: number | null = null;
+  try {
+    sessionsToday = await prisma.session.count({
+      where: {
+        userId,
+        personaId,
+        startedAt: { gte: startedToday },
+      },
+    });
+  } catch {
+    sessionsToday = null;
+  }
+  return {
+    userName: null,
+    sessionsToday: typeof sessionsToday === "number" && sessionsToday > 0 ? sessionsToday : null,
+    firstSessionToday:
+      typeof sessionsToday === "number" ? sessionsToday <= 1 : null,
   };
 }
 
@@ -1372,31 +1471,41 @@ export async function buildContextFromSynapse(
   sessionId: string,
   isSessionStart: boolean
 ): Promise<ConversationContext | null> {
+  const startedAtMs = Date.now();
+  const personaLookupStartedAtMs = Date.now();
   const persona = await prisma.personaProfile.findUnique({
     where: { id: personaId },
   });
+  const personaLookupMs = Date.now() - personaLookupStartedAtMs;
 
   if (!persona) {
     throw new Error("Persona not found");
   }
 
+  const personaPromptStartedAtMs = Date.now();
   const personaPrompt = await loadPersonaPrompt({
     slug: (persona as { slug?: string | null }).slug ?? null,
     promptPath: persona.promptPath,
   });
+  const personaPromptMs = Date.now() - personaPromptStartedAtMs;
 
+  const recentMessagesStartedAtMs = Date.now();
   const messages = await getRecentSessionMessages(userId, personaId, sessionId);
+  const recentMessagesMs = Date.now() - recentMessagesStartedAtMs;
 
+  const sessionStateStartedAtMs = Date.now();
   const sessionState = await prisma.sessionState.findUnique({
     where: { userId_personaId: { userId, personaId } },
     select: { rollingSummary: true, state: true },
   });
+  const sessionStateMs = Date.now() - sessionStateStartedAtMs;
   const rollingSummary = getRollingSummaryForSession(sessionState, sessionId);
   const localTrajectory = getTrajectoryStateFromSession(sessionState?.state, new Date(), "Europe/Zagreb");
   const cachedStartBrief = getStartBriefForSession(sessionState?.state, sessionId);
   const cachedUserModel = getUserModelForSession(sessionState?.state, sessionId);
   const cachedDailyAnalysis = getDailyAnalysisForSession(sessionState?.state, sessionId);
   const cachedSignalsPack = getSignalsPackForSession(sessionState?.state, sessionId);
+  const cachedResumePacket = getResumePacketFromState(sessionState?.state);
   let workingState = sessionState?.state;
   let fetchedSignalsPack: SynapseSignalsPackResponse | null = null;
   const deferredProfileContext = toDeferredProfileContext(cachedUserModel);
@@ -1410,35 +1519,165 @@ export async function buildContextFromSynapse(
 
   if (cachedSignalsPack) {
     signalsPackRuntime = buildSignalPackRuntime(cachedSignalsPack);
-  } else if (isSessionStart) {
-    try {
-      const signalsPack = await getSynapseSignalsPack()<{
-        tenantId?: string;
-        userId: string;
-        sessionId: string;
-        now: string;
-      }, SynapseSignalsPackResponse>({
-        tenantId: SYNAPSE_CANONICAL_TENANT_ID,
-        userId,
-        sessionId,
-        now: new Date().toISOString(),
+  }
+
+  const lightweightSessionGreeting = isSessionStart && isLightweightSessionGreeting(transcript);
+
+  if (isSessionStart) {
+    const handshakeMeta = await getSessionStartHandshakeMeta(userId, personaId, new Date());
+    if (cachedResumePacket) {
+      const handshakeView = deriveHandshakeView({
+        resumePacket: cachedResumePacket,
+        userName: handshakeMeta.userName,
+        sessionsToday: handshakeMeta.sessionsToday,
+        firstSessionToday: handshakeMeta.firstSessionToday,
+        now: new Date(),
+        timeZone: "Europe/Zagreb",
       });
-      signalsPackRuntime = buildSignalPackRuntime(signalsPack);
-      if (signalsPack) {
-        fetchedSignalsPack = signalsPack;
-        workingState = withSignalsPackForSession(workingState, sessionId, signalsPack);
-        await prisma.sessionState.upsert({
-          where: { userId_personaId: { userId, personaId } },
-          update: { state: workingState as any, updatedAt: new Date() },
-          create: { userId, personaId, state: workingState as any },
+      const stale = isResumePacketStale(cachedResumePacket, new Date());
+      if (stale) {
+        requestResumePacketRefresh({
+          userId,
+          personaId,
+          sourceSessionId: cachedResumePacket.source_session_id,
+          lastSessionEndedAt: cachedResumePacket.last_session_ended_at,
+          reason: "context_resume_packet_stale",
         });
       }
-    } catch (error) {
-      signalsPackRuntime = {
-        used: false,
-        counts: createEmptySignalsPackCounts(),
-        error: error instanceof Error ? error.message : String(error),
-        block: null,
+      if (lightweightSessionGreeting) {
+        recordTimingProbe("buildContextFromSynapse", {
+          path: "session_start_handshake_from_resume_packet",
+          persona_lookup_ms: personaLookupMs,
+          persona_prompt_ms: personaPromptMs,
+          recent_messages_ms: recentMessagesMs,
+          session_state_ms: sessionStateMs,
+          total_ms: Date.now() - startedAtMs,
+        });
+        return {
+          persona: personaPrompt,
+          situationalContext: undefined,
+          signalPackBlock: undefined,
+          sessionStartHandoff: undefined,
+          deferredProfileContext: undefined,
+          startbriefPacket: handshakeViewToStartbriefPacket(handshakeView),
+          startbriefFetch: null,
+          rollingSummary,
+          startBrief: {
+            used: false,
+            fallback: null,
+            itemsCount: 0,
+            bridgeTextChars: handshakeView.bridge_hint?.length ?? 0,
+          },
+          overlayContext: {
+            openLoops: [],
+            commitments: [],
+            currentFocus: localTrajectory?.todayFocus ?? undefined,
+            weeklyNorthStar: localTrajectory?.weeklyNorthStar ?? undefined,
+            hasHighPriorityLoop: false,
+          },
+          recentMessages: messages
+            .map((message) => ({
+              ...message,
+              content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+            }))
+            .reverse(),
+          isSessionStart,
+        };
+      }
+      if (isUsableResumePacket(cachedResumePacket)) {
+        const startbriefPacket = resumePacketToStartbriefPacket(cachedResumePacket);
+        recordTimingProbe("buildContextFromSynapse", {
+          path: "session_start_resume_packet_hit",
+          persona_lookup_ms: personaLookupMs,
+          persona_prompt_ms: personaPromptMs,
+          recent_messages_ms: recentMessagesMs,
+          session_state_ms: sessionStateMs,
+          total_ms: Date.now() - startedAtMs,
+        });
+        return {
+          persona: personaPrompt,
+          situationalContext: undefined,
+          signalPackBlock: undefined,
+          sessionStartHandoff: undefined,
+          deferredProfileContext: buildDeferredProfileContextFromResumePacket(cachedResumePacket),
+          startbriefPacket,
+          startbriefFetch: "hit",
+          rollingSummary,
+          startBrief: {
+            used: true,
+            fallback: null,
+            itemsCount: cachedResumePacket.items.length,
+            bridgeTextChars: cachedResumePacket.bridge_text?.length ?? 0,
+          },
+          overlayContext: buildOverlayContextFromResumePacket(
+            cachedResumePacket,
+            messages,
+            localTrajectory
+          ),
+          recentMessages: messages
+            .map((message) => ({
+              ...message,
+              content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+            }))
+            .reverse(),
+          isSessionStart,
+        };
+      }
+    }
+
+    if (lightweightSessionGreeting) {
+      requestResumePacketRefresh({
+        userId,
+        personaId,
+        sourceSessionId: null,
+        lastSessionEndedAt: null,
+        reason: "context_resume_packet_missing_lightweight",
+      });
+      const handshakeView = deriveHandshakeView({
+        resumePacket: null,
+        userName: handshakeMeta.userName,
+        sessionsToday: handshakeMeta.sessionsToday,
+        firstSessionToday: handshakeMeta.firstSessionToday,
+        now: new Date(),
+        timeZone: "Europe/Zagreb",
+      });
+      recordTimingProbe("buildContextFromSynapse", {
+        path: "session_start_handshake_without_resume_packet",
+        persona_lookup_ms: personaLookupMs,
+        persona_prompt_ms: personaPromptMs,
+        recent_messages_ms: recentMessagesMs,
+        session_state_ms: sessionStateMs,
+        total_ms: Date.now() - startedAtMs,
+      });
+      return {
+        persona: personaPrompt,
+        situationalContext: undefined,
+        signalPackBlock: undefined,
+        sessionStartHandoff: undefined,
+        deferredProfileContext: undefined,
+        startbriefPacket: handshakeViewToStartbriefPacket(handshakeView),
+        startbriefFetch: null,
+        rollingSummary,
+        startBrief: {
+          used: false,
+          fallback: null,
+          itemsCount: 0,
+          bridgeTextChars: handshakeView.bridge_hint?.length ?? 0,
+        },
+        overlayContext: {
+          openLoops: [],
+          commitments: [],
+          currentFocus: localTrajectory?.todayFocus ?? undefined,
+          weeklyNorthStar: localTrajectory?.weeklyNorthStar ?? undefined,
+          hasHighPriorityLoop: false,
+        },
+        recentMessages: messages
+          .map((message) => ({
+            ...message,
+            content: message.content.slice(0, MAX_RECENT_MESSAGE_CHARS),
+          }))
+          .reverse(),
+        isSessionStart,
       };
     }
   }
@@ -1479,6 +1718,14 @@ export async function buildContextFromSynapse(
       ? getOverlayContextFromMemoryLoops(loopItems, messages, localTrajectory)
       : getOverlayContextFromStartBrief(cachedStartBrief, messages, localTrajectory);
     const startHandoff = buildSessionStartContext(cachedStartBrief, localTrajectory, cachedDailyAnalysis);
+    recordTimingProbe("buildContextFromSynapse", {
+      path: "cached_startbrief_hit",
+      persona_lookup_ms: personaLookupMs,
+      persona_prompt_ms: personaPromptMs,
+      recent_messages_ms: recentMessagesMs,
+      session_state_ms: sessionStateMs,
+      total_ms: Date.now() - startedAtMs,
+    });
     return {
       persona: personaPrompt,
       situationalContext: isSessionStart
@@ -1603,6 +1850,14 @@ export async function buildContextFromSynapse(
         : getOverlayContextFromStartBrief(startBrief, messages, localTrajectory);
       const fetchedDeferredProfileContext = toDeferredProfileContext(userModel);
       const startHandoff = buildSessionStartContext(startBrief, localTrajectory, dailyAnalysis);
+      recordTimingProbe("buildContextFromSynapse", {
+        path: "live_startbrief_fetch",
+        persona_lookup_ms: personaLookupMs,
+        persona_prompt_ms: personaPromptMs,
+        recent_messages_ms: recentMessagesMs,
+        session_state_ms: sessionStateMs,
+        total_ms: Date.now() - startedAtMs,
+      });
       return {
         persona: personaPrompt,
         situationalContext: [
@@ -1682,6 +1937,14 @@ export async function buildContextFromSynapse(
   }
 
   if (!isSessionStart) {
+    recordTimingProbe("buildContextFromSynapse", {
+      path: "non_session_start",
+      persona_lookup_ms: personaLookupMs,
+      persona_prompt_ms: personaPromptMs,
+      recent_messages_ms: recentMessagesMs,
+      session_state_ms: sessionStateMs,
+      total_ms: Date.now() - startedAtMs,
+    });
     return {
       persona: personaPrompt,
       situationalContext: undefined,
@@ -1761,6 +2024,14 @@ export async function buildContextFromSynapse(
         console.warn("[librarian.trace] failed to log startbrief(fallback-cache)", { error });
       });
     }
+    recordTimingProbe("buildContextFromSynapse", {
+      path: "session_brief_cache_hit",
+      persona_lookup_ms: personaLookupMs,
+      persona_prompt_ms: personaPromptMs,
+      recent_messages_ms: recentMessagesMs,
+      session_state_ms: sessionStateMs,
+      total_ms: Date.now() - startedAtMs,
+    });
     return {
       persona: personaPrompt,
       situationalContext: situationalWithTrajectory ?? undefined,
@@ -1863,6 +2134,14 @@ export async function buildContextFromSynapse(
     });
   }
 
+  recordTimingProbe("buildContextFromSynapse", {
+    path: "session_brief_fetch",
+    persona_lookup_ms: personaLookupMs,
+    persona_prompt_ms: personaPromptMs,
+    recent_messages_ms: recentMessagesMs,
+    session_state_ms: sessionStateMs,
+    total_ms: Date.now() - startedAtMs,
+  });
   return {
     persona: personaPrompt,
     situationalContext: situationalWithTrajectory ?? undefined,
@@ -1957,12 +2236,18 @@ export async function buildContext(
   personaId: string,
   userMessage: string,
 ): Promise<ConversationContext> {
+  const startedAtMs = Date.now();
+  const sessionLookupStartedAtMs = Date.now();
   const session = await prisma.session.findFirst({
     where: { userId, personaId, endedAt: null },
     orderBy: { lastActivityAt: "desc" },
     select: { id: true },
   });
+  const sessionLookupMs = Date.now() - sessionLookupStartedAtMs;
+  const sessionWindowStartedAtMs = Date.now();
   const sessionWindow = session?.id ? await getSessionWindow(session.id) : null;
+  const sessionWindowMs = Date.now() - sessionWindowStartedAtMs;
+  const firstMessageStartedAtMs = Date.now();
   const firstSessionMessage = sessionWindow
     ? await prisma.message.findFirst({
         where: {
@@ -1973,11 +2258,13 @@ export async function buildContext(
         select: { id: true },
       })
     : null;
+  const firstMessageMs = Date.now() - firstMessageStartedAtMs;
   const isSessionStart = !firstSessionMessage;
   const sessionId = session?.id ?? "";
 
   const shouldUseSynapse = env.FEATURE_SYNAPSE_BRIEF === "true";
   if (shouldUseSynapse) {
+    const synapseAttemptStartedAtMs = Date.now();
     try {
       const synapseContext = await buildContextFromSynapse(
         userId,
@@ -1987,13 +2274,49 @@ export async function buildContext(
         isSessionStart
       );
       if (synapseContext) {
+        recordTimingProbe("buildContext", {
+          path: "synapse_success",
+          session_lookup_ms: sessionLookupMs,
+          session_window_ms: sessionWindowMs,
+          first_session_message_ms: firstMessageMs,
+          synapse_attempt_ms: Date.now() - synapseAttemptStartedAtMs,
+          local_fallback_ms: 0,
+          is_session_start: isSessionStart,
+          total_ms: Date.now() - startedAtMs,
+        });
         return synapseContext;
       }
       console.warn("[context.synapse] brief unavailable, falling back");
     } catch (error) {
       console.warn("[context.synapse] brief failed, falling back", { error });
     }
+    const synapseAttemptMs = Date.now() - synapseAttemptStartedAtMs;
+    const localFallbackStartedAtMs = Date.now();
+    const localContext = await getLocalBuilder()(userId, personaId, sessionId, isSessionStart);
+    recordTimingProbe("buildContext", {
+      path: "synapse_fallback_local",
+      session_lookup_ms: sessionLookupMs,
+      session_window_ms: sessionWindowMs,
+      first_session_message_ms: firstMessageMs,
+      synapse_attempt_ms: synapseAttemptMs,
+      local_fallback_ms: Date.now() - localFallbackStartedAtMs,
+      is_session_start: isSessionStart,
+      total_ms: Date.now() - startedAtMs,
+    });
+    return localContext;
   }
 
-  return getLocalBuilder()(userId, personaId, sessionId, isSessionStart);
+  const localFallbackStartedAtMs = Date.now();
+  const localContext = await getLocalBuilder()(userId, personaId, sessionId, isSessionStart);
+  recordTimingProbe("buildContext", {
+    path: "local_only",
+    session_lookup_ms: sessionLookupMs,
+    session_window_ms: sessionWindowMs,
+    first_session_message_ms: firstMessageMs,
+    synapse_attempt_ms: 0,
+    local_fallback_ms: Date.now() - localFallbackStartedAtMs,
+    is_session_start: isSessionStart,
+    total_ms: Date.now() - startedAtMs,
+  });
+  return localContext;
 }

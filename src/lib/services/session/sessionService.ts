@@ -2,7 +2,9 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
 import { summarizeRollingSessionFromMessages, summarizeSession } from "@/lib/services/session/sessionSummarizer";
 import * as synapseClient from "@/lib/services/synapseClient";
+import { requestResumePacketRefresh } from "@/lib/services/session/resumePacket";
 import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
+import { recordTimingProbe } from "@/lib/debug/timingProbe";
 
 const DEFAULT_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
 const ROLLING_SUMMARY_TURN_INTERVAL = 4;
@@ -435,6 +437,14 @@ async function fireAndForgetSynapseSessionIngest(session: {
             endedAt: session.endedAt,
             error: errorBody || "session_ingest_failed",
           });
+        } else {
+          requestResumePacketRefresh({
+            userId: session.userId,
+            personaId: session.personaId,
+            sourceSessionId: session.id,
+            lastSessionEndedAt: session.endedAt.toISOString(),
+            reason: "synapse_ingest_ok",
+          });
         }
 
         const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -544,6 +554,13 @@ export async function closeStaleSessionIfAny(
     personaId: updated.personaId,
     startedAt: updated.startedAt,
     endedAt,
+  });
+  requestResumePacketRefresh({
+    userId: updated.userId,
+    personaId: updated.personaId,
+    sourceSessionId: updated.id,
+    lastSessionEndedAt: endedAt.toISOString(),
+    reason: "close_stale_session",
   });
 
   if (isSummaryEnabled()) {
@@ -672,6 +689,13 @@ export async function closeInactiveSessionsBatch(
       startedAt: candidate.startedAt,
       endedAt,
     });
+    requestResumePacketRefresh({
+      userId: candidate.userId,
+      personaId: candidate.personaId,
+      sourceSessionId: candidate.id,
+      lastSessionEndedAt: endedAt.toISOString(),
+      reason: "close_inactive_batch",
+    });
 
     if (isSummaryEnabled()) {
       void createSessionSummary({
@@ -719,6 +743,13 @@ export async function closeSessionOnExplicitEnd(
     startedAt: updated.startedAt,
     endedAt: now,
   });
+  requestResumePacketRefresh({
+    userId: updated.userId,
+    personaId: updated.personaId,
+    sourceSessionId: updated.id,
+    lastSessionEndedAt: now.toISOString(),
+    reason: "explicit_session_end",
+  });
 
   if (isSummaryEnabled()) {
     void createSessionSummary({
@@ -740,18 +771,24 @@ export async function ensureActiveSession(
   personaId: string,
   now: Date
 ) {
+  const startedAtMs = Date.now();
   void processPendingSynapseSessionIngestRetries({ userId, personaId, now }).catch((error) => {
     console.warn("[synapse.session.ingest.retry.error]", { userId, personaId, error });
   });
+  const closeStaleStartedAtMs = Date.now();
   await closeStaleSessionIfAny(userId, personaId, now);
+  const closeStaleMs = Date.now() - closeStaleStartedAtMs;
   const cutoff = new Date(now.getTime() - getActiveWindowMs());
+  const lastUserMessageStartedAtMs = Date.now();
   const lastUserMessage = await prisma.message.findFirst({
     where: { userId, personaId, role: "user" },
     orderBy: { createdAt: "desc" },
     select: { createdAt: true },
   });
+  const lastUserMessageMs = Date.now() - lastUserMessageStartedAtMs;
   const lastUserMessageAt = lastUserMessage?.createdAt ?? null;
   if (!lastUserMessageAt || lastUserMessageAt < cutoff) {
+    const createSessionStartedAtMs = Date.now();
     const session = await prisma.session.create({
       data: {
         userId,
@@ -761,9 +798,23 @@ export async function ensureActiveSession(
         turnCount: 1,
       },
     });
+    const createSessionMs = Date.now() - createSessionStartedAtMs;
+    const resetSummaryStartedAtMs = Date.now();
     await resetRollingSummaryForSession({ userId, personaId, sessionId: session.id });
+    const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
+    recordTimingProbe("ensureActiveSession", {
+      path: "create_new_session",
+      close_stale_session_ms: closeStaleMs,
+      last_user_message_lookup_ms: lastUserMessageMs,
+      active_session_lookup_ms: 0,
+      create_session_ms: createSessionMs,
+      update_session_ms: 0,
+      reset_rolling_summary_ms: resetSummaryMs,
+      total_ms: Date.now() - startedAtMs,
+    });
     return session;
   }
+  const activeSessionStartedAtMs = Date.now();
   const activeSession = await prisma.session.findFirst({
     where: {
       userId,
@@ -772,17 +823,32 @@ export async function ensureActiveSession(
     },
     orderBy: { lastActivityAt: "desc" },
   });
+  const activeSessionLookupMs = Date.now() - activeSessionStartedAtMs;
 
   if (activeSession) {
-    return prisma.session.update({
+    const updateSessionStartedAtMs = Date.now();
+    const updated = await prisma.session.update({
       where: { id: activeSession.id },
       data: {
         lastActivityAt: now,
         turnCount: { increment: 1 },
       },
     });
+    const updateSessionMs = Date.now() - updateSessionStartedAtMs;
+    recordTimingProbe("ensureActiveSession", {
+      path: "update_existing_session",
+      close_stale_session_ms: closeStaleMs,
+      last_user_message_lookup_ms: lastUserMessageMs,
+      active_session_lookup_ms: activeSessionLookupMs,
+      create_session_ms: 0,
+      update_session_ms: updateSessionMs,
+      reset_rolling_summary_ms: 0,
+      total_ms: Date.now() - startedAtMs,
+    });
+    return updated;
   }
 
+  const createSessionStartedAtMs = Date.now();
   const session = await prisma.session.create({
     data: {
       userId,
@@ -792,7 +858,20 @@ export async function ensureActiveSession(
       turnCount: 1,
     },
   });
+  const createSessionMs = Date.now() - createSessionStartedAtMs;
+  const resetSummaryStartedAtMs = Date.now();
   await resetRollingSummaryForSession({ userId, personaId, sessionId: session.id });
+  const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
+  recordTimingProbe("ensureActiveSession", {
+    path: "create_session_after_lookup_miss",
+    close_stale_session_ms: closeStaleMs,
+    last_user_message_lookup_ms: lastUserMessageMs,
+    active_session_lookup_ms: activeSessionLookupMs,
+    create_session_ms: createSessionMs,
+    update_session_ms: 0,
+    reset_rolling_summary_ms: resetSummaryMs,
+    total_ms: Date.now() - startedAtMs,
+  });
   return session;
 }
 
