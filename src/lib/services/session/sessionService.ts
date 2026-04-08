@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/env";
 import { summarizeRollingSessionFromMessages, summarizeSession } from "@/lib/services/session/sessionSummarizer";
 import * as synapseClient from "@/lib/services/synapseClient";
-import { requestResumePacketRefresh } from "@/lib/services/session/resumePacket";
+import { refreshResumePacket, requestResumePacketRefresh } from "@/lib/services/session/resumePacket";
 import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
 import { recordTimingProbe } from "@/lib/debug/timingProbe";
 
@@ -247,6 +247,13 @@ async function processPendingSynapseSessionIngestRetries(params: {
         error: null,
       },
     });
+    requestResumePacketRefresh({
+      userId: params.userId,
+      personaId: params.personaId,
+      sourceSessionId: due.sessionId,
+      lastSessionEndedAt: due.endedAt,
+      reason: "synapse_session_retry_ok",
+    });
     return;
   }
 
@@ -388,7 +395,7 @@ function getSynapseSessionIngestWithMeta() {
   return typeof override === "function" ? override : synapseClient.sessionIngestWithMeta;
 }
 
-async function fireAndForgetSynapseSessionIngest(session: {
+async function runSynapseSessionIngest(session: {
   id: string;
   userId: string;
   personaId: string;
@@ -397,22 +404,22 @@ async function fireAndForgetSynapseSessionIngest(session: {
 }) {
   if (env.FEATURE_SYNAPSE_SESSION_INGEST !== "true") return;
 
-  try {
-    const messages = await prisma.message.findMany({
-      where: {
-        userId: session.userId,
-        personaId: session.personaId,
-        createdAt: {
-          gte: session.startedAt,
-          lte: session.endedAt,
-        },
+  const messages = await prisma.message.findMany({
+    where: {
+      userId: session.userId,
+      personaId: session.personaId,
+      createdAt: {
+        gte: session.startedAt,
+        lte: session.endedAt,
       },
-      orderBy: { createdAt: "asc" },
-      select: { role: true, content: true, createdAt: true },
-    });
+    },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, content: true, createdAt: true },
+  });
 
-    const start = Date.now();
-    void getSynapseSessionIngestWithMeta()({
+  const start = Date.now();
+  try {
+    const result = await getSynapseSessionIngestWithMeta()({
       tenantId: SYNAPSE_CANONICAL_TENANT_ID,
       userId: session.userId,
       personaId: session.personaId,
@@ -424,118 +431,197 @@ async function fireAndForgetSynapseSessionIngest(session: {
         text: message.content,
         timestamp: message.createdAt.toISOString(),
       })),
-    }).then(async (result) => {
-      const ms = Date.now() - start;
-      const status = result?.status ?? null;
-      const ok = Boolean(result?.ok);
-      const errorBody = result?.errorBody ?? null;
-      console.log("[synapse.session.ingest]", {
-        requestId: null,
-        role: "session",
+    });
+    const ms = Date.now() - start;
+    const status = result?.status ?? null;
+    const ok = Boolean(result?.ok);
+    const errorBody = result?.errorBody ?? null;
+    console.log("[synapse.session.ingest]", {
+      requestId: null,
+      role: "session",
+      sessionId: session.id,
+      status,
+      ms,
+    });
+
+    await prisma.synapseIngestTrace.create({
+      data: {
+        userId: session.userId,
+        personaId: session.personaId,
         sessionId: session.id,
+        role: "session",
         status,
         ms,
-      });
-
-      try {
-        await prisma.synapseIngestTrace.create({
-          data: {
-            userId: session.userId,
-            personaId: session.personaId,
-            sessionId: session.id,
-            role: "session",
-            status,
-            ms,
-            ok,
-            error: ok ? null : errorBody || "session_ingest_failed",
-          },
-        });
-        if (!ok) {
-          await enqueueSynapseSessionIngestRetry({
-            userId: session.userId,
-            personaId: session.personaId,
-            sessionId: session.id,
-            startedAt: session.startedAt,
-            endedAt: session.endedAt,
-            error: errorBody || "session_ingest_failed",
-          });
-        } else {
-          requestResumePacketRefresh({
-            userId: session.userId,
-            personaId: session.personaId,
-            sourceSessionId: session.id,
-            lastSessionEndedAt: session.endedAt.toISOString(),
-            reason: "synapse_ingest_ok",
-          });
-        }
-
-        const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const failedCount = await prisma.synapseIngestTrace.count({
-          where: {
-            ok: false,
-            createdAt: { gte: cutoff },
-            NOT: { error: "timeout" },
-          },
-        });
-        if (failedCount > 0) {
-          console.warn("[synapse.session.ingest.failures.24h]", {
-            count: failedCount,
-          });
-        }
-      } catch (error) {
-        console.warn("[synapse.session.ingest.trace.error]", { error });
-      }
-    }).catch((error) => {
-      const ms = Date.now() - start;
-      const errorText = String(error);
-      console.warn("[synapse.session.ingest.error]", {
-        sessionId: session.id,
-        error,
-      });
-      void prisma.synapseIngestTrace.create({
-        data: {
-          userId: session.userId,
-          personaId: session.personaId,
-          sessionId: session.id,
-          role: "session",
-          status: null,
-          ms,
-          ok: false,
-          error: errorText,
-        },
-      }).catch((traceError) => {
-        console.warn("[synapse.session.ingest.trace.error]", { traceError });
-      });
-      void enqueueSynapseSessionIngestRetry({
+        ok,
+        error: ok ? null : errorBody || "session_ingest_failed",
+      },
+    });
+    if (!ok) {
+      await enqueueSynapseSessionIngestRetry({
         userId: session.userId,
         personaId: session.personaId,
         sessionId: session.id,
         startedAt: session.startedAt,
         endedAt: session.endedAt,
-        error: errorText,
-      }).catch((enqueueError) => {
-        console.warn("[synapse.session.ingest.retry.enqueue.error]", {
-          sessionId: session.id,
-          enqueueError,
-        });
+        error: errorBody || "session_ingest_failed",
       });
+    }
+
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const failedCount = await prisma.synapseIngestTrace.count({
+      where: {
+        ok: false,
+        createdAt: { gte: cutoff },
+        NOT: { error: "timeout" },
+      },
     });
+    if (failedCount > 0) {
+      console.warn("[synapse.session.ingest.failures.24h]", {
+        count: failedCount,
+      });
+    }
   } catch (error) {
-    console.warn("[synapse.session.ingest.error]", { sessionId: session.id, error });
-    void enqueueSynapseSessionIngestRetry({
+    const ms = Date.now() - start;
+    const errorText = String(error);
+    await prisma.synapseIngestTrace.create({
+      data: {
+        userId: session.userId,
+        personaId: session.personaId,
+        sessionId: session.id,
+        role: "session",
+        status: null,
+        ms,
+        ok: false,
+        error: errorText,
+      },
+    }).catch((traceError) => {
+      console.warn("[synapse.session.ingest.trace.error]", { traceError });
+    });
+    await enqueueSynapseSessionIngestRetry({
       userId: session.userId,
       personaId: session.personaId,
       sessionId: session.id,
       startedAt: session.startedAt,
       endedAt: session.endedAt,
-      error: String(error),
+      error: errorText,
     }).catch((enqueueError) => {
       console.warn("[synapse.session.ingest.retry.enqueue.error]", {
         sessionId: session.id,
         enqueueError,
       });
     });
+    throw error;
   }
+}
+
+async function sendSessionClosedEvent(session: {
+  id: string;
+  userId: string;
+  personaId: string;
+  startedAt: Date;
+  endedAt: Date;
+  lastActivityAt: Date;
+}) {
+  const { inngest } = await import("@/inngest/client");
+  await inngest.send({
+    name: "app/session.closed",
+    data: {
+      sessionId: session.id,
+      userId: session.userId,
+      personaId: session.personaId,
+      startedAt: session.startedAt.toISOString(),
+      endedAt: session.endedAt.toISOString(),
+      lastActivityAt: session.lastActivityAt.toISOString(),
+    },
+  });
+}
+
+export async function runSessionClosedMaintenance(session: {
+  id: string;
+  userId: string;
+  personaId: string;
+  startedAt: Date;
+  endedAt: Date;
+  lastActivityAt: Date;
+}) {
+  const tasks: Promise<unknown>[] = [];
+
+  if (process.env.NODE_ENV !== "test") {
+    tasks.push(
+      refreshResumePacket({
+        userId: session.userId,
+        personaId: session.personaId,
+        sourceSessionId: session.id,
+        lastSessionEndedAt: session.endedAt.toISOString(),
+      }).catch((error) => {
+        console.warn("[resume.packet.refresh.error]", {
+          userId: session.userId,
+          personaId: session.personaId,
+          sourceSessionId: session.id,
+          reason: "session_closed_maintenance",
+          error,
+        });
+      })
+    );
+  }
+
+  if (isSummaryEnabled()) {
+    tasks.push(
+      createSessionSummary({
+        id: session.id,
+        userId: session.userId,
+        personaId: session.personaId,
+        startedAt: session.startedAt,
+        lastActivityAt: session.lastActivityAt,
+      }).catch((error) => {
+        console.warn("[session.summary] failed", error);
+      })
+    );
+  }
+
+  if (env.FEATURE_SYNAPSE_SESSION_INGEST === "true") {
+    tasks.push(
+      runSynapseSessionIngest(session).catch((error) => {
+        console.warn("[synapse.session.ingest.error]", { sessionId: session.id, error });
+      })
+    );
+  }
+
+  await Promise.allSettled(tasks);
+}
+
+function requestSessionClosedMaintenance(session: {
+  id: string;
+  userId: string;
+  personaId: string;
+  startedAt: Date;
+  endedAt: Date;
+  lastActivityAt: Date;
+}) {
+  void (async () => {
+    try {
+      if (env.INNGEST_EVENT_KEY || env.INNGEST_DEV === "1") {
+        await sendSessionClosedEvent(session);
+        return;
+      }
+    } catch (error) {
+      console.warn("[session.closed.enqueue.error]", {
+        sessionId: session.id,
+        userId: session.userId,
+        personaId: session.personaId,
+        error,
+      });
+    }
+
+    await runSessionClosedMaintenance(session);
+  })().catch((error) => {
+    console.warn("[session.closed.maintenance.error]", {
+      sessionId: session.id,
+      userId: session.userId,
+      personaId: session.personaId,
+      error,
+    });
+  });
 }
 
 export async function closeStaleSessionIfAny(
@@ -575,32 +661,14 @@ export async function closeStaleSessionIfAny(
     data: { endedAt },
   });
 
-  void fireAndForgetSynapseSessionIngest({
+  requestSessionClosedMaintenance({
     id: updated.id,
     userId: updated.userId,
     personaId: updated.personaId,
     startedAt: updated.startedAt,
     endedAt,
+    lastActivityAt: updated.lastActivityAt,
   });
-  requestResumePacketRefresh({
-    userId: updated.userId,
-    personaId: updated.personaId,
-    sourceSessionId: updated.id,
-    lastSessionEndedAt: endedAt.toISOString(),
-    reason: "close_stale_session",
-  });
-
-  if (isSummaryEnabled()) {
-    void createSessionSummary({
-      id: updated.id,
-      userId: updated.userId,
-      personaId: updated.personaId,
-      startedAt: updated.startedAt,
-      lastActivityAt: updated.lastActivityAt,
-    }).catch((error) => {
-      console.warn("[session.summary] failed", error);
-    });
-  }
 
   return updated;
 }
@@ -709,32 +777,14 @@ export async function closeInactiveSessionsBatch(
       endedAt: endedAt.toISOString(),
     });
 
-    void fireAndForgetSynapseSessionIngest({
+    requestSessionClosedMaintenance({
       id: candidate.id,
       userId: candidate.userId,
       personaId: candidate.personaId,
       startedAt: candidate.startedAt,
       endedAt,
+      lastActivityAt: candidate.lastActivityAt,
     });
-    requestResumePacketRefresh({
-      userId: candidate.userId,
-      personaId: candidate.personaId,
-      sourceSessionId: candidate.id,
-      lastSessionEndedAt: endedAt.toISOString(),
-      reason: "close_inactive_batch",
-    });
-
-    if (isSummaryEnabled()) {
-      void createSessionSummary({
-        id: candidate.id,
-        userId: candidate.userId,
-        personaId: candidate.personaId,
-        startedAt: candidate.startedAt,
-        lastActivityAt: candidate.lastActivityAt,
-      }).catch((error) => {
-        console.warn("[session.summary] failed", error);
-      });
-    }
   }
 
   return {
@@ -763,32 +813,14 @@ export async function closeSessionOnExplicitEnd(
     data: { endedAt: now },
   });
 
-  void fireAndForgetSynapseSessionIngest({
+  requestSessionClosedMaintenance({
     id: updated.id,
     userId: updated.userId,
     personaId: updated.personaId,
     startedAt: updated.startedAt,
     endedAt: now,
+    lastActivityAt: updated.lastActivityAt,
   });
-  requestResumePacketRefresh({
-    userId: updated.userId,
-    personaId: updated.personaId,
-    sourceSessionId: updated.id,
-    lastSessionEndedAt: now.toISOString(),
-    reason: "explicit_session_end",
-  });
-
-  if (isSummaryEnabled()) {
-    void createSessionSummary({
-      id: updated.id,
-      userId: updated.userId,
-      personaId: updated.personaId,
-      startedAt: updated.startedAt,
-      lastActivityAt: updated.lastActivityAt,
-    }).catch((error) => {
-      console.warn("[session.summary] failed", error);
-    });
-  }
 
   return updated;
 }

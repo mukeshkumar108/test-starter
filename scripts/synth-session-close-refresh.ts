@@ -1,4 +1,5 @@
 process.env.FEATURE_SESSION_SUMMARY = "false";
+import { clearTimingProbes } from "@/lib/debug/timingProbe";
 import {
   cleanupQaUser,
   createQaUser,

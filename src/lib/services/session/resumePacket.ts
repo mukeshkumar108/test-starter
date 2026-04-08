@@ -634,6 +634,73 @@ export async function refreshResumePacket(params: {
   await refreshResumePacketDirect(params);
 }
 
+export async function repairResumePackets(params?: { limit?: number }) {
+  const candidateLimit =
+    typeof params?.limit === "number" && Number.isFinite(params.limit) && params.limit > 0
+      ? Math.min(100, Math.floor(params.limit))
+      : 25;
+  const recentSessions = await prisma.session.findMany({
+    where: { endedAt: { not: null } },
+    orderBy: { endedAt: "desc" },
+    take: candidateLimit * 4,
+    select: {
+      id: true,
+      userId: true,
+      personaId: true,
+      endedAt: true,
+    },
+  });
+
+  const dedupedTargets: Array<{
+    userId: string;
+    personaId: string;
+    sourceSessionId: string;
+    lastSessionEndedAt: string;
+  }> = [];
+  const seen = new Set<string>();
+  for (const session of recentSessions) {
+    if (!session.endedAt) continue;
+    const key = `${session.userId}:${session.personaId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dedupedTargets.push({
+      userId: session.userId,
+      personaId: session.personaId,
+      sourceSessionId: session.id,
+      lastSessionEndedAt: session.endedAt.toISOString(),
+    });
+    if (dedupedTargets.length >= candidateLimit) break;
+  }
+
+  let refreshed = 0;
+  let skipped = 0;
+  for (const target of dedupedTargets) {
+    const sessionState = await prisma.sessionState.findUnique({
+      where: {
+        userId_personaId: {
+          userId: target.userId,
+          personaId: target.personaId,
+        },
+      },
+      select: { state: true },
+    });
+    const packet = getResumePacketFromState(sessionState?.state);
+    const matchesLatestSession = packet?.source_session_id === target.sourceSessionId;
+    if (packet && matchesLatestSession && !isResumePacketStale(packet)) {
+      skipped += 1;
+      continue;
+    }
+    await refreshResumePacketDirect(target);
+    refreshed += 1;
+  }
+
+  return {
+    scanned: dedupedTargets.length,
+    refreshed,
+    skipped,
+  };
+}
+
 async function sendResumePacketEvent(params: {
   userId: string;
   personaId: string;
