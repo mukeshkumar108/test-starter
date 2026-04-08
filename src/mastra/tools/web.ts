@@ -46,6 +46,79 @@ function buildWebResultSheet(params: {
   return lines.join("\n");
 }
 
+export async function runWebSearch(params: {
+  requestId: string;
+  query: string;
+}) {
+  if (!env.TAVILY_API_KEY) {
+    return {
+      used: false,
+      query: params.query,
+      supplementalContext: null,
+      reason: "tavily_unconfigured",
+    };
+  }
+
+  const response = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      api_key: env.TAVILY_API_KEY,
+      query: params.query,
+      search_depth: "advanced",
+      include_answer: true,
+      max_results: 5,
+    }),
+  });
+
+  if (!response.ok) {
+    console.warn("[mastra.web.search.failed]", {
+      requestId: params.requestId,
+      status: response.status,
+    });
+    return {
+      used: false,
+      query: params.query,
+      supplementalContext: null,
+      reason: `http_${response.status}`,
+    };
+  }
+
+  const data = (await response.json()) as TavilySearchResponse;
+  const answer = cleanString(data.answer);
+  const results = Array.isArray(data.results)
+    ? data.results
+        .map((result) => ({
+          title: cleanString(result.title),
+          url: cleanString(result.url),
+          content: cleanString(result.content),
+        }))
+        .filter((result) => Boolean(result.title || result.url || result.content))
+    : [];
+
+  if (!answer && results.length === 0) {
+    return {
+      used: false,
+      query: params.query,
+      supplementalContext: null,
+      reason: "no_results",
+    };
+  }
+
+  return {
+    used: true,
+    query: params.query,
+    supplementalContext: buildWebResultSheet({
+      query: params.query,
+      answer,
+      results,
+    }),
+    reason: null,
+  };
+}
+
 export function createWebSearchTool(params: {
   requestId: string;
 }) {
@@ -62,74 +135,14 @@ export function createWebSearchTool(params: {
       supplementalContext: z.string().nullable(),
       reason: z.string().nullable(),
     }),
-    execute: async ({ query }) => {
-      if (!env.TAVILY_API_KEY) {
-        return {
-          used: false,
-          query,
-          supplementalContext: null,
-          reason: "tavily_unconfigured",
-        };
-      }
-
-      const response = await fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          api_key: env.TAVILY_API_KEY,
-          query,
-          search_depth: "advanced",
-          include_answer: true,
-          max_results: 5,
-        }),
-      });
-
-      if (!response.ok) {
-        console.warn("[mastra.web.search.failed]", {
-          requestId: params.requestId,
-          status: response.status,
-        });
-        return {
-          used: false,
-          query,
-          supplementalContext: null,
-          reason: `http_${response.status}`,
-        };
-      }
-
-      const data = (await response.json()) as TavilySearchResponse;
-      const answer = cleanString(data.answer);
-      const results = Array.isArray(data.results)
-        ? data.results
-            .map((result) => ({
-              title: cleanString(result.title),
-              url: cleanString(result.url),
-              content: cleanString(result.content),
-            }))
-            .filter((result) => Boolean(result.title || result.url || result.content))
-        : [];
-
-      if (!answer && results.length === 0) {
-        return {
-          used: false,
-          query,
-          supplementalContext: null,
-          reason: "no_results",
-        };
-      }
-
-      return {
-        used: true,
+    inputExamples: [
+      { input: { query: "weather in Cambridge today" } },
+      { input: { query: "latest OpenAI model release" } },
+    ],
+    execute: async ({ query }) =>
+      runWebSearch({
+        requestId: params.requestId,
         query,
-        supplementalContext: buildWebResultSheet({
-          query,
-          answer,
-          results,
-        }),
-        reason: null,
-      };
-    },
+      }),
   });
 }

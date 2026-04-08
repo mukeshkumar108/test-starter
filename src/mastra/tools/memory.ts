@@ -105,6 +105,76 @@ function buildRecallSheet(params: {
   return lines.join("\n");
 }
 
+export async function runMemoryLookup(params: {
+  userId: string;
+  requestId: string;
+  now: Date;
+  query: string;
+}) {
+  if (!env.SYNAPSE_BASE_URL) {
+    return {
+      used: false,
+      query: params.query,
+      supplementalContext: null,
+      reason: "synapse_unconfigured",
+    };
+  }
+
+  const response = await fetch(`${env.SYNAPSE_BASE_URL}/memory/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenantId: SYNAPSE_CANONICAL_TENANT_ID,
+      userId: params.userId,
+      query: params.query,
+      limit: 10,
+      referenceTime: params.now.toISOString(),
+      includeContext: false,
+    }),
+  });
+
+  if (!response.ok) {
+    console.warn("[mastra.memory.query.failed]", {
+      requestId: params.requestId,
+      status: response.status,
+    });
+    return {
+      used: false,
+      query: params.query,
+      supplementalContext: null,
+      reason: `http_${response.status}`,
+    };
+  }
+
+  const data = (await response.json()) as MemoryQueryResponse;
+  const { facts, entities, factRows } = normalizeMemoryQueryResponse(data);
+  const recallFacts = factRows
+    .filter((fact) => fact.relevanceTier !== "stale")
+    .map((fact) => fact.text);
+
+  if (recallFacts.length === 0 && entities.length === 0) {
+    return {
+      used: false,
+      query: params.query,
+      supplementalContext: null,
+      reason: "no_results",
+    };
+  }
+
+  return {
+    used: true,
+    query: params.query,
+    supplementalContext: buildRecallSheet({
+      query: params.query,
+      facts,
+      factRows,
+      entities,
+      includeStaleFacts: false,
+    }),
+    reason: null,
+  };
+}
+
 export function createMemoryTool(params: {
   userId: string;
   requestId: string;
@@ -123,69 +193,16 @@ export function createMemoryTool(params: {
       supplementalContext: z.string().nullable(),
       reason: z.string().nullable(),
     }),
-    execute: async ({ query }) => {
-      if (!env.SYNAPSE_BASE_URL) {
-        return {
-          used: false,
-          query,
-          supplementalContext: null,
-          reason: "synapse_unconfigured",
-        };
-      }
-
-      const response = await fetch(`${env.SYNAPSE_BASE_URL}/memory/query`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tenantId: SYNAPSE_CANONICAL_TENANT_ID,
-          userId: params.userId,
-          query,
-          limit: 10,
-          referenceTime: params.now.toISOString(),
-          includeContext: false,
-        }),
-      });
-
-      if (!response.ok) {
-        console.warn("[mastra.memory.query.failed]", {
-          requestId: params.requestId,
-          status: response.status,
-        });
-        return {
-          used: false,
-          query,
-          supplementalContext: null,
-          reason: `http_${response.status}`,
-        };
-      }
-
-      const data = (await response.json()) as MemoryQueryResponse;
-      const { facts, entities, factRows } = normalizeMemoryQueryResponse(data);
-      const recallFacts = factRows
-        .filter((fact) => fact.relevanceTier !== "stale")
-        .map((fact) => fact.text);
-
-      if (recallFacts.length === 0 && entities.length === 0) {
-        return {
-          used: false,
-          query,
-          supplementalContext: null,
-          reason: "no_results",
-        };
-      }
-
-      return {
-        used: true,
+    inputExamples: [
+      { input: { query: "Ashley relationship status recent changes" } },
+      { input: { query: "Jasmine text message yesterday" } },
+    ],
+    execute: async ({ query }) =>
+      runMemoryLookup({
+        userId: params.userId,
+        requestId: params.requestId,
+        now: params.now,
         query,
-        supplementalContext: buildRecallSheet({
-          query,
-          facts,
-          factRows,
-          entities,
-          includeStaleFacts: false,
-        }),
-        reason: null,
-      };
-    },
+      }),
   });
 }
