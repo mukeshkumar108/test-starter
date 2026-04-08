@@ -31,6 +31,9 @@ function looksLikeCurrentInfoQuestion(text: string) {
   if (!normalized) return false;
   return (
     normalized.includes("weather") ||
+    normalized.includes("news") ||
+    normalized.includes("headline") ||
+    normalized.includes("headlines") ||
     normalized.includes("today") ||
     normalized.includes("latest") ||
     normalized.includes("right now") ||
@@ -49,6 +52,7 @@ async function buildPrefetchedSupplementalContext(params: {
   now: Date;
   lastUserMessage: string;
 }) {
+  const startedAt = Date.now();
   const sections: string[] = [];
   let memoryPrefetchUsed = false;
   let webPrefetchUsed = false;
@@ -58,15 +62,19 @@ async function buildPrefetchedSupplementalContext(params: {
   let webLookupAttempted = false;
   let memoryLookupReason: string | null = null;
   let webLookupReason: string | null = null;
+  let memoryPrefetchMs = 0;
+  let webPrefetchMs = 0;
 
   if (looksLikeRecallQuestion(params.lastUserMessage)) {
     memoryLookupAttempted = true;
+    const memoryStartedAt = Date.now();
     const memoryResult = await runMemoryLookup({
       userId: params.userId,
       requestId: params.requestId,
       now: params.now,
       query: params.lastUserMessage,
     });
+    memoryPrefetchMs = Math.max(0, Date.now() - memoryStartedAt);
     if (memoryResult.used && memoryResult.supplementalContext) {
       memoryPrefetchUsed = true;
       memoryPrefetchQuery = memoryResult.query;
@@ -78,10 +86,12 @@ async function buildPrefetchedSupplementalContext(params: {
 
   if (looksLikeCurrentInfoQuestion(params.lastUserMessage)) {
     webLookupAttempted = true;
+    const webStartedAt = Date.now();
     const webResult = await runWebSearch({
       requestId: params.requestId,
       query: params.lastUserMessage,
     });
+    webPrefetchMs = Math.max(0, Date.now() - webStartedAt);
     if (webResult.used && webResult.supplementalContext) {
       webPrefetchUsed = true;
       webPrefetchQuery = webResult.query;
@@ -101,6 +111,9 @@ async function buildPrefetchedSupplementalContext(params: {
     webLookupAttempted,
     memoryLookupReason,
     webLookupReason,
+    prefetch_ms: Math.max(0, Date.now() - startedAt),
+    memory_prefetch_ms: memoryPrefetchMs,
+    web_prefetch_ms: webPrefetchMs,
   };
 }
 
@@ -168,6 +181,7 @@ ${prefetchedContext.supplementalContext ?? ""}`.trim(),
     model: orchestrationModel,
   });
 
+  const generationStartedAt = Date.now();
   const result = await assistant.generate(params.messages as unknown as MessageInput[], {
     maxSteps: 1,
     toolChoice: "none",
@@ -216,9 +230,19 @@ ${prefetchedContext.supplementalContext ?? ""}`.trim(),
     );
   }
 
+  const finalGenerationMs = Math.max(0, Date.now() - generationStartedAt);
+  const totalMs = Math.max(0, Date.now() - startedAt);
+
   return {
     assistantText: result.text,
-    llm_ms: Math.max(0, Date.now() - startedAt),
+    llm_ms: finalGenerationMs,
+    timings: {
+      mastra_total_ms: totalMs,
+      prefetch_ms: prefetchedContext.prefetch_ms,
+      memory_prefetch_ms: prefetchedContext.memory_prefetch_ms,
+      web_prefetch_ms: prefetchedContext.web_prefetch_ms,
+      final_generation_ms: finalGenerationMs,
+    },
     toolCalls: result.toolCalls,
     toolResults: result.toolResults,
     modelUsed: orchestrationModel,

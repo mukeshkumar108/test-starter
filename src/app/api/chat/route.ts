@@ -956,6 +956,11 @@ type ChatTimingSpans = {
   overlay_ms: number;
   orchestration_ms: number;
   llm_ms: number;
+  mastra_total_ms?: number;
+  prefetch_ms?: number;
+  memory_prefetch_ms?: number;
+  web_prefetch_ms?: number;
+  final_generation_ms?: number;
   tts_ms: number;
   db_write_ms: number;
   total_ms: number;
@@ -5954,6 +5959,11 @@ export async function POST(request: NextRequest) {
       assistantResponseText = turnResult.assistantText;
       timings.orchestration_ms = turnResult.timings.orchestration_ms;
       timings.llm_ms = turnResult.timings.llm_ms;
+      timings.mastra_total_ms = turnResult.timings.mastra_total_ms;
+      timings.prefetch_ms = turnResult.timings.prefetch_ms;
+      timings.memory_prefetch_ms = turnResult.timings.memory_prefetch_ms;
+      timings.web_prefetch_ms = turnResult.timings.web_prefetch_ms;
+      timings.final_generation_ms = turnResult.timings.final_generation_ms;
       systemBlockOrder = turnResult.promptMetadata.systemBlockOrder;
       debugPayload = turnResult.debugPayload
         ? {

@@ -112,6 +112,11 @@ export type AssistantTurnResult = {
   timings: {
     orchestration_ms: number;
     llm_ms: number;
+    mastra_total_ms?: number;
+    prefetch_ms?: number;
+    memory_prefetch_ms?: number;
+    web_prefetch_ms?: number;
+    final_generation_ms?: number;
   };
   generation: {
     providerUsed: "openrouter" | "openai" | "safe_text";
@@ -739,6 +744,11 @@ async function runCustomAssistantTurn(params: {
     timings: {
       orchestration_ms: Math.max(0, Date.now() - orchestrationStartedAt),
       llm_ms: completion.llm_ms,
+      mastra_total_ms: undefined,
+      prefetch_ms: undefined,
+      memory_prefetch_ms: undefined,
+      web_prefetch_ms: undefined,
+      final_generation_ms: undefined,
     },
     generation: {
       providerUsed: completion.providerUsed,
@@ -899,6 +909,11 @@ export async function runAssistantTurn(params: {
         timings: {
           orchestration_ms: Math.max(0, Date.now() - orchestrationStartedAt),
           llm_ms: mastraTurn.llm_ms,
+          mastra_total_ms: mastraTurn.timings.mastra_total_ms,
+          prefetch_ms: mastraTurn.timings.prefetch_ms,
+          memory_prefetch_ms: mastraTurn.timings.memory_prefetch_ms,
+          web_prefetch_ms: mastraTurn.timings.web_prefetch_ms,
+          final_generation_ms: mastraTurn.timings.final_generation_ms,
         },
         generation: {
           providerUsed: "openrouter",

@@ -33,6 +33,7 @@
     "synth:prompt-assembly:v1:gap": "pnpm tsx scripts/synth-prompt-assembly-v1-gap.ts",
     "synth:semantic-match": "pnpm tsx scripts/synth-semantic-match.ts",
     "synth:conversation-harness": "pnpm tsx scripts/synth-conversation-harness.ts",
+    "bench:mastra-latency": "pnpm tsx scripts/bench-mastra-latency.ts",
     "smoke:remote:session-start": "pnpm tsx scripts/admin/remote-session-start-smoke.ts",
     "test:entity-normalizer": "pnpm tsx src/lib/services/memory/__tests__/entityNormalizer.test.ts"
   },
