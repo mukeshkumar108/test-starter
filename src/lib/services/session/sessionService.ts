@@ -294,6 +294,7 @@ async function resetRollingSummaryForSession(params: {
   personaId: string;
   sessionId: string;
   existingState?: unknown;
+  existingRollingSummary?: string | null;
 }) {
   const existingState =
     params.existingState !== undefined
@@ -304,6 +305,20 @@ async function resetRollingSummaryForSession(params: {
             select: { state: true },
           })
         )?.state;
+  const existingRollingSummary =
+    params.existingRollingSummary !== undefined
+      ? params.existingRollingSummary
+      : (
+          await prisma.sessionState.findUnique({
+            where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+            select: { rollingSummary: true },
+          })
+        )?.rollingSummary ??
+        null;
+  const existingSessionId = getRollingSummarySessionId(existingState);
+  if (existingRollingSummary === null && existingSessionId === params.sessionId) {
+    return { skipped: true as const };
+  }
   const nextState = withRollingSummarySessionId(existingState, params.sessionId);
   await prisma.sessionState.upsert({
     where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
@@ -315,6 +330,7 @@ async function resetRollingSummaryForSession(params: {
       state: nextState as any,
     },
   });
+  return { skipped: false as const };
 }
 
 async function createSessionSummary(session: {
@@ -801,7 +817,7 @@ export async function ensureActiveSession(
     const createSessionStartedAtMs = Date.now();
     const existingSessionStatePromise = prisma.sessionState.findUnique({
       where: { userId_personaId: { userId, personaId } },
-      select: { state: true },
+      select: { state: true, rollingSummary: true },
     });
     const session = await prisma.session.create({
       data: {
@@ -814,11 +830,12 @@ export async function ensureActiveSession(
     });
     const createSessionMs = Date.now() - createSessionStartedAtMs;
     const resetSummaryStartedAtMs = Date.now();
-    await resetRollingSummaryForSession({
+    const resetSummaryResult = await resetRollingSummaryForSession({
       userId,
       personaId,
       sessionId: session.id,
       existingState: (await existingSessionStatePromise)?.state,
+      existingRollingSummary: (await existingSessionStatePromise)?.rollingSummary ?? null,
     });
     const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
     recordTimingProbe("ensureActiveSession", {
@@ -829,6 +846,7 @@ export async function ensureActiveSession(
       create_session_ms: createSessionMs,
       update_session_ms: 0,
       reset_rolling_summary_ms: resetSummaryMs,
+      reset_rolling_summary_skipped: resetSummaryResult.skipped,
       total_ms: Date.now() - startedAtMs,
     });
     return session;
@@ -842,7 +860,7 @@ export async function ensureActiveSession(
     const createSessionStartedAtMs = Date.now();
     const existingSessionStatePromise = prisma.sessionState.findUnique({
       where: { userId_personaId: { userId, personaId } },
-      select: { state: true },
+      select: { state: true, rollingSummary: true },
     });
     const session = await prisma.session.create({
       data: {
@@ -855,11 +873,12 @@ export async function ensureActiveSession(
     });
     const createSessionMs = Date.now() - createSessionStartedAtMs;
     const resetSummaryStartedAtMs = Date.now();
-    await resetRollingSummaryForSession({
+    const resetSummaryResult = await resetRollingSummaryForSession({
       userId,
       personaId,
       sessionId: session.id,
       existingState: (await existingSessionStatePromise)?.state,
+      existingRollingSummary: (await existingSessionStatePromise)?.rollingSummary ?? null,
     });
     const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
     recordTimingProbe("ensureActiveSession", {
@@ -870,6 +889,7 @@ export async function ensureActiveSession(
       create_session_ms: createSessionMs,
       update_session_ms: 0,
       reset_rolling_summary_ms: resetSummaryMs,
+      reset_rolling_summary_skipped: resetSummaryResult.skipped,
       total_ms: Date.now() - startedAtMs,
     });
     return session;
@@ -883,6 +903,7 @@ export async function ensureActiveSession(
       endedAt: null,
     },
     orderBy: { lastActivityAt: "desc" },
+    select: { id: true },
   });
   const activeSessionLookupMs = Date.now() - activeSessionStartedAtMs;
 
@@ -912,7 +933,7 @@ export async function ensureActiveSession(
   const createSessionStartedAtMs = Date.now();
   const existingSessionStatePromise = prisma.sessionState.findUnique({
     where: { userId_personaId: { userId, personaId } },
-    select: { state: true },
+    select: { state: true, rollingSummary: true },
   });
   const session = await prisma.session.create({
     data: {
@@ -925,11 +946,12 @@ export async function ensureActiveSession(
   });
   const createSessionMs = Date.now() - createSessionStartedAtMs;
   const resetSummaryStartedAtMs = Date.now();
-  await resetRollingSummaryForSession({
+  const resetSummaryResult = await resetRollingSummaryForSession({
     userId,
     personaId,
     sessionId: session.id,
     existingState: (await existingSessionStatePromise)?.state,
+    existingRollingSummary: (await existingSessionStatePromise)?.rollingSummary ?? null,
   });
   const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
   recordTimingProbe("ensureActiveSession", {
@@ -940,6 +962,7 @@ export async function ensureActiveSession(
     create_session_ms: createSessionMs,
     update_session_ms: 0,
     reset_rolling_summary_ms: resetSummaryMs,
+    reset_rolling_summary_skipped: resetSummaryResult.skipped,
     total_ms: Date.now() - startedAtMs,
   });
   return session;

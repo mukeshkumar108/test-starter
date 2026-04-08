@@ -55,6 +55,7 @@ model Session {
   summary SessionSummary?
 
   @@index([userId, personaId, lastActivityAt])
+  @@index([userId, personaId, endedAt, lastActivityAt])
   @@index([userId, personaId, startedAt])
 }
 
