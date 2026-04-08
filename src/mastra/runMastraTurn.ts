@@ -54,8 +54,13 @@ async function buildPrefetchedSupplementalContext(params: {
   let webPrefetchUsed = false;
   let memoryPrefetchQuery: string | null = null;
   let webPrefetchQuery: string | null = null;
+  let memoryLookupAttempted = false;
+  let webLookupAttempted = false;
+  let memoryLookupReason: string | null = null;
+  let webLookupReason: string | null = null;
 
   if (looksLikeRecallQuestion(params.lastUserMessage)) {
+    memoryLookupAttempted = true;
     const memoryResult = await runMemoryLookup({
       userId: params.userId,
       requestId: params.requestId,
@@ -65,11 +70,14 @@ async function buildPrefetchedSupplementalContext(params: {
     if (memoryResult.used && memoryResult.supplementalContext) {
       memoryPrefetchUsed = true;
       memoryPrefetchQuery = memoryResult.query;
-      sections.push(memoryResult.supplementalContext);
+      sections.push(`[VERIFIED_MEMORY]\n${memoryResult.supplementalContext}`);
+    } else {
+      memoryLookupReason = memoryResult.reason;
     }
   }
 
   if (looksLikeCurrentInfoQuestion(params.lastUserMessage)) {
+    webLookupAttempted = true;
     const webResult = await runWebSearch({
       requestId: params.requestId,
       query: params.lastUserMessage,
@@ -77,7 +85,9 @@ async function buildPrefetchedSupplementalContext(params: {
     if (webResult.used && webResult.supplementalContext) {
       webPrefetchUsed = true;
       webPrefetchQuery = webResult.query;
-      sections.push(webResult.supplementalContext);
+      sections.push(`[VERIFIED_WEB]\n${webResult.supplementalContext}`);
+    } else {
+      webLookupReason = webResult.reason;
     }
   }
 
@@ -87,6 +97,10 @@ async function buildPrefetchedSupplementalContext(params: {
     memoryPrefetchQuery,
     webPrefetchUsed,
     webPrefetchQuery,
+    memoryLookupAttempted,
+    webLookupAttempted,
+    memoryLookupReason,
+    webLookupReason,
   };
 }
 
@@ -140,17 +154,23 @@ export async function runMastraTurn(params: {
     requestId: params.requestId,
     now: params.now,
     instructions:
-      prefetchedContext.supplementalContext
-        ? `${params.instructions}
+      `${params.instructions}
 
-Verified supplemental context is provided below. Use it directly and naturally for this turn. Do not say you are checking or looking things up if the answer is already present here.
+This is a real-time push-to-talk voice turn. Do not expose tool-call markup, XML-like tags, or internal reasoning. Give one clean spoken answer only.
 
-${prefetchedContext.supplementalContext}`
-        : params.instructions,
+If verified retrieval context is provided below, treat it as authoritative for this turn. Use it directly and naturally. Do not say you are checking or looking things up if the answer is already present here.
+
+If the user asks for live or current external information and no verified web result is provided, be honest that you do not have verified live data for this turn. Do not guess.
+
+If the user asks about prior conversations, relationships, or earlier events and no verified memory result is provided, be honest that you cannot verify that memory right now. Do not guess.
+
+${prefetchedContext.supplementalContext ?? ""}`.trim(),
     model: orchestrationModel,
   });
 
   const result = await assistant.generate(params.messages as unknown as MessageInput[], {
+    maxSteps: 1,
+    toolChoice: "none",
     model: {
       id: orchestrationModel as `${string}/${string}`,
       url: "https://openrouter.ai/api/v1",
