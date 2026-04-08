@@ -213,8 +213,13 @@ async function getSessionWindow(sessionId: string): Promise<SessionWindow | null
   };
 }
 
-async function getRecentSessionMessages(userId: string, personaId: string, sessionId: string) {
-  const window = await getSessionWindow(sessionId);
+async function getRecentSessionMessages(
+  userId: string,
+  personaId: string,
+  sessionId: string,
+  sessionWindow?: SessionWindow | null
+) {
+  const window = sessionWindow ?? (await getSessionWindow(sessionId));
   return prisma.message.findMany({
     where: {
       userId,
@@ -1469,14 +1474,41 @@ export async function buildContextFromSynapse(
   personaId: string,
   transcript: string,
   sessionId: string,
-  isSessionStart: boolean
+  isSessionStart: boolean,
+  sessionWindow?: SessionWindow | null
 ): Promise<ConversationContext | null> {
   const startedAtMs = Date.now();
+  let personaLookupMs = 0;
+  let recentMessagesMs = 0;
+  let sessionStateMs = 0;
   const personaLookupStartedAtMs = Date.now();
-  const persona = await prisma.personaProfile.findUnique({
+  const personaPromise = prisma.personaProfile.findUnique({
     where: { id: personaId },
   });
-  const personaLookupMs = Date.now() - personaLookupStartedAtMs;
+  const recentMessagesStartedAtMs = Date.now();
+  const sessionStateStartedAtMs = Date.now();
+  const recentMessagesPromise = getRecentSessionMessages(userId, personaId, sessionId, sessionWindow);
+  const sessionStatePromise = prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { rollingSummary: true, state: true },
+  });
+  const handshakeMetaPromise = isSessionStart
+    ? getSessionStartHandshakeMeta(userId, personaId, new Date())
+    : null;
+  const [persona, messages, sessionState] = await Promise.all([
+    personaPromise.then((value) => {
+      personaLookupMs = Date.now() - personaLookupStartedAtMs;
+      return value;
+    }),
+    recentMessagesPromise.then((value) => {
+      recentMessagesMs = Date.now() - recentMessagesStartedAtMs;
+      return value;
+    }),
+    sessionStatePromise.then((value) => {
+      sessionStateMs = Date.now() - sessionStateStartedAtMs;
+      return value;
+    }),
+  ]);
 
   if (!persona) {
     throw new Error("Persona not found");
@@ -1488,17 +1520,6 @@ export async function buildContextFromSynapse(
     promptPath: persona.promptPath,
   });
   const personaPromptMs = Date.now() - personaPromptStartedAtMs;
-
-  const recentMessagesStartedAtMs = Date.now();
-  const messages = await getRecentSessionMessages(userId, personaId, sessionId);
-  const recentMessagesMs = Date.now() - recentMessagesStartedAtMs;
-
-  const sessionStateStartedAtMs = Date.now();
-  const sessionState = await prisma.sessionState.findUnique({
-    where: { userId_personaId: { userId, personaId } },
-    select: { rollingSummary: true, state: true },
-  });
-  const sessionStateMs = Date.now() - sessionStateStartedAtMs;
   const rollingSummary = getRollingSummaryForSession(sessionState, sessionId);
   const localTrajectory = getTrajectoryStateFromSession(sessionState?.state, new Date(), "Europe/Zagreb");
   const cachedStartBrief = getStartBriefForSession(sessionState?.state, sessionId);
@@ -1524,7 +1545,9 @@ export async function buildContextFromSynapse(
   const lightweightSessionGreeting = isSessionStart && isLightweightSessionGreeting(transcript);
 
   if (isSessionStart) {
-    const handshakeMeta = await getSessionStartHandshakeMeta(userId, personaId, new Date());
+    const handshakeMeta = handshakeMetaPromise
+      ? await handshakeMetaPromise
+      : { userName: null, sessionsToday: null, firstSessionToday: null };
     if (cachedResumePacket) {
       const handshakeView = deriveHandshakeView({
         resumePacket: cachedResumePacket,
@@ -2170,12 +2193,28 @@ async function buildContextLocal(
   userId: string,
   personaId: string,
   sessionId?: string,
-  isSessionStartOverride?: boolean
+  isSessionStartOverride?: boolean,
+  sessionWindow?: SessionWindow | null
 ): Promise<ConversationContext> {
   try {
-    const persona = await prisma.personaProfile.findUnique({
+    const personaPromise = prisma.personaProfile.findUnique({
       where: { id: personaId },
     });
+    const messagesPromise = getRecentSessionMessages(
+      userId,
+      personaId,
+      sessionId ?? "",
+      sessionWindow
+    );
+    const sessionStatePromise = prisma.sessionState.findUnique({
+      where: { userId_personaId: { userId, personaId } },
+      select: { rollingSummary: true, state: true },
+    });
+    const [persona, messages, sessionState] = await Promise.all([
+      personaPromise,
+      messagesPromise,
+      sessionStatePromise,
+    ]);
 
     if (!persona) {
       throw new Error("Persona not found");
@@ -2184,13 +2223,6 @@ async function buildContextLocal(
     const personaPrompt = await loadPersonaPrompt({
       slug: (persona as { slug?: string | null }).slug ?? null,
       promptPath: persona.promptPath,
-    });
-
-    const messages = await getRecentSessionMessages(userId, personaId, sessionId ?? "");
-
-    const sessionState = await prisma.sessionState.findUnique({
-      where: { userId_personaId: { userId, personaId } },
-      select: { rollingSummary: true, state: true },
     });
 
     const isSessionStart =
@@ -2241,25 +2273,36 @@ export async function buildContext(
   const session = await prisma.session.findFirst({
     where: { userId, personaId, endedAt: null },
     orderBy: { lastActivityAt: "desc" },
-    select: { id: true },
+    select: { id: true, startedAt: true, endedAt: true, turnCount: true },
   });
   const sessionLookupMs = Date.now() - sessionLookupStartedAtMs;
   const sessionWindowStartedAtMs = Date.now();
-  const sessionWindow = session?.id ? await getSessionWindow(session.id) : null;
-  const sessionWindowMs = Date.now() - sessionWindowStartedAtMs;
-  const firstMessageStartedAtMs = Date.now();
-  const firstSessionMessage = sessionWindow
-    ? await prisma.message.findFirst({
-        where: {
-          userId,
-          personaId,
-          ...buildSessionWindowWhere(sessionWindow),
-        },
-        select: { id: true },
-      })
+  const sessionWindow = session
+    ? session.startedAt instanceof Date
+      ? {
+          startedAt: session.startedAt,
+          endedAt: session.endedAt ?? null,
+        }
+      : await getSessionWindow(session.id)
     : null;
-  const firstMessageMs = Date.now() - firstMessageStartedAtMs;
-  const isSessionStart = !firstSessionMessage;
+  const sessionWindowMs = Date.now() - sessionWindowStartedAtMs;
+  let firstMessageMs = 0;
+  let isSessionStart = !session;
+  if (session && typeof session.turnCount === "number") {
+    isSessionStart = session.turnCount <= 1;
+  } else if (sessionWindow) {
+    const firstMessageStartedAtMs = Date.now();
+    const firstSessionMessage = await prisma.message.findFirst({
+      where: {
+        userId,
+        personaId,
+        ...buildSessionWindowWhere(sessionWindow),
+      },
+      select: { id: true },
+    });
+    firstMessageMs = Date.now() - firstMessageStartedAtMs;
+    isSessionStart = !firstSessionMessage;
+  }
   const sessionId = session?.id ?? "";
 
   const shouldUseSynapse = env.FEATURE_SYNAPSE_BRIEF === "true";
@@ -2271,7 +2314,8 @@ export async function buildContext(
         personaId,
         userMessage,
         sessionId,
-        isSessionStart
+        isSessionStart,
+        sessionWindow
       );
       if (synapseContext) {
         recordTimingProbe("buildContext", {
@@ -2292,7 +2336,13 @@ export async function buildContext(
     }
     const synapseAttemptMs = Date.now() - synapseAttemptStartedAtMs;
     const localFallbackStartedAtMs = Date.now();
-    const localContext = await getLocalBuilder()(userId, personaId, sessionId, isSessionStart);
+    const localContext = await getLocalBuilder()(
+      userId,
+      personaId,
+      sessionId,
+      isSessionStart,
+      sessionWindow
+    );
     recordTimingProbe("buildContext", {
       path: "synapse_fallback_local",
       session_lookup_ms: sessionLookupMs,
@@ -2307,7 +2357,13 @@ export async function buildContext(
   }
 
   const localFallbackStartedAtMs = Date.now();
-  const localContext = await getLocalBuilder()(userId, personaId, sessionId, isSessionStart);
+  const localContext = await getLocalBuilder()(
+    userId,
+    personaId,
+    sessionId,
+    isSessionStart,
+    sessionWindow
+  );
   recordTimingProbe("buildContext", {
     path: "local_only",
     session_lookup_ms: sessionLookupMs,

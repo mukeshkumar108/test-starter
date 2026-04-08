@@ -293,12 +293,18 @@ async function resetRollingSummaryForSession(params: {
   userId: string;
   personaId: string;
   sessionId: string;
+  existingState?: unknown;
 }) {
-  const existing = await prisma.sessionState.findUnique({
-    where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
-    select: { state: true },
-  });
-  const nextState = withRollingSummarySessionId(existing?.state, params.sessionId);
+  const existingState =
+    params.existingState !== undefined
+      ? params.existingState
+      : (
+          await prisma.sessionState.findUnique({
+            where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
+            select: { state: true },
+          })
+        )?.state;
+  const nextState = withRollingSummarySessionId(existingState, params.sessionId);
   await prisma.sessionState.upsert({
     where: { userId_personaId: { userId: params.userId, personaId: params.personaId } },
     update: { rollingSummary: null, state: nextState as any, updatedAt: new Date() },
@@ -519,15 +525,20 @@ async function fireAndForgetSynapseSessionIngest(session: {
 export async function closeStaleSessionIfAny(
   userId: string,
   personaId: string,
-  now: Date
+  now: Date,
+  lastUserMessageAtOverride?: Date | null
 ) {
   const cutoff = new Date(now.getTime() - getActiveWindowMs());
-  const lastUserMessage = await prisma.message.findFirst({
-    where: { userId, personaId, role: "user" },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
-  });
-  const lastUserMessageAt = lastUserMessage?.createdAt ?? null;
+  const lastUserMessageAt =
+    lastUserMessageAtOverride ??
+    (
+      await prisma.message.findFirst({
+        where: { userId, personaId, role: "user" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      })
+    )?.createdAt ??
+    null;
   if (!lastUserMessageAt || lastUserMessageAt >= cutoff) {
     return null;
   }
@@ -775,9 +786,6 @@ export async function ensureActiveSession(
   void processPendingSynapseSessionIngestRetries({ userId, personaId, now }).catch((error) => {
     console.warn("[synapse.session.ingest.retry.error]", { userId, personaId, error });
   });
-  const closeStaleStartedAtMs = Date.now();
-  await closeStaleSessionIfAny(userId, personaId, now);
-  const closeStaleMs = Date.now() - closeStaleStartedAtMs;
   const cutoff = new Date(now.getTime() - getActiveWindowMs());
   const lastUserMessageStartedAtMs = Date.now();
   const lastUserMessage = await prisma.message.findFirst({
@@ -787,8 +795,14 @@ export async function ensureActiveSession(
   });
   const lastUserMessageMs = Date.now() - lastUserMessageStartedAtMs;
   const lastUserMessageAt = lastUserMessage?.createdAt ?? null;
-  if (!lastUserMessageAt || lastUserMessageAt < cutoff) {
+  let closeStaleMs = 0;
+
+  if (!lastUserMessageAt) {
     const createSessionStartedAtMs = Date.now();
+    const existingSessionStatePromise = prisma.sessionState.findUnique({
+      where: { userId_personaId: { userId, personaId } },
+      select: { state: true },
+    });
     const session = await prisma.session.create({
       data: {
         userId,
@@ -800,7 +814,12 @@ export async function ensureActiveSession(
     });
     const createSessionMs = Date.now() - createSessionStartedAtMs;
     const resetSummaryStartedAtMs = Date.now();
-    await resetRollingSummaryForSession({ userId, personaId, sessionId: session.id });
+    await resetRollingSummaryForSession({
+      userId,
+      personaId,
+      sessionId: session.id,
+      existingState: (await existingSessionStatePromise)?.state,
+    });
     const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
     recordTimingProbe("ensureActiveSession", {
       path: "create_new_session",
@@ -814,6 +833,48 @@ export async function ensureActiveSession(
     });
     return session;
   }
+
+  if (lastUserMessageAt < cutoff) {
+    const closeStaleStartedAtMs = Date.now();
+    await closeStaleSessionIfAny(userId, personaId, now, lastUserMessageAt);
+    closeStaleMs = Date.now() - closeStaleStartedAtMs;
+
+    const createSessionStartedAtMs = Date.now();
+    const existingSessionStatePromise = prisma.sessionState.findUnique({
+      where: { userId_personaId: { userId, personaId } },
+      select: { state: true },
+    });
+    const session = await prisma.session.create({
+      data: {
+        userId,
+        personaId,
+        startedAt: now,
+        lastActivityAt: now,
+        turnCount: 1,
+      },
+    });
+    const createSessionMs = Date.now() - createSessionStartedAtMs;
+    const resetSummaryStartedAtMs = Date.now();
+    await resetRollingSummaryForSession({
+      userId,
+      personaId,
+      sessionId: session.id,
+      existingState: (await existingSessionStatePromise)?.state,
+    });
+    const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
+    recordTimingProbe("ensureActiveSession", {
+      path: "create_new_session",
+      close_stale_session_ms: closeStaleMs,
+      last_user_message_lookup_ms: lastUserMessageMs,
+      active_session_lookup_ms: 0,
+      create_session_ms: createSessionMs,
+      update_session_ms: 0,
+      reset_rolling_summary_ms: resetSummaryMs,
+      total_ms: Date.now() - startedAtMs,
+    });
+    return session;
+  }
+
   const activeSessionStartedAtMs = Date.now();
   const activeSession = await prisma.session.findFirst({
     where: {
@@ -849,6 +910,10 @@ export async function ensureActiveSession(
   }
 
   const createSessionStartedAtMs = Date.now();
+  const existingSessionStatePromise = prisma.sessionState.findUnique({
+    where: { userId_personaId: { userId, personaId } },
+    select: { state: true },
+  });
   const session = await prisma.session.create({
     data: {
       userId,
@@ -860,7 +925,12 @@ export async function ensureActiveSession(
   });
   const createSessionMs = Date.now() - createSessionStartedAtMs;
   const resetSummaryStartedAtMs = Date.now();
-  await resetRollingSummaryForSession({ userId, personaId, sessionId: session.id });
+  await resetRollingSummaryForSession({
+    userId,
+    personaId,
+    sessionId: session.id,
+    existingState: (await existingSessionStatePromise)?.state,
+  });
   const resetSummaryMs = Date.now() - resetSummaryStartedAtMs;
   recordTimingProbe("ensureActiveSession", {
     path: "create_session_after_lookup_miss",
