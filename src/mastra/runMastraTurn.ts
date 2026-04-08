@@ -181,7 +181,9 @@ function looksLikeRecallQuestion(text: string) {
     return false;
   }
   return (
-    normalized.includes("remember") ||
+    normalized.includes("do you remember") ||
+    normalized.includes("can you remember") ||
+    normalized.includes("what do you remember") ||
     normalized.includes("earlier") ||
     normalized.includes("previous") ||
     normalized.includes("what did i") ||
@@ -196,12 +198,12 @@ function looksLikeRecallQuestion(text: string) {
 }
 
 function shouldPrefetchMemory(text: string) {
+  const normalized = text.trim().toLowerCase();
   const currentInfo = looksLikeCurrentInfoQuestion(text);
   const recall = looksLikeRecallQuestion(text);
   if (!recall) return false;
   if (!currentInfo) return true;
 
-  const normalized = text.trim().toLowerCase();
   const explicitMixedSignals = [
     "what did i say",
     "what was i saying",
@@ -242,6 +244,10 @@ export async function runMastraTurn(params: {
 This is a real-time push-to-talk voice turn. Do not expose tool-call markup, XML-like tags, or internal reasoning. Give one clean spoken answer only.
 
 If verified retrieval context is provided below, treat it as authoritative for this turn. Use it directly and naturally. Do not say you are checking or looking things up if the answer is already present here.
+
+If verified web results are provided, silently synthesize them into a natural spoken answer. Do not list sources, do not read URLs, do not mention citations, and do not read bullet points aloud unless the user explicitly asks for sources.
+
+For current-events, weather, headlines, and live-information answers, keep the spoken response concise by default: usually 1 to 3 short sentences.
 
 If the user asks for live or current external information and no verified web result is provided, be honest that you do not have verified live data for this turn. Do not guess.
 
