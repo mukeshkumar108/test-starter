@@ -2,6 +2,19 @@
 
 This is the shortest practical guide for working on the app as it exists now.
 
+## Current docs to trust
+
+Use these first:
+
+- [current-human-runbook.md](/Users/mukeshkumar/play/test-starter/docs/current-human-runbook.md)
+- [current-agent-notes.md](/Users/mukeshkumar/play/test-starter/docs/current-agent-notes.md)
+- [current-architecture-overview.md](/Users/mukeshkumar/play/test-starter/docs/current-architecture-overview.md)
+- [current-roadmap.md](/Users/mukeshkumar/play/test-starter/docs/current-roadmap.md)
+- [current-decision-log.md](/Users/mukeshkumar/play/test-starter/docs/current-decision-log.md)
+- [system-explainer.md](/Users/mukeshkumar/play/test-starter/docs/system-explainer.md)
+
+Many older docs in this repo are historical and do not describe the current session-start model.
+
 ## What changed recently
 
 The big changes are:

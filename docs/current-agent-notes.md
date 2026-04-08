@@ -2,6 +2,19 @@
 
 This file is for future coding agents working in this repo.
 
+## Current docs to trust
+
+Use these first:
+
+- [current-agent-notes.md](/Users/mukeshkumar/play/test-starter/docs/current-agent-notes.md)
+- [current-human-runbook.md](/Users/mukeshkumar/play/test-starter/docs/current-human-runbook.md)
+- [current-architecture-overview.md](/Users/mukeshkumar/play/test-starter/docs/current-architecture-overview.md)
+- [current-roadmap.md](/Users/mukeshkumar/play/test-starter/docs/current-roadmap.md)
+- [current-decision-log.md](/Users/mukeshkumar/play/test-starter/docs/current-decision-log.md)
+- [system-explainer.md](/Users/mukeshkumar/play/test-starter/docs/system-explainer.md)
+
+Treat many older architecture/runtime docs as historical unless they are explicitly marked current.
+
 ## Current architecture boundaries
 
 ### Live turn
