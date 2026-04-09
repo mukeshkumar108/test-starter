@@ -3777,11 +3777,9 @@ function detectMealValue(text: string) {
 }
 
 function detectSceneActivity(text: string) {
-  if (/\bwalk(ing)?\b/.test(text)) return "walking";
-  if (text.includes("outside")) return "walking";
-  if (text.includes("washing")) return "household_tasks";
-  if (text.includes("dinner") || text.includes("air fryer") || text.includes("eat first")) return "eating";
-  if (text.includes("work") || text.includes("change") || text.includes("pushed another change")) return "working";
+  if (/\bi('m| am)\s+(out\s+)?walking\b/.test(text) || /\bstarting\s+my\s+walk\b/.test(text) || /\bgoing\s+for\s+(a\s+)?walk\b/.test(text)) return "walking";
+  if (/\bi('m| am)\s+washing\b/.test(text)) return "household_tasks";
+  if (/\bi('m| am)\s+(eating|having dinner)\b/.test(text) || text.includes("air fryer")) return "eating";
   return null;
 }
 
