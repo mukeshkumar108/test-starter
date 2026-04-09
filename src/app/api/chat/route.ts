@@ -3855,11 +3855,6 @@ function extractCurrentSessionStatePatch(text: string) {
   if (normalized.includes("finished my dinner") || normalized.includes("had dinner")) {
     patch["scene.phase"] = "after_dinner";
   }
-  if (normalized.includes("watch the sunset")) {
-    patch["user.current_focus"] = "sunset_walk";
-  } else if (normalized.includes("walk")) {
-    patch["user.current_focus"] = "walk";
-  }
 
   return patch;
 }
@@ -3937,9 +3932,6 @@ function buildCurrentSessionTruthsBlock(params: {
     "[CURRENT_SESSION_STATE]",
     "authoritative_for_current_session=true",
     "prefer_over=bridge,handover,rolling_summary,prior_assistant_assumptions",
-    "prefer_latest_literal_user_update=true",
-    "do_not_advance_scene=true",
-    "first_sentence_anchor_latest_literal_user_update=true",
   ];
   for (const [key, value] of stateEntries) {
     lines.push(`${key}=${value}`);

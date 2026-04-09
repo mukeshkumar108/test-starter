@@ -163,11 +163,11 @@ async function main() {
     }
   });
 
-  await runTest("scene-phase discipline block explicitly forbids advancing the scene", () => {
+  await runTest("scene-phase discipline block contains explicit scene facts", () => {
     const patch = __test__extractCurrentSessionStatePatch("I'm finally outside.");
     const block = __test__buildCurrentSessionTruthsBlock({ state: patch });
     expect(block ?? "").toContain("scene.phase=just_started");
-    expect(block ?? "").toContain("do_not_advance_scene=true");
+    expect(block ?? "").toContain("scene.location=outside");
   });
 
   const failed = results.filter((result) => !result.passed);
