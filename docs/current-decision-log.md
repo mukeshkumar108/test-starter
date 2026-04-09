@@ -23,6 +23,50 @@ Impact:
 - the sweeper now matches the same inactivity model by default
 - fresh user-provided truths and corrections now have a dedicated higher-priority prompt lane
 
+## 2026-04-09: Replace free-text session truths with structured `CURRENT_SESSION_STATE`
+
+Decision:
+
+- move from bullet/session-truth prose to a compact structured state block
+- keep slot count small
+- let newer literal user updates overwrite older values by key
+
+Why:
+
+- free-text truth lines were too easy for the model to interpret loosely
+- contradictory scene facts like `outside` then `home` need deterministic overwrite behavior
+- literal current-scene grounding should be structurally harder to get wrong
+
+Impact:
+
+- current-scene and meal facts now render as stable slots
+- prompt injection is more deterministic
+- contradictory active-session values no longer pile up as prose
+
+## 2026-04-09: Add lightweight literal-mode reply hardening
+
+Decision:
+
+- add a small post-generation checker/repair layer for literal-mode turns
+- keep it lightweight and deterministic
+
+Why:
+
+- even with structured session state, the model could still open with interpretive language
+- observed failures were now mostly reply interpretation, not state carry-forward
+- the system needed a narrow guard against scene advancement and stale fact resurfacing
+
+Impact:
+
+- literal-mode replies now get checked for:
+  - unanchored first sentence
+  - interpretive first sentence
+  - scene advancement beyond user evidence
+  - overwritten fact resurfacing
+- replay-style tests now cover:
+  - `I'm finally outside.`
+  - `I'm home now.`
+
 ## 2026-04-08: Store one `resume_packet`, derive `handshake_view`
 
 Decision:

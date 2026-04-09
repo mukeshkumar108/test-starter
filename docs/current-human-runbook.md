@@ -21,9 +21,9 @@ Current default continuity model:
 
 - a session now stays active for 30 minutes after the last user message unless explicitly closed
 - the stale-session sweeper should use the same 30-minute inactivity threshold
-- active-turn prompt assembly now includes a separate `CURRENT_SESSION_TRUTHS` block
+- active-turn prompt assembly now includes a separate `CURRENT_SESSION_STATE` block
 
-`CURRENT_SESSION_TRUTHS` is not the same as rolling summary.
+`CURRENT_SESSION_STATE` is not the same as rolling summary.
 
 It is for:
 
@@ -31,6 +31,7 @@ It is for:
 - recent factual corrections
 - "today vs yesterday" distinctions
 - active-session facts that must override stale handover or earlier assistant guesses
+- literal-mode reply constraints that keep Sophie anchored to what the user just said
 
 It is intentionally higher priority than:
 
@@ -38,6 +39,34 @@ It is intentionally higher priority than:
 - bridge
 - rolling summary
 - older assistant assumptions
+
+Current important detail:
+
+- this block is now structured as compact slots like `scene.location=outside`
+- it is not free-text narrative memory
+- later literal user updates overwrite earlier slot values
+
+## Literal-mode hardening
+
+Literal-update turns now have an extra guardrail layer.
+
+When `CURRENT_SESSION_STATE` indicates literal mode, the system now prefers:
+
+- a direct grounded first sentence
+- concrete wording
+- low inference
+
+It actively tries to avoid:
+
+- philosophical or poetic openings on literal-update turns
+- acting as if the walk is already finished when the user only said they just stepped outside
+- resurfacing overwritten facts like stale meal details
+
+There is also now a lightweight post-generation checker that can repair a reply once if it:
+
+- fails to anchor its first sentence to the user’s latest literal update
+- advances the scene beyond user evidence
+- reintroduces an overwritten fact
 
 ## What changed recently
 

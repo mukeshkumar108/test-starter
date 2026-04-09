@@ -21,9 +21,9 @@ Important current state:
 
 - default active session window is now 30 minutes unless `SESSION_ACTIVE_WINDOW_MS` overrides it
 - the stale-session sweeper default is aligned to the same active-window value
-- prompt assembly now has a dedicated `CURRENT_SESSION_TRUTHS` block
+- prompt assembly now has a dedicated `CURRENT_SESSION_STATE` block
 
-`CURRENT_SESSION_TRUTHS` is separate from rolling summary.
+`CURRENT_SESSION_STATE` is separate from rolling summary.
 
 Use it for:
 
@@ -31,8 +31,30 @@ Use it for:
 - explicit user corrections
 - "today vs yesterday" distinctions
 - facts that should override stale handover or older assistant narrative
+- literal reply constraints that should dominate scene interpretation
 
-Do not collapse it back into rolling summary unless you are explicitly redesigning the session-state model.
+Current implementation detail:
+
+- keep the schema small
+- prefer slot overwrite by key over appended prose
+- do not collapse it back into rolling summary unless you are explicitly redesigning the session-state model
+
+## Literal-mode reply guard
+
+Current literal-mode turns are hardened in `runAssistantTurn`.
+
+The checker reads `CURRENT_SESSION_STATE` and can repair replies when literal mode is active and the response:
+
+- does not anchor the first sentence to the latest literal user update
+- opens with interpretive/philosophical language instead of grounded acknowledgment
+- advances the scene beyond user evidence
+- resurfaces overwritten facts
+
+Important constraint:
+
+- keep this checker lightweight and deterministic
+- do not turn it into a second large reasoning system
+- prefer one repair pass or first-sentence rewrite over schema expansion
 
 ## Current architecture boundaries
 
