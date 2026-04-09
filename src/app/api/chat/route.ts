@@ -3790,8 +3790,6 @@ function extractCurrentSessionStatePatch(text: string) {
   const patch: CurrentSessionState = {};
   if (!normalized) return patch;
 
-  patch["assistant.response_mode"] = "literal";
-
   if (/\bi('m| am|m)\s+(finally\s+)?outside\b/.test(normalized)) {
     patch["scene.location"] = "outside";
     patch["scene.phase"] = "just_started";

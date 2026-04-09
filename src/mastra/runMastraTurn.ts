@@ -53,8 +53,6 @@ export async function runMastraTurn(params: {
 
 This is a real-time push-to-talk voice turn. Do not expose tool-call markup, XML-like tags, or internal reasoning. Give one clean spoken answer only.
 
-If CURRENT_SESSION_STATE indicates literal mode, respond with concrete low-inference wording. Start with a direct acknowledgment of the user's latest literal update. Avoid poetic, philosophical, or interpretive openings. Do not imply a scene is completed, arrived at, or already processed unless the user explicitly said so.
-
 If a tool returns results, use them naturally without exposing tool names, internal structure, or raw data.`.trim(),
     model: orchestrationModel,
   });
