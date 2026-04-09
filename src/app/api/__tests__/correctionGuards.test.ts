@@ -8,9 +8,9 @@ import {
   __test__buildCorrectionGuardBlock,
   __test__buildCurrentSessionTruthsBlock,
   __test__extractCorrectionFactClaims,
-  __test__extractCurrentSessionTruthClaims,
+  __test__extractCurrentSessionStatePatch,
   __test__mergeCorrectionFacts,
-  __test__mergeCurrentSessionTruths,
+  __test__mergeCurrentSessionState,
   __test__nextCorrectionOverlayCooldownTurns,
 } from "../chat/route";
 
@@ -79,24 +79,32 @@ async function main() {
     expect(block ?? "").toContain("Do not reintroduce corrected assumptions");
   });
 
-  await runTest("extracts current session truths from literal scene updates", () => {
-    const truths = __test__extractCurrentSessionTruthClaims(
+  await runTest("extracts structured current session state from literal scene updates", () => {
+    const patch = __test__extractCurrentSessionStatePatch(
       "I'm finally outside. The pasta bake was yesterday. Today was chicken and broccoli."
     );
-    expect(truths.join(" | ")).toContain("I'm finally outside.");
-    expect(truths.join(" | ")).toContain("The pasta bake was yesterday.");
+    expect(patch["scene.location"]).toBe("outside");
+    expect(patch["scene.phase"]).toBe("just_started");
+    expect(patch["meal.yesterday"]).toBe("pasta_bake");
+    expect(patch["meal.today"]).toBe("chicken_broccoli");
   });
 
-  await runTest("merges current session truths with dedupe + cap", () => {
-    const existing = ["A", "B", "C", "D", "E", "F", "G", "H"];
-    const merged = __test__mergeCurrentSessionTruths(existing, ["H", "I", "A"]);
-    expect(merged.length).toBe(8);
-    expect(merged.join("|")).toContain("I");
+  await runTest("merges current session state by slot overwrite", () => {
+    const merged = __test__mergeCurrentSessionState(
+      { "scene.location": "outside", "meal.today": "chicken" },
+      { "scene.location": "home", "meal.yesterday": "pasta_bake" }
+    );
+    expect(merged["scene.location"]).toBe("home");
+    expect(merged["meal.today"]).toBe("chicken");
+    expect(merged["meal.yesterday"]).toBe("pasta_bake");
   });
 
-  await runTest("injects current session truths block into prompt stack", () => {
+  await runTest("injects structured current session state block into prompt stack", () => {
     const currentSessionTruthsBlock = __test__buildCurrentSessionTruthsBlock({
-      truths: ["Today was chicken and broccoli.", "I'm finally outside."],
+      state: {
+        "meal.today": "chicken_broccoli",
+        "scene.location": "outside",
+      },
       corrections: ["Do not reintroduce pasta bake as today's meal."],
     });
     const messages = __test__buildChatMessages({
@@ -110,10 +118,37 @@ async function main() {
 
     const contents = messages.map((message) => message.content);
     const truthIndex = contents.findIndex((value) =>
-      value.startsWith("[CURRENT_SESSION_TRUTHS]")
+      value.startsWith("[CURRENT_SESSION_STATE]")
     );
     expect(truthIndex).toBe(1);
-    expect(contents[truthIndex] ?? "").toContain("Today was chicken and broccoli.");
+    expect(contents[truthIndex] ?? "").toContain("meal.today=chicken_broccoli");
+    expect(contents[truthIndex] ?? "").toContain("scene.location=outside");
+  });
+
+  await runTest("latest scene location overwrites prior contradictory value", () => {
+    const merged = __test__mergeCurrentSessionState(
+      __test__extractCurrentSessionStatePatch("I'm outside."),
+      __test__extractCurrentSessionStatePatch("I'm home now.")
+    );
+    expect(merged["scene.location"]).toBe("home");
+  });
+
+  await runTest("current session state block renders without contradictory slot duplicates", () => {
+    const block = __test__buildCurrentSessionTruthsBlock({
+      state: {
+        "scene.location": "home",
+        "meal.today": "chicken_broccoli",
+      },
+    });
+    expect(block ?? "").toContain("scene.location=home");
+    expect(block ?? "").toContain("meal.today=chicken_broccoli");
+  });
+
+  await runTest("scene-phase discipline block explicitly forbids advancing the scene", () => {
+    const patch = __test__extractCurrentSessionStatePatch("I'm finally outside.");
+    const block = __test__buildCurrentSessionTruthsBlock({ state: patch });
+    expect(block ?? "").toContain("scene.phase=just_started");
+    expect(block ?? "").toContain("do_not_advance_scene=true");
   });
 
   const failed = results.filter((result) => !result.passed);

@@ -906,7 +906,7 @@ type OverlayUserState = {
   weeklyNorthStarWeekStartDate?: string | null;
   weeklyPriorities?: string[];
   sessionFactCorrections?: string[];
-  currentSessionTruths?: string[];
+  currentSessionState?: Record<string, string>;
 };
 
 type OverlayState = {
@@ -1325,11 +1325,22 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
                 .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
                 .slice(-6)
             : undefined,
-          currentSessionTruths: Array.isArray((raw.user as OverlayUserState).currentSessionTruths)
-            ? ((raw.user as OverlayUserState).currentSessionTruths as unknown[])
-                .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-                .slice(-8)
-            : undefined,
+          currentSessionState:
+            (raw.user as OverlayUserState).currentSessionState &&
+            typeof (raw.user as OverlayUserState).currentSessionState === "object" &&
+            !Array.isArray((raw.user as OverlayUserState).currentSessionState)
+              ? (Object.fromEntries(
+                  Object.entries((raw.user as OverlayUserState).currentSessionState as Record<string, unknown>)
+                    .filter(
+                      ([key, value]) =>
+                        typeof key === "string" &&
+                        key.trim().length > 0 &&
+                        typeof value === "string" &&
+                        value.trim().length > 0
+                    )
+                    .slice(0, 16)
+                ) as Record<string, string>)
+              : undefined,
         }
       : undefined,
     synapseSessionIngestOk:
@@ -3135,14 +3146,6 @@ function buildChatMessages(params: {
       ? [{ role: "system" as const, content: params.crisisResponseTemplateBlock }]
       : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
-    ...((params.currentSessionTruthsBlock ?? params.correctionBlock)
-      ? [
-          {
-            role: "system" as const,
-            content: params.currentSessionTruthsBlock ?? params.correctionBlock!,
-          },
-        ]
-      : []),
     ...(params.signalPackBlock ? [{ role: "system" as const, content: params.signalPackBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
     ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
@@ -3162,6 +3165,14 @@ function buildChatMessages(params: {
           {
             role: "system" as const,
             content: `[SUPPLEMENTAL_CONTEXT]\n${params.supplementalContext}`,
+          },
+        ]
+      : []),
+    ...((params.currentSessionTruthsBlock ?? params.correctionBlock)
+      ? [
+          {
+            role: "system" as const,
+            content: params.currentSessionTruthsBlock ?? params.correctionBlock!,
           },
         ]
       : []),
@@ -3737,54 +3748,119 @@ function mergeCorrectionFacts(existing: string[] | undefined, next: string[]) {
   return Array.from(new Set(merged)).slice(-6);
 }
 
-function normalizeCurrentSessionTruthLine(line: string) {
-  const normalized = normalizeWhitespace(line).replace(/^[-*]\s*/, "").trim();
-  if (!normalized) return null;
-  if (normalized.length <= 180) return normalized;
-  return `${normalized.slice(0, 177).trimEnd()}...`;
+type CurrentSessionState = Record<string, string>;
+
+function normalizeSessionStateValue(value: string) {
+  const normalized = normalizeWhitespace(value).replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.toLowerCase().slice(0, 64);
 }
 
-function extractCurrentSessionTruthClaims(text: string) {
-  const normalized = normalizeWhitespace(text);
-  if (!normalized) return [];
-  const sentences = normalized
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map((sentence) => normalizeCurrentSessionTruthLine(sentence))
-    .filter((sentence): sentence is string => Boolean(sentence));
+function setSessionStateValue(state: CurrentSessionState, key: string, value: string | null | undefined) {
+  if (!value) return;
+  const normalized = normalizeSessionStateValue(value);
+  if (!normalized) return;
+  state[key] = normalized;
+}
 
-  const truthySentences: string[] = [];
-  for (const sentence of sentences) {
-    const lowered = sentence.toLowerCase();
-    const hasTemporalMarker =
-      /\b(today|yesterday|tonight|this morning|this afternoon|this evening|right now|currently|still|just|finally)\b/.test(
-        lowered
-      );
-    const hasPresentSceneLead =
-      /^(i'm|i am|im|i've|i have|we're|we are|we've|we have)\b/.test(lowered);
-    const hasSceneState =
-      /\b(outside|inside|walking|walk|dinner|lunch|breakfast|sunset|washing|air fryer|chicken|broccoli|cabbage)\b/.test(
-        lowered
-      );
-    const hasLiteralOverride =
-      lowered.includes("was yesterday") ||
-      lowered.includes("is today") ||
-      lowered.includes("was today") ||
-      lowered.includes("hasn't set") ||
-      lowered.includes("hasnt set");
+function detectMealValue(text: string) {
+  if (text.includes("pasta bake")) return "pasta_bake";
+  if (text.includes("chicken")) {
+    const extras: string[] = ["chicken"];
+    if (text.includes("broccoli")) extras.push("broccoli");
+    if (text.includes("cabbage")) extras.push("cabbage");
+    return extras.join("_");
+  }
+  if (text.includes("broccoli")) return "broccoli";
+  if (text.includes("cabbage")) return "cabbage";
+  return null;
+}
 
-    if (hasTemporalMarker || hasPresentSceneLead || hasSceneState || hasLiteralOverride) {
-      truthySentences.push(sentence);
-    }
+function detectSceneActivity(text: string) {
+  if (/\bwalk(ing)?\b/.test(text)) return "walking";
+  if (text.includes("outside")) return "walking";
+  if (text.includes("washing")) return "household_tasks";
+  if (text.includes("dinner") || text.includes("air fryer") || text.includes("eat first")) return "eating";
+  if (text.includes("work") || text.includes("change") || text.includes("pushed another change")) return "working";
+  return null;
+}
+
+function extractCurrentSessionStatePatch(text: string) {
+  const normalized = normalizeWhitespace(text).toLowerCase();
+  const patch: CurrentSessionState = {};
+  if (!normalized) return patch;
+
+  patch["constraints.prefer_latest_literal_user_update"] = "true";
+  patch["constraints.do_not_advance_scene"] = "true";
+  patch["assistant.response_mode"] = "literal";
+
+  if (/\bi('m| am|m)\s+(finally\s+)?outside\b/.test(normalized)) {
+    patch["scene.location"] = "outside";
+    patch["scene.phase"] = "just_started";
+  } else if (/\bi('m| am|m)\s+home\b|\bi('m| am|m)\s+back home\b/.test(normalized)) {
+    patch["scene.location"] = "home";
+    patch["scene.phase"] = "arrived_home";
+  } else if (/\bi('m| am|m)\s+inside\b/.test(normalized)) {
+    patch["scene.location"] = "inside";
   }
 
-  return Array.from(new Set(truthySentences)).slice(-6);
+  if (normalized.includes("hasn't set") || normalized.includes("hasnt set")) {
+    patch["scene.phase"] = "not_finished";
+  }
+
+  const activity = detectSceneActivity(normalized);
+  if (activity) {
+    patch["scene.activity"] = activity;
+  }
+
+  if (normalized.includes("walk now") || normalized.includes("go for that walk now") || normalized.includes("just starting my walk")) {
+    patch["scene.phase"] = "just_started";
+    patch["scene.activity"] = "walking";
+  }
+
+  if (normalized.includes("pasta bake was yesterday")) {
+    patch["meal.yesterday"] = "pasta_bake";
+  }
+  if (normalized.includes("today was chicken")) {
+    const todayChickenText =
+      normalized.match(/today\s+was\s+([^.!?\n]+)/)?.[1] ?? "chicken";
+    patch["meal.today"] = detectMealValue(todayChickenText) ?? "chicken";
+  }
+  if (!patch["meal.today"] && (normalized.includes("today") || normalized.includes("tonight"))) {
+    const todayMealText = normalized.match(/(?:today|tonight)(?:\s+was|\s+is|\s+we made)?\s+([^.!?\n]+)/)?.[1] ?? normalized;
+    const todayMealValue = detectMealValue(todayMealText);
+    if (todayMealValue) {
+      patch["meal.today"] = todayMealValue;
+    }
+  }
+  if (!patch["meal.yesterday"] && normalized.includes("yesterday")) {
+    const yesterdayMealText = normalized.match(/yesterday(?:\s+was|\s+is)?\s+([^.!?\n]+)/)?.[1] ?? normalized;
+    const yesterdayMealValue = detectMealValue(yesterdayMealText);
+    if (yesterdayMealValue) {
+      patch["meal.yesterday"] = yesterdayMealValue;
+    }
+  }
+  if (normalized.includes("finished my dinner") || normalized.includes("had dinner")) {
+    patch["scene.phase"] = "after_dinner";
+  }
+  if (normalized.includes("watch the sunset")) {
+    patch["user.current_focus"] = "sunset_walk";
+  } else if (normalized.includes("walk")) {
+    patch["user.current_focus"] = "walk";
+  }
+
+  return patch;
 }
 
-function mergeCurrentSessionTruths(existing: string[] | undefined, next: string[]) {
-  const merged = [...(existing ?? []), ...next]
-    .map((line) => normalizeCurrentSessionTruthLine(line))
-    .filter((line): line is string => Boolean(line));
-  return Array.from(new Set(merged)).slice(-8);
+function mergeCurrentSessionState(
+  existing: CurrentSessionState | undefined,
+  patch: CurrentSessionState
+) {
+  const merged: CurrentSessionState = { ...(existing ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    setSessionStateValue(merged, key, value);
+  }
+  const orderedEntries = Object.entries(merged).slice(0, 16);
+  return Object.fromEntries(orderedEntries);
 }
 
 function nextCorrectionOverlayCooldownTurns(current: number, correctionSignal: boolean) {
@@ -3835,28 +3911,28 @@ Do not reintroduce corrected assumptions unless user explicitly confirms them ag
 }
 
 function buildCurrentSessionTruthsBlock(params: {
-  truths?: string[];
+  state?: CurrentSessionState;
   corrections?: string[];
 }) {
-  const truths = (params.truths ?? []).filter(Boolean).slice(-6);
+  const state = params.state ?? {};
   const corrections = (params.corrections ?? []).filter(Boolean).slice(-4);
-  if (truths.length === 0 && corrections.length === 0) return null;
+  const stateEntries = Object.entries(state)
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (stateEntries.length === 0 && corrections.length === 0) return null;
   const lines: string[] = [
-    "[CURRENT_SESSION_TRUTHS]",
-    "Treat these as the authoritative live facts for this active session.",
-    "Prefer these over older handover, bridge, rolling summary, or prior assistant assumptions.",
-    "Prefer literal present-tense user updates. Do not advance the scene beyond what the user has said.",
+    "[CURRENT_SESSION_STATE]",
+    "authoritative_for_current_session=true",
+    "prefer_over=bridge,handover,rolling_summary,prior_assistant_assumptions",
+    "prefer_latest_literal_user_update=true",
+    "do_not_advance_scene=true",
   ];
-  if (truths.length > 0) {
-    lines.push("Current facts:");
-    for (const truth of truths) {
-      lines.push(`- ${truth}`);
-    }
+  for (const [key, value] of stateEntries) {
+    lines.push(`${key}=${value}`);
   }
   if (corrections.length > 0) {
-    lines.push("Corrections:");
-    for (const correction of corrections) {
-      lines.push(`- ${correction}`);
+    for (const [index, correction] of corrections.entries()) {
+      lines.push(`correction.${index + 1}=${normalizeSessionStateValue(correction)}`);
     }
   }
   return lines.join("\n");
@@ -5123,7 +5199,7 @@ export async function POST(request: NextRequest) {
       cooldownLastReason = null;
       lastProbingTacticFired = false;
       overlayUser.sessionFactCorrections = [];
-      overlayUser.currentSessionTruths = [];
+      overlayUser.currentSessionState = {};
     }
     if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
       startbriefV2FirstUserLowSignal = isLowSignalFirstUserMessage(sttResult.transcript);
@@ -5324,9 +5400,9 @@ export async function POST(request: NextRequest) {
           ? { skip: true as const, reason: "session_warmup" as const }
           : baseOverlayPolicy;
     const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
-    overlayUser.currentSessionTruths = mergeCurrentSessionTruths(
-      overlayUser.currentSessionTruths,
-      extractCurrentSessionTruthClaims(sttResult.transcript)
+    overlayUser.currentSessionState = mergeCurrentSessionState(
+      overlayUser.currentSessionState,
+      extractCurrentSessionStatePatch(sttResult.transcript)
     );
     const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
     const hasDailyReviewToday = overlayUser.lastDailyReviewDate === dayKey;
@@ -5995,7 +6071,7 @@ export async function POST(request: NextRequest) {
       | Awaited<ReturnType<typeof runAssistantTurn>>
       | undefined;
     const currentSessionTruthsBlock = buildCurrentSessionTruthsBlock({
-      truths: overlayUser.currentSessionTruths,
+      state: overlayUser.currentSessionState,
       corrections: overlayUser.sessionFactCorrections,
     });
 
@@ -6219,7 +6295,6 @@ export async function POST(request: NextRequest) {
         "persona",
         ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
         ...(governedContext.userContextBlock ? ["user_context"] : []),
-        ...(currentSessionTruthsBlock ? ["current_session_truths"] : []),
         ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
         ...(stanceOverlayBlock ? ["stance_overlay"] : []),
         ...(tacticOverlayBlock ? ["overlay"] : []),
@@ -6229,6 +6304,7 @@ export async function POST(request: NextRequest) {
         ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
         ...(governedContext.opsSnippetBlock ? ["ops"] : []),
         ...(supplementalContext ? ["supplemental"] : []),
+        ...(currentSessionTruthsBlock ? ["current_session_truths"] : []),
         ...(rollingSummary ? ["conversation_history"] : []),
       ];
       promptPacketMessages = tracePromptPacket ? messages : undefined;
@@ -6648,9 +6724,9 @@ export const __test__buildMomentumGuardBlock = buildMomentumGuardBlock;
 export const __test__extractTodayFocus = extractTodayFocus;
 export const __test__normalizeMemoryQueryResponse = normalizeMemoryQueryResponse;
 export const __test__extractCorrectionFactClaims = extractCorrectionFactClaims;
-export const __test__extractCurrentSessionTruthClaims = extractCurrentSessionTruthClaims;
+export const __test__extractCurrentSessionStatePatch = extractCurrentSessionStatePatch;
 export const __test__mergeCorrectionFacts = mergeCorrectionFacts;
-export const __test__mergeCurrentSessionTruths = mergeCurrentSessionTruths;
+export const __test__mergeCurrentSessionState = mergeCurrentSessionState;
 export const __test__nextCorrectionOverlayCooldownTurns = nextCorrectionOverlayCooldownTurns;
 export const __test__shouldForceSessionWarmupOverlaySkip = shouldForceSessionWarmupOverlaySkip;
 export const __test__shouldHoldOverlayUntilRunway = shouldHoldOverlayUntilRunway;

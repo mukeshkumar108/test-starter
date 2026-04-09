@@ -197,9 +197,6 @@ function buildChatMessages(params: {
       ? [{ role: "system" as const, content: params.crisisResponseTemplateBlock }]
       : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
-    ...(params.currentSessionTruthsBlock
-      ? [{ role: "system" as const, content: params.currentSessionTruthsBlock }]
-      : []),
     ...(params.signalPackBlock ? [{ role: "system" as const, content: params.signalPackBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
     ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
@@ -220,6 +217,9 @@ function buildChatMessages(params: {
             content: `[SUPPLEMENTAL_CONTEXT]\n${params.supplementalContext}`,
           },
         ]
+      : []),
+    ...(params.currentSessionTruthsBlock
+      ? [{ role: "system" as const, content: params.currentSessionTruthsBlock }]
       : []),
     ...(conversationHistoryBlock
       ? [{ role: "system" as const, content: conversationHistoryBlock }]
@@ -671,7 +671,6 @@ async function runCustomAssistantTurn(params: {
     "persona",
     ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
     ...(governedContext.userContextBlock ? ["user_context"] : []),
-    ...(params.prompt.currentSessionTruthsBlock ? ["current_session_truths"] : []),
     ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
     ...(params.prompt.stanceOverlayBlock ? ["stance_overlay"] : []),
     ...(params.prompt.tacticOverlayBlock ? ["overlay"] : []),
@@ -681,6 +680,7 @@ async function runCustomAssistantTurn(params: {
     ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
     ...(governedContext.opsSnippetBlock ? ["ops"] : []),
     ...(params.prompt.supplementalContext ? ["supplemental"] : []),
+    ...(params.prompt.currentSessionTruthsBlock ? ["current_session_truths"] : []),
     ...(params.prompt.rollingSummary ? ["conversation_history"] : []),
   ];
   const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
@@ -868,7 +868,6 @@ export async function runAssistantTurn(params: {
     "persona",
     ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
     ...(governedContext.userContextBlock ? ["user_context"] : []),
-    ...(params.prompt.currentSessionTruthsBlock ? ["current_session_truths"] : []),
     ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
     ...(params.prompt.stanceOverlayBlock ? ["stance_overlay"] : []),
     ...(params.prompt.tacticOverlayBlock ? ["overlay"] : []),
@@ -878,6 +877,7 @@ export async function runAssistantTurn(params: {
     ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
     ...(governedContext.opsSnippetBlock ? ["ops"] : []),
     ...(params.prompt.supplementalContext ? ["supplemental"] : []),
+    ...(params.prompt.currentSessionTruthsBlock ? ["current_session_truths"] : []),
     ...(params.prompt.rollingSummary ? ["conversation_history"] : []),
   ];
 
