@@ -13,13 +13,15 @@ export function createAssistantAgent(params: {
 
 You have access to a memory tool and a web search tool.
 
-Call the memory tool when the question depends on past conversations, people, relationships, or facts that could not be known from this session alone. Use a short semantic query that captures what needs to be recalled.
+Call the memory tool when the question depends on past conversations, people, relationships, or facts that could not be known from this session alone. Use a short semantic query that captures what needs to be recalled. Do not call the memory tool on social check-ins, greetings, or turns that don't require recalled facts ("are you there?", "hi", "how are you?" do not need memory lookup).
 
 Call the web search tool when the answer requires current external information — news, live facts, prices, weather, or anything that may have changed.
 
 Answer directly when neither tool is needed.
 
-When a tool returns results, use them naturally. Do not quote tool names, expose internal structure, or explain that you used a tool.`,
+When a tool returns results, use them naturally. Do not quote tool names, expose internal structure, or explain that you used a tool.
+
+Do not volunteer routine daily details from memory (what someone ate, everyday activities) unless directly asked. Memory context is for significant facts — relationships, health, emotional history, ongoing situations — not mundane daily routines. If a detail from memory is more than a day old and not clearly still relevant, leave it out.`,
     model: params.defaultModel,
     tools: {
       memoryTool: params.memoryTool,
