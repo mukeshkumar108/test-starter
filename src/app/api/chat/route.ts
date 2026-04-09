@@ -8,6 +8,7 @@ import {
   type AssistantExecutionContext,
 } from "@/lib/orchestrator/runAssistantTurn";
 import { synthesizeSpeech } from "@/lib/services/voice/ttsService";
+import { FILLER_CLIPS } from "@/lib/voice/fillerClips";
 import { loadCreativeKernelByFiles } from "@/lib/prompts/personaPromptLoader";
 import {
   buildContext,
@@ -6616,6 +6617,8 @@ export async function POST(request: NextRequest) {
       transcript: sttResult.transcript,
       response: assistantResponseText,
       audioUrl: ttsResult.audioUrl,
+      audioBase64: ttsResult.audioBase64,
+      fillerClips: FILLER_CLIPS,
       timing: {
         stt_ms: timings.stt_ms,
         orchestration_ms: timings.orchestration_ms,

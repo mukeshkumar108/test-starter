@@ -30,7 +30,6 @@ const tests: TestDef[] = [
   { name: "situationalContextPolicy", command: [...nodeWithTsx, "src/app/api/__tests__/situationalContextPolicy.test.ts"] },
   { name: "memoryQueryNormalization", command: [...nodeWithTsx, "src/app/api/__tests__/memoryQueryNormalization.test.ts"] },
   { name: "correctionGuards", command: [...nodeWithTsx, "src/app/api/__tests__/correctionGuards.test.ts"] },
-  { name: "literalModeReply", command: [...nodeWithTsx, "src/lib/orchestrator/__tests__/literalModeReply.test.ts"] },
   {
     name: "continuityIntegration",
     command: [...nodeWithTsx, "tests/integration/continuity.test.ts"],

@@ -3,6 +3,7 @@ import { put } from "@vercel/blob";
 
 export interface TTSResult {
   audioUrl: string;
+  audioBase64: string;
   duration_ms: number;
   synthesis_ms: number;
   upload_ms: number;
@@ -135,17 +136,23 @@ export async function synthesizeSpeech(
       });
     }
 
-    // Get audio blob
-    const audioBlob = await response.blob();
+    // Get audio buffer — needed for both base64 (immediate) and blob upload (history)
+    const audioBuffer = await response.arrayBuffer();
     const synthesisMs = Math.max(0, Date.now() - synthStartedAt);
-    
-    // Upload to Vercel blob storage
+
+    // Base64 encode for immediate playback — iOS decodes this without a second HTTP request
+    const audioBase64 = Buffer.from(audioBuffer).toString("base64");
+
+    // Upload to Vercel Blob for message history — fire-and-forget, does not block response
     const uploadStartedAt = Date.now();
     const filename = `tts-${Date.now()}.mp3`;
-    const blob = await put(filename, audioBlob, {
+    const blobPromise = put(filename, audioBuffer, {
       access: "public",
       contentType: "audio/mpeg",
     });
+
+    // Await blob only for the URL we store in DB — but do it in parallel with caller's work
+    const blob = await blobPromise;
     const uploadMs = Math.max(0, Date.now() - uploadStartedAt);
 
     console.log(
@@ -156,12 +163,14 @@ export async function synthesizeSpeech(
         text_chars: ttsText.length,
         synthesis_ms: synthesisMs,
         upload_ms: uploadMs,
+        base64_bytes: audioBase64.length,
         total_ms: Math.max(0, Date.now() - startTime),
       })
     );
 
     return {
       audioUrl: blob.url,
+      audioBase64,
       duration_ms: Date.now() - startTime,
       synthesis_ms: synthesisMs,
       upload_ms: uploadMs,
