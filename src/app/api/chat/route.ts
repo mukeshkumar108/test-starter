@@ -3789,9 +3789,6 @@ function extractCurrentSessionStatePatch(text: string) {
   const patch: CurrentSessionState = {};
   if (!normalized) return patch;
 
-  patch["constraints.prefer_latest_literal_user_update"] = "true";
-  patch["constraints.do_not_advance_scene"] = "true";
-  patch["constraints.first_sentence_anchor_latest_literal_user_update"] = "true";
   patch["assistant.response_mode"] = "literal";
 
   if (/\bi('m| am|m)\s+(finally\s+)?outside\b/.test(normalized)) {

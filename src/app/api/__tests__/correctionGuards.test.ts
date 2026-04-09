@@ -144,6 +144,25 @@ async function main() {
     expect(block ?? "").toContain("meal.today=chicken_broccoli");
   });
 
+  await runTest("current session state block does not duplicate legacy constraint keys", () => {
+    const block = __test__buildCurrentSessionTruthsBlock({
+      state: {
+        "assistant.response_mode": "literal",
+        "scene.location": "outside",
+      },
+    });
+    expect(block ?? "").toContain("assistant.response_mode=literal");
+    if ((block ?? "").includes("constraints.do_not_advance_scene")) {
+      throw new Error("Unexpected duplicate constraints.do_not_advance_scene key");
+    }
+    if ((block ?? "").includes("constraints.first_sentence_anchor_latest_literal_user_update")) {
+      throw new Error("Unexpected duplicate constraints.first_sentence_anchor_latest_literal_user_update key");
+    }
+    if ((block ?? "").includes("constraints.prefer_latest_literal_user_update")) {
+      throw new Error("Unexpected duplicate constraints.prefer_latest_literal_user_update key");
+    }
+  });
+
   await runTest("scene-phase discipline block explicitly forbids advancing the scene", () => {
     const patch = __test__extractCurrentSessionStatePatch("I'm finally outside.");
     const block = __test__buildCurrentSessionTruthsBlock({ state: patch });

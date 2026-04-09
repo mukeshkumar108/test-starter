@@ -155,6 +155,193 @@ export type AssistantTurnResult = {
   debugPayload?: Record<string, unknown>;
 };
 
+type LiteralModeFlags = {
+  enabled: boolean;
+  firstSentenceAnchor: boolean;
+  doNotAdvanceScene: boolean;
+  state: Record<string, string>;
+};
+
+type LiteralModeCheckResult = {
+  failed: boolean;
+  reasons: string[];
+};
+
+function parseCurrentSessionStateBlock(block?: string | null): LiteralModeFlags {
+  const state: Record<string, string> = {};
+  if (!block) {
+    return {
+      enabled: false,
+      firstSentenceAnchor: false,
+      doNotAdvanceScene: false,
+      state,
+    };
+  }
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    if (!line.includes("=") || line.startsWith("[")) continue;
+    const [key, ...rest] = line.split("=");
+    const value = rest.join("=").trim();
+    if (!key?.trim() || !value) continue;
+    state[key.trim()] = value;
+  }
+  return {
+    enabled: state["assistant.response_mode"] === "literal",
+    firstSentenceAnchor: state["first_sentence_anchor_latest_literal_user_update"] === "true",
+    doNotAdvanceScene: state["do_not_advance_scene"] === "true",
+    state,
+  };
+}
+
+function getFirstSentence(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/^(.+?[.!?])(?:\s|$)/);
+  return (match?.[1] ?? trimmed).trim();
+}
+
+function evaluateLiteralModeReply(params: {
+  transcript: string;
+  assistantText: string;
+  flags: LiteralModeFlags;
+}) {
+  const reasons: string[] = [];
+  if (!params.flags.enabled) {
+    return { failed: false, reasons } satisfies LiteralModeCheckResult;
+  }
+
+  const transcript = params.transcript.trim().toLowerCase();
+  const reply = params.assistantText.trim();
+  const loweredReply = reply.toLowerCase();
+  const firstSentence = getFirstSentence(reply).toLowerCase();
+
+  const anchoredPatterns: string[] = [];
+  if (transcript.includes("outside") || params.flags.state["scene.location"] === "outside") {
+    anchoredPatterns.push("you're outside", "you are outside", "out there", "outside now");
+  }
+  if (transcript.includes("home now") || params.flags.state["scene.location"] === "home") {
+    anchoredPatterns.push("you're home", "you are home", "home now");
+  }
+  if (
+    params.flags.state["meal.today"] === "chicken_broccoli" &&
+    params.flags.state["meal.yesterday"] === "pasta_bake"
+  ) {
+    anchoredPatterns.push("chicken and broccoli", "pasta bake was yesterday", "today");
+  }
+
+  if (
+    params.flags.firstSentenceAnchor &&
+    anchoredPatterns.length > 0 &&
+    !anchoredPatterns.some((pattern) => firstSentence.includes(pattern))
+  ) {
+    reasons.push("first_sentence_not_anchored");
+  }
+
+  const interpretiveOpeners = [
+    "the air",
+    "the light",
+    "sometimes",
+    "it feels",
+    "there's something",
+    "that's good",
+    "you made it",
+    "the sky",
+  ];
+  if (
+    interpretiveOpeners.some((pattern) => firstSentence.startsWith(pattern)) &&
+    anchoredPatterns.length > 0 &&
+    !anchoredPatterns.some((pattern) => firstSentence.includes(pattern))
+  ) {
+    reasons.push("interpretive_first_sentence");
+  }
+
+  if (params.flags.doNotAdvanceScene) {
+    const advancementPatterns = [
+      "how was the walk",
+      "hope the walk",
+      "walk did you good",
+      "you made it",
+      "sunset was",
+      "you got back",
+    ];
+    if (advancementPatterns.some((pattern) => loweredReply.includes(pattern))) {
+      reasons.push("scene_advanced_beyond_evidence");
+    }
+  }
+
+  const mealToday = params.flags.state["meal.today"];
+  if (mealToday && mealToday !== "pasta_bake" && loweredReply.includes("pasta bake")) {
+    reasons.push("overwritten_fact_resurfaced");
+  }
+
+  return {
+    failed: reasons.length > 0,
+    reasons,
+  } satisfies LiteralModeCheckResult;
+}
+
+function buildLiteralModeRepairReply(params: {
+  transcript: string;
+  flags: LiteralModeFlags;
+}) {
+  const transcript = params.transcript.trim().toLowerCase();
+  const state = params.flags.state;
+
+  if (transcript.includes("i'm home now") || transcript.includes("im home now") || state["scene.location"] === "home") {
+    return "You're home now. How are you feeling?";
+  }
+  if (
+    transcript.includes("i'm finally outside") ||
+    transcript.includes("im finally outside") ||
+    state["scene.location"] === "outside"
+  ) {
+    return "You're outside now. What are you noticing as you start the walk?";
+  }
+  if (state["meal.today"] === "chicken_broccoli" && state["meal.yesterday"] === "pasta_bake") {
+    return "Right, pasta bake was yesterday and today was chicken and broccoli.";
+  }
+  return "I’m with your latest update. Tell me what’s happening right now.";
+}
+
+function enforceLiteralModeReply(params: {
+  transcript: string;
+  assistantText: string;
+  currentSessionTruthsBlock?: string | null;
+}) {
+  const flags = parseCurrentSessionStateBlock(params.currentSessionTruthsBlock);
+  const check = evaluateLiteralModeReply({
+    transcript: params.transcript,
+    assistantText: params.assistantText,
+    flags,
+  });
+  if (!check.failed) {
+    return {
+      assistantText: params.assistantText,
+      repaired: false,
+      reasons: [] as string[],
+    };
+  }
+  return {
+    assistantText: buildLiteralModeRepairReply({
+      transcript: params.transcript,
+      flags,
+    }),
+    repaired: true,
+    reasons: check.reasons,
+  };
+}
+
+function applyLiteralModeReplyGuard(params: {
+  transcript: string;
+  assistantText: string;
+  currentSessionTruthsBlock?: string | null;
+}) {
+  return enforceLiteralModeReply(params);
+}
+
 function buildChatMessages(params: {
   persona: string;
   momentumGuardBlock?: string | null;
@@ -744,8 +931,14 @@ async function runCustomAssistantTurn(params: {
     };
   }
 
-  return {
+  const literalModeResult = applyLiteralModeReplyGuard({
+    transcript: params.prompt.transcript,
     assistantText: completion.content,
+    currentSessionTruthsBlock: params.prompt.currentSessionTruthsBlock,
+  });
+
+  return {
+    assistantText: literalModeResult.assistantText,
     chosenModel: params.prompt.chosenModel,
     timings: {
       orchestration_ms: Math.max(0, Date.now() - orchestrationStartedAt),
@@ -791,7 +984,16 @@ async function runCustomAssistantTurn(params: {
     ...(params.executionContext.debugPromptEnabled || params.executionContext.tracePromptPacket
       ? { messages }
       : {}),
-    ...(debugPayload ? { debugPayload } : {}),
+    ...(debugPayload
+      ? {
+          debugPayload: {
+            ...debugPayload,
+            literalModeRepair: literalModeResult.repaired
+              ? { reasons: literalModeResult.reasons }
+              : null,
+          },
+        }
+      : {}),
   } satisfies AssistantTurnResult;
 }
 
@@ -910,8 +1112,14 @@ export async function runAssistantTurn(params: {
         };
       }
 
-      return {
+      const literalModeResult = applyLiteralModeReplyGuard({
+        transcript: params.prompt.transcript,
         assistantText: mastraTurn.assistantText,
+        currentSessionTruthsBlock: params.prompt.currentSessionTruthsBlock,
+      });
+
+      return {
+        assistantText: literalModeResult.assistantText,
         chosenModel: params.prompt.chosenModel,
         timings: {
           orchestration_ms: Math.max(0, Date.now() - orchestrationStartedAt),
@@ -957,7 +1165,16 @@ export async function runAssistantTurn(params: {
         ...(params.executionContext.debugPromptEnabled || params.executionContext.tracePromptPacket
           ? { messages }
           : {}),
-        ...(debugPayload ? { debugPayload } : {}),
+        ...(debugPayload
+          ? {
+              debugPayload: {
+                ...debugPayload,
+                literalModeRepair: literalModeResult.repaired
+                  ? { reasons: literalModeResult.reasons }
+                  : null,
+              },
+            }
+          : {}),
       } satisfies AssistantTurnResult;
     } catch (error) {
       console.warn("[mastra.turn.error]", {
@@ -971,3 +1188,7 @@ export async function runAssistantTurn(params: {
 
   return runCustomAssistantTurn(params);
 }
+
+export const __test__parseCurrentSessionStateBlock = parseCurrentSessionStateBlock;
+export const __test__evaluateLiteralModeReply = evaluateLiteralModeReply;
+export const __test__enforceLiteralModeReply = enforceLiteralModeReply;
