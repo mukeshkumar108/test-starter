@@ -20,6 +20,15 @@ export type SynapseBriefResponse = {
 };
 
 export type SynapseStartBriefResponse = {
+  entity_hints?: Array<{
+    entityId?: string | null;
+    name?: string | null;
+    type?: string | null;
+    role?: string | null;
+    importance?: string | null;
+    salience?: number | null;
+    lastSeenAt?: string | null;
+  }> | null;
   entity_profiles?: Array<{
     name?: string | null;
     profile_text?: string | null;
@@ -125,6 +134,24 @@ export type SynapseUserModelResponse = {
   lastSource?: string | null;
 };
 
+export type SynapseEntityProfileResponse = {
+  entity?: {
+    entityId?: string | null;
+    name?: string | null;
+    type?: string | null;
+    role?: string | null;
+    importance?: string | null;
+    salience?: number | null;
+    lastSeenAt?: string | null;
+  } | null;
+  summary?: string | null;
+  keyFacts?: Array<{ text?: string | null } | string> | null;
+  openLoops?: Array<{ text?: string | null } | string> | null;
+  provenance?: {
+    sources?: string[] | null;
+  } | null;
+};
+
 export type SynapseDailyAnalysisResponse = {
   exists?: boolean | null;
   steeringNote?: string | null;
@@ -208,6 +235,25 @@ function normalizeSynapseStartBriefResponse(
       : null;
   const topLoops = Array.isArray(ops?.top_loops_today) ? ops?.top_loops_today : [];
   const rawEntityProfiles = Array.isArray(value.entity_profiles) ? value.entity_profiles : [];
+  const rawEntityHints = Array.isArray(value.entity_hints) ? value.entity_hints : [];
+  const entityHints = rawEntityHints
+    .map((hint) => {
+      if (!hint || typeof hint !== "object" || Array.isArray(hint)) return null;
+      const row = hint as Record<string, unknown>;
+      const name = toNullableString(row.name)?.trim() ?? "";
+      if (!name) return null;
+      return {
+        entityId: toNullableString(row.entityId),
+        name,
+        type: toNullableString(row.type),
+        role: toNullableString(row.role),
+        importance: toNullableString(row.importance),
+        salience: toNullableNumber(row.salience),
+        lastSeenAt: toNullableString(row.lastSeenAt),
+      };
+    })
+    .filter((hint): hint is NonNullable<typeof hint> => Boolean(hint))
+    .slice(0, 8);
   const entityProfiles = rawEntityProfiles
     .map((profile) => {
       if (!profile || typeof profile !== "object" || Array.isArray(profile)) return null;
@@ -264,6 +310,7 @@ function normalizeSynapseStartBriefResponse(
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
   return {
+    entity_hints: entityHints,
     entity_profiles: entityProfiles,
     narrative: toNullableString(value.narrative),
     handover_text: toNullableString(value.handover_text),
@@ -695,6 +742,14 @@ export async function userModel<TPayload = unknown, TResponse = unknown>(
   }
   const path = `/user/model${params.toString() ? `?${params.toString()}` : ""}`;
   const result = await requestJson<undefined, TResponse>("GET", path);
+  if (!result?.ok) return null;
+  return result.data;
+}
+
+export async function entityProfile<TPayload = unknown, TResponse = unknown>(
+  payload: TPayload
+): Promise<TResponse | null> {
+  const result = await requestJson<TPayload, TResponse>("POST", "/entities/profile", payload);
   if (!result?.ok) return null;
   return result.data;
 }

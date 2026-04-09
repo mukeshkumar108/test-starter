@@ -169,6 +169,7 @@ function buildChatMessages(params: {
   bridgeBlock?: string | null;
   userNarrativeBlock?: string | null;
   handoverBlock?: string | null;
+  entityHintBlock?: string | null;
   entityProfileBlocks?: string[] | null;
   opsSnippetBlock?: string | null;
   supplementalContext?: string | null;
@@ -205,6 +206,7 @@ function buildChatMessages(params: {
       ? [{ role: "system" as const, content: params.userNarrativeBlock }]
       : []),
     ...(params.handoverBlock ? [{ role: "system" as const, content: params.handoverBlock }] : []),
+    ...(params.entityHintBlock ? [{ role: "system" as const, content: params.entityHintBlock }] : []),
     ...((params.entityProfileBlocks ?? []).map((block) => ({
       role: "system" as const,
       content: block,
@@ -598,6 +600,39 @@ function buildEntityProfileBlocks(params: {
   return blocks;
 }
 
+function buildEntityHintBlock(params: {
+  packet?: SynapseStartBriefResponse | null;
+  handoverBlock?: string | null;
+  signalPackBlock?: string | null;
+}) {
+  const hints = Array.isArray(params.packet?.entity_hints) ? params.packet.entity_hints : [];
+  if (hints.length === 0) return null;
+  const searchable = `${params.handoverBlock ?? ""}\n${params.signalPackBlock ?? ""}`.toLowerCase();
+  if (!searchable.trim()) return null;
+  const selected = hints.filter((hint) => {
+    const name = typeof hint?.name === "string" ? hint.name.trim().toLowerCase() : "";
+    return Boolean(name) && searchable.includes(name);
+  });
+  if (selected.length === 0) return null;
+  const compact = selected.slice(0, 4);
+  const lines = compact
+    .map((hint) => {
+      const name = typeof hint?.name === "string" ? hint.name.trim() : "";
+      if (!name) return null;
+      const parts = [
+        typeof hint?.type === "string" && hint.type.trim() ? hint.type.trim() : null,
+        typeof hint?.role === "string" && hint.role.trim() ? hint.role.trim() : null,
+        typeof hint?.importance === "string" && hint.importance.trim()
+          ? `importance ${hint.importance.trim()}`
+          : null,
+      ].filter(Boolean);
+      return `- ${name}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
+    })
+    .filter((line): line is string => Boolean(line));
+  if (lines.length === 0) return null;
+  return `[ENTITY_HINTS]\nKnown salient entities for this user. Use only if relevant to the current turn.\n${lines.join("\n")}`;
+}
+
 async function runCustomAssistantTurn(params: {
   executionContext: AssistantExecutionContext;
   prompt: AssistantTurnPromptPayload;
@@ -633,6 +668,11 @@ async function runCustomAssistantTurn(params: {
     handoverBlock: governedContext.handoverBlock,
     signalPackBlock: governedContext.signalPackBlock,
   });
+  const entityHintBlock = buildEntityHintBlock({
+    packet: params.prompt.startbriefPacket,
+    handoverBlock: governedContext.handoverBlock,
+    signalPackBlock: governedContext.signalPackBlock,
+  });
   const personaKernelForTurn =
     params.prompt.stanceSelected === "clarity" && params.prompt.personaSlug === "creative"
       ? await loadClarityPersonaKernel()
@@ -663,6 +703,7 @@ async function runCustomAssistantTurn(params: {
     signalPackBlock: governedContext.signalPackBlock,
     bridgeBlock: governedContext.bridgeBlock,
     handoverBlock: governedContext.handoverBlock,
+    entityHintBlock,
     entityProfileBlocks,
     opsSnippetBlock: governedContext.opsSnippetBlock,
   };
@@ -677,6 +718,7 @@ async function runCustomAssistantTurn(params: {
     ...(governedContext.bridgeBlock ? ["bridge"] : []),
     ...(params.prompt.userNarrativeBlock ? ["user_narrative"] : []),
     ...(governedContext.handoverBlock ? ["handover"] : []),
+    ...(entityHintBlock ? ["entity_hints"] : []),
     ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
     ...(governedContext.opsSnippetBlock ? ["ops"] : []),
     ...(params.prompt.supplementalContext ? ["supplemental"] : []),
@@ -830,6 +872,11 @@ export async function runAssistantTurn(params: {
     handoverBlock: governedContext.handoverBlock,
     signalPackBlock: governedContext.signalPackBlock,
   });
+  const entityHintBlock = buildEntityHintBlock({
+    packet: params.prompt.startbriefPacket,
+    handoverBlock: governedContext.handoverBlock,
+    signalPackBlock: governedContext.signalPackBlock,
+  });
   const personaKernelForTurn =
     params.prompt.stanceSelected === "clarity" && params.prompt.personaSlug === "creative"
       ? await loadClarityPersonaKernel()
@@ -860,6 +907,7 @@ export async function runAssistantTurn(params: {
     signalPackBlock: governedContext.signalPackBlock,
     bridgeBlock: governedContext.bridgeBlock,
     handoverBlock: governedContext.handoverBlock,
+    entityHintBlock,
     entityProfileBlocks,
     opsSnippetBlock: governedContext.opsSnippetBlock,
   };
@@ -874,6 +922,7 @@ export async function runAssistantTurn(params: {
     ...(governedContext.bridgeBlock ? ["bridge"] : []),
     ...(params.prompt.userNarrativeBlock ? ["user_narrative"] : []),
     ...(governedContext.handoverBlock ? ["handover"] : []),
+    ...(entityHintBlock ? ["entity_hints"] : []),
     ...(entityProfileBlocks.length > 0 ? ["entity_profile"] : []),
     ...(governedContext.opsSnippetBlock ? ["ops"] : []),
     ...(params.prompt.supplementalContext ? ["supplemental"] : []),
@@ -971,4 +1020,3 @@ export async function runAssistantTurn(params: {
 
   return runCustomAssistantTurn(params);
 }
-

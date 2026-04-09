@@ -27,6 +27,11 @@ function expect<T>(actual: T) {
         throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
       }
     },
+    toContain(expected: string) {
+      if (typeof actual !== "string" || !actual.includes(expected)) {
+        throw new Error(`Expected ${JSON.stringify(actual)} to contain ${JSON.stringify(expected)}`);
+      }
+    },
   };
 }
 
@@ -132,6 +137,39 @@ async function main() {
   expect((result as any)?.items?.[0]?.text).toBe("Keep walking");
   });
 
+  await runTest("sessionStartBrief() normalizes entity_hints safely", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    return new Response(
+      JSON.stringify({
+        entity_hints: [
+          {
+            entityId: "ent_1",
+            name: " Ashley ",
+            type: "person",
+            role: "partner",
+            importance: "high",
+            salience: 0.91,
+            lastSeenAt: "2026-04-08T18:00:00Z",
+          },
+          { name: 1 },
+        ],
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  const { sessionStartBrief } = await import("../synapseClient");
+  const result = await sessionStartBrief({ tenantId: "tenant-test", userId: "user-1" });
+
+  globalThis.fetch = originalFetch;
+
+  expect(Array.isArray((result as any)?.entity_hints)).toBe(true);
+  expect((result as any)?.entity_hints?.length).toBe(1);
+  expect((result as any)?.entity_hints?.[0]?.name).toBe("Ashley");
+  expect((result as any)?.entity_hints?.[0]?.role).toBe("partner");
+  });
+
   await runTest("memoryLoops() hits correct URL and normalizes rows", async () => {
   const calls: Array<{ url: string; body: string }> = [];
   const originalFetch = globalThis.fetch;
@@ -185,6 +223,29 @@ async function main() {
   expect(calls[0].url).toBe(
     "https://synapse.test/user/model?tenantId=tenant-test&userId=user-1"
   );
+  });
+
+  await runTest("entityProfile() posts to correct URL", async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo, init?: RequestInit) => {
+    calls.push({ url: String(url), body: String(init?.body ?? "") });
+    return new Response(JSON.stringify({ entity: { name: "Ashley" } }), { status: 200 });
+  }) as typeof fetch;
+
+  const { entityProfile } = await import("../synapseClient");
+  await entityProfile({
+    tenantId: "tenant-test",
+    userId: "user-1",
+    name: "Ashley",
+    includeOpenLoops: true,
+  });
+
+  globalThis.fetch = originalFetch;
+
+  expect(calls.length).toBe(1);
+  expect(calls[0].url).toBe("https://synapse.test/entities/profile");
+  expect(calls[0].body).toContain("\"name\":\"Ashley\"");
   });
 
   await runTest("dailyAnalysis() hits correct URL and normalizes payload", async () => {

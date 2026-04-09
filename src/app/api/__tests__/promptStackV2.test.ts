@@ -82,6 +82,7 @@ async function main() {
       overlayBlock: "[OVERLAY]\nOverlay behavior",
       bridgeBlock: "BRIDGE",
       handoverBlock: "HANDOVER VERBATIM",
+      entityHintBlock: "[ENTITY_HINTS]\n- Ashley: person, partner, importance high",
       opsSnippetBlock: "One useful thread to anchor on is walk daily.",
       supplementalContext: "FACTS:\n- follow-up",
       recentMessages: [{ role: "assistant", content: "prev" }],
@@ -93,11 +94,12 @@ async function main() {
     expect(contents[2].startsWith("[OVERLAY]")).toBe(true);
     expect(contents[3]).toBe("BRIDGE");
     expect(contents[4]).toBe("HANDOVER VERBATIM");
-    expect(contents[5]).toBe("One useful thread to anchor on is walk daily.");
-    expect(contents[6].startsWith("[SUPPLEMENTAL_CONTEXT]")).toBe(true);
-    expect(contents[7].startsWith("[CURRENT_SESSION_STATE]")).toBe(true);
-    expect(contents[8]).toBe("prev");
-    expect(contents[9]).toBe("current user turn");
+    expect(contents[5].startsWith("[ENTITY_HINTS]")).toBe(true);
+    expect(contents[6]).toBe("One useful thread to anchor on is walk daily.");
+    expect(contents[7].startsWith("[SUPPLEMENTAL_CONTEXT]")).toBe(true);
+    expect(contents[8].startsWith("[CURRENT_SESSION_STATE]")).toBe(true);
+    expect(contents[9]).toBe("prev");
+    expect(contents[10]).toBe("current user turn");
   });
 
   await runTest("current session state appears later than bridge and handover", () => {
@@ -105,6 +107,7 @@ async function main() {
       persona: "PERSONA",
       bridgeBlock: "BRIDGE",
       handoverBlock: "HANDOVER VERBATIM",
+      entityHintBlock: "[ENTITY_HINTS]\n- Ashley: person, partner, importance high",
       supplementalContext: "FACTS:\n- follow-up",
       currentSessionTruthsBlock: "[CURRENT_SESSION_STATE]\nscene.location=outside",
       recentMessages: [{ role: "assistant", content: "prev" }],
@@ -113,9 +116,11 @@ async function main() {
     const contents = messages.map((message) => message.content);
     const bridgeIndex = contents.findIndex((value) => value === "BRIDGE");
     const handoverIndex = contents.findIndex((value) => value === "HANDOVER VERBATIM");
+    const hintIndex = contents.findIndex((value) => value.startsWith("[ENTITY_HINTS]"));
     const stateIndex = contents.findIndex((value) => value.startsWith("[CURRENT_SESSION_STATE]"));
     expect(stateIndex > bridgeIndex ? "true" : "false").toBe("true");
     expect(stateIndex > handoverIndex ? "true" : "false").toBe("true");
+    expect(hintIndex > handoverIndex ? "true" : "false").toBe("true");
   });
 
   await runTest("conversation history block combines rolling summary and raw turns", () => {

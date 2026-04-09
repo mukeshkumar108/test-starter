@@ -27,6 +27,15 @@ export type ResumePacket = {
   handover_text: string | null;
   narrative: string | null;
   bridge_text: string | null;
+  entity_hints: Array<{
+    entity_id: string | null;
+    name: string;
+    type: string | null;
+    role: string | null;
+    importance: string | null;
+    salience: number | null;
+    last_seen_at: string | null;
+  }>;
   entity_profiles: Array<{
     name: string;
     profile_text: string;
@@ -258,6 +267,26 @@ function normalizeEntityProfiles(startBrief: SynapseStartBriefResponse | null) {
     .slice(0, 6);
 }
 
+function normalizeEntityHints(startBrief: SynapseStartBriefResponse | null) {
+  if (!Array.isArray(startBrief?.entity_hints)) return [];
+  return startBrief.entity_hints
+    .map((hint) => {
+      const name = cleanString(hint?.name);
+      if (!name) return null;
+      return {
+        entity_id: cleanString(hint?.entityId),
+        name,
+        type: cleanString(hint?.type),
+        role: cleanString(hint?.role),
+        importance: cleanString(hint?.importance),
+        salience: cleanNumber(hint?.salience),
+        last_seen_at: cleanString(hint?.lastSeenAt),
+      };
+    })
+    .filter((entry): entry is ResumePacket["entity_hints"][number] => Boolean(entry))
+    .slice(0, 8);
+}
+
 function normalizeOpsContext(startBrief: SynapseStartBriefResponse | null, dailyAnalysis: SynapseDailyAnalysisResponse | null) {
   const topLoops = Array.isArray(startBrief?.ops_context?.top_loops_today)
     ? startBrief!.ops_context!.top_loops_today!
@@ -346,6 +375,15 @@ export function isUsableResumePacket(packet: ResumePacket | null | undefined) {
 
 export function resumePacketToStartbriefPacket(packet: ResumePacket): SynapseStartBriefResponse {
   return {
+    entity_hints: (packet.entity_hints ?? []).map((hint) => ({
+      entityId: hint.entity_id,
+      name: hint.name,
+      type: hint.type,
+      role: hint.role,
+      importance: hint.importance,
+      salience: hint.salience,
+      lastSeenAt: hint.last_seen_at,
+    })),
     entity_profiles: packet.entity_profiles.map((profile) => ({
       name: profile.name,
       profile_text: profile.profile_text,
@@ -521,6 +559,7 @@ export async function buildResumePacket(params: {
     handover_text: cleanString(startBrief?.handover_text),
     narrative: cleanString(startBrief?.narrative),
     bridge_text: cleanString(startBrief?.bridgeText) ?? cleanString(startBrief?.resume?.bridge_text),
+    entity_hints: normalizeEntityHints(startBrief),
     entity_profiles: normalizeEntityProfiles(startBrief),
     ops_context: normalizeOpsContext(startBrief, dailyAnalysis),
     items: normalizeItems(startBrief),
