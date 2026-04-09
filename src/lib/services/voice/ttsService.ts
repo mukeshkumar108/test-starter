@@ -22,7 +22,6 @@ type VoiceSettings = {
 };
 
 const DEFAULT_TTS_MODEL = "eleven_turbo_v2_5";
-const MAX_TTS_SENTENCES = 3;
 const MAX_TTS_CHARS = 420;
 
 function stripUrls(text: string) {
@@ -62,8 +61,7 @@ function sanitizeForVoice(text: string): string {
     .replace(/^[\-\u2022]\s+/gm, "")
     .replace(/\s{2,}/g, " ")
     .trim();
-  const sentenceLimited = limitSentences(normalized, MAX_TTS_SENTENCES);
-  return capVoiceText(sentenceLimited, MAX_TTS_CHARS);
+  return capVoiceText(normalized, MAX_TTS_CHARS);
 }
 
 function isNightVoiceWindow(localHour?: number) {
