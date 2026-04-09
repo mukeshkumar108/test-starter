@@ -48,7 +48,7 @@ Impact:
 - the sweeper now matches the same inactivity model by default
 - fresh user-provided truths and corrections now have a dedicated higher-priority prompt lane
 
-## 2026-04-09: Replace free-text session truths with structured `CURRENT_SESSION_STATE`
+## 2026-04-09: Replace free-text session truths with structured `CURRENT_SESSION_STATE` (renamed from `CURRENT_SESSION_TRUTHS`)
 
 Decision:
 

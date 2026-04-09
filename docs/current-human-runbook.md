@@ -301,16 +301,17 @@ Explicit close remains stronger than the inactivity window:
 
 - if the frontend calls `/api/session/close`, the session closes immediately
 
-## Mastra web search
+## Mastra memory and web search
 
-There is now a Tavily-backed Mastra web-search tool.
+Both memory and web search are now pure LLM-driven tool calls.
 
-Purpose:
+The LLM decides when to call each tool based on the question. There is no keyword detection layer.
 
-- let Sophie look up current external information
-- keep web access inside the same Mastra tool-calling pattern as memory
+Do not reintroduce keyword-gated prefetch logic (`shouldPrefetchMemory`, `looksLikeRecallQuestion`, or similar). It was removed 2026-04-09 because it was brittle, language-blind, and caused Sophie to loop on natural recall phrases that matched no pattern. The decision log has the full reasoning.
 
-Important detail:
+Current settings: `toolChoice: "auto"`, `maxSteps: 3`.
+
+The Tavily-backed web search tool works the same way:
 
 - if `TAVILY_API_KEY` is missing, the app still works
 - the web tool simply becomes unavailable and Sophie answers without it
