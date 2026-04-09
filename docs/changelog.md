@@ -1,6 +1,24 @@
 # Changelog
 
-## 2026-04-09
+## 2026-04-09 (2)
+
+- Removed all keyword-gated memory and web prefetch logic from `src/mastra/runMastraTurn.ts`.
+  - Deleted: `looksLikeRecallQuestion`, `looksLikeCurrentInfoQuestion`, `looksLikeDeepResearchQuestion`, `isLikelyTemporalReminder`, `shouldPrefetchMemory`, `shouldPrefetchWeb`, `buildPrefetchedSupplementalContext`.
+  - Root cause: keyword gating was brittle, language-blind, and missed the majority of natural recall phrasings. The user asking "what do you know about Ashley?" or "access your long-term memory" never matched any pattern.
+- Switched Mastra generation from `toolChoice: "none"` / `maxSteps: 1` to `toolChoice: "auto"` / `maxSteps: 3`.
+  - The LLM now decides when to call the memory tool based on semantic understanding of the question — not string matching.
+- Simplified `runMemoryLookup` in `src/mastra/tools/memory.ts` to a single direct Synapse query.
+  - Deleted: `buildMemoryLookupCandidates`, `extractQueryCandidates`, `sanitizeMemoryQueryValue`.
+  - Was running up to 3 Synapse queries built from keyword/capitalisation heuristics. Now: one query, using the string the LLM provides directly.
+- Tightened agent instructions in `src/mastra/agents/assistant.ts`.
+  - Replaced a prescriptive 6-bullet "Use the memory tool when:" list with a short intent-based description.
+  - The tool's own description (read by the LLM at call time) is the authoritative signal.
+- Removed two now-obsolete tests for `buildMemoryLookupCandidates` from `src/mastra/tools/__tests__/memory.test.ts`.
+- Tracing preserved: `[mastra.memory.tool.used]` logs query when tool fires; `[mastra.memory.tool.skipped]` logs user message when it doesn't.
+- Confirmed literal-mode reply guard does not interfere with memory-tool turns (guard only fires when `assistant.response_mode=literal` in `CURRENT_SESSION_STATE`, which is never set on recall turns).
+- Build clean, all 26 tests pass.
+
+## 2026-04-09 (1)
 
 - Raised the default active session window from 5 minutes to 30 minutes.
 - Aligned the stale-session sweeper default inactivity threshold with the active session window.

@@ -51,23 +51,7 @@ async function runTest(name: string, fn: () => Promise<void> | void) {
 
 async function main() {
   seedEnv();
-  const { buildMemoryLookupCandidates, extractRelevantUserModelLines } = await import("../memory");
-
-  await runTest("hospital recall builds compact candidates", () => {
-    const candidates = buildMemoryLookupCandidates(
-      "Do you remember why I went to hospital a couple of weeks ago?"
-    );
-    expect(candidates.slice(0, 3)).toEqual([
-      "hospital reason",
-      "hospital stay reason",
-      "hospital stay",
-    ]);
-  });
-
-  await runTest("relationship recall keeps named-entity candidates", () => {
-    const candidates = buildMemoryLookupCandidates("Who's Ashley to me and what's changed recently?");
-    expect(candidates).toContain("Ashley recent");
-  });
+  const { extractRelevantUserModelLines } = await import("../memory");
 
   await runTest("user model extraction surfaces exact profile sentence", () => {
     const lines = extractRelevantUserModelLines({

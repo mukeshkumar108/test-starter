@@ -75,11 +75,16 @@ The live request path is still:
 
 Mastra currently owns:
 
-- memory-use decisioning on the Mastra path
-- web-search decisioning on the Mastra path
-- whether to call the thin memory tool
-- whether to call the Tavily-backed web tool
+- memory-use decisioning on the Mastra path (LLM decides via tool-use, not keyword detection)
+- web-search decisioning on the Mastra path (LLM decides via tool-use, not keyword detection)
 - final reply generation on the Mastra path
+
+Important current detail:
+
+- `toolChoice` is `"auto"` and `maxSteps` is `3`
+- the LLM calls `memoryTool` or `searchWeb` based on semantic understanding of the question
+- there is no keyword prefetch layer — it was removed 2026-04-09 because it was brittle and language-blind
+- do not reintroduce keyword gating or a `shouldPrefetchMemory`-style function
 
 Mastra does **not** currently own:
 

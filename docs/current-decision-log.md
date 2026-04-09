@@ -2,6 +2,31 @@
 
 This log records the important recent architectural decisions and why they were made.
 
+## 2026-04-09: Remove keyword-gated memory prefetch, restore LLM tool-use decisioning
+
+Decision:
+
+- remove all keyword detection functions from `runMastraTurn.ts`
+- remove `buildPrefetchedSupplementalContext` and the entire parallel prefetch machinery
+- switch from `toolChoice: "none"` / `maxSteps: 1` to `toolChoice: "auto"` / `maxSteps: 3`
+- simplify `runMemoryLookup` to a single direct Synapse query using the LLM-provided query string
+- tighten agent instructions to intent-based rather than rule-based
+
+Why:
+
+- keyword gating was causing Sophie to loop: natural recall phrases like "what do you know about Ashley", "access your long-term memory", "tell me what you know from before" matched zero patterns
+- `toolChoice: "none"` meant the LLM could never call the memory tool even when it recognised the intent
+- even when the prefetch did trigger, `buildMemoryLookupCandidates` fell back to "first 6 words of user message" as the Synapse query, returning garbage results
+- keyword detection is inherently brittle and language-blind — the entire point of the LLM is to understand intent
+- the correct place for "should I call memory?" is the LLM, using the tool description as the signal, not a string-matching function
+
+Impact:
+
+- Sophie now calls the memory tool on any turn where she judges prior knowledge is needed
+- latency cost is real but only paid on turns that actually need memory (~10% of turns)
+- for those turns the user is explicitly asking for recalled information — a one-second pause is acceptable and correct
+- codebase is significantly simpler: ~210 lines deleted across two files
+
 ## 2026-04-09: Extend default session window to 30 minutes and add `CURRENT_SESSION_TRUTHS`
 
 Decision:

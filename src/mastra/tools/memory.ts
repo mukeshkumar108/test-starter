@@ -124,17 +124,6 @@ function buildRecallSheet(params: {
   return lines.join("\n");
 }
 
-function sanitizeMemoryQueryValue(value: string) {
-  let cleaned = value.trim();
-  cleaned = cleaned.replace(/^["']+|["']+$/g, "");
-  cleaned = cleaned.replace(/[^\w\s]+/g, " ");
-  cleaned = cleaned.replace(/\s+/g, " ").trim();
-  if (!cleaned) return null;
-  const words = cleaned.split(" ").slice(0, 6).join(" ");
-  if (!words) return null;
-  return words.slice(0, 48).trim() || null;
-}
-
 function dedupeStrings(values: Array<string | null | undefined>) {
   const seen = new Set<string>();
   const deduped: string[] = [];
@@ -145,86 +134,6 @@ function dedupeStrings(values: Array<string | null | undefined>) {
     deduped.push(trimmed);
   }
   return deduped;
-}
-
-function extractQueryCandidates(transcript: string) {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-  const tokens = transcript.match(/\b[A-Za-z][A-Za-z'-]*\b/g) || [];
-  const stopTokens = new Set(["I", "Ok", "OK"]);
-  const relationshipNouns = new Set([
-    "girlfriend",
-    "wife",
-    "partner",
-    "boyfriend",
-    "husband",
-    "kids",
-    "children",
-    "brother",
-    "sister",
-    "mom",
-    "dad",
-    "daughter",
-    "son",
-    "friend",
-    "ex",
-  ]);
-  const pushCandidate = (value: string) => {
-    const sanitized = sanitizeMemoryQueryValue(value);
-    if (!sanitized || seen.has(sanitized)) return;
-    seen.add(sanitized);
-    candidates.push(sanitized);
-  };
-
-  const capitalized: string[] = [];
-  const relationships: string[] = [];
-  for (const token of tokens) {
-    if (stopTokens.has(token)) continue;
-    if (relationshipNouns.has(token.toLowerCase())) {
-      relationships.push(token.toLowerCase());
-    }
-    if (/^[A-Z][a-zA-Z'-]+$/.test(token) && token.length >= 3) {
-      capitalized.push(token);
-    }
-  }
-
-  const primaryPerson = capitalized[0];
-  const primaryLocation = capitalized[1];
-  const primaryRelationship = relationships[0];
-
-  if (primaryPerson && primaryRelationship) pushCandidate(`${primaryPerson} ${primaryRelationship}`);
-  if (primaryPerson && primaryLocation) pushCandidate(`${primaryPerson} ${primaryLocation}`);
-  if (primaryPerson) pushCandidate(primaryPerson);
-
-  return candidates.slice(0, 3);
-}
-
-export function buildMemoryLookupCandidates(input: string) {
-  const normalized = input.trim().toLowerCase();
-  const candidates: string[] = [];
-  const add = (value: string) => {
-    const sanitized = sanitizeMemoryQueryValue(value);
-    if (sanitized) candidates.push(sanitized);
-  };
-
-  const recallPatterns = [
-    { test: /\bhospital\b/, values: ["hospital reason", "hospital stay reason", "hospital stay"] },
-    { test: /\bweather\b/, values: ["weather"] },
-    { test: /\bjasmine\b/, values: ["Jasmine recent", "Jasmine relationship"] },
-    { test: /\bashley\b/, values: ["Ashley relationship recent", "Ashley recent"] },
-  ];
-  for (const pattern of recallPatterns) {
-    if (pattern.test.test(normalized)) {
-      for (const value of pattern.values) add(value);
-    }
-  }
-
-  if (/\bremember\b|\bdo you know\b|\bwho is\b|\bwho was\b|\bwhat changed\b|\bwhy\b/.test(normalized)) {
-    for (const candidate of extractQueryCandidates(input)) add(candidate);
-  }
-
-  add(input);
-  return dedupeStrings(candidates);
 }
 
 function collectUserModelStrings(value: unknown, acc: string[]) {
@@ -368,64 +277,44 @@ export async function runMemoryLookup(params: {
     };
   }
 
-  const candidates = buildMemoryLookupCandidates(params.query);
-  const [userModel, queryResults] = await Promise.all([
+  const [userModel, queryResult] = await Promise.all([
     fetchUserModel({ userId: params.userId }).catch(() => null),
-    Promise.all(
-      candidates.map(async (candidate) => ({
-        candidate,
-        result: await querySynapseMemory({
-          userId: params.userId,
-          now: params.now,
-          query: candidate,
-        }),
-      }))
-    ),
+    querySynapseMemory({
+      userId: params.userId,
+      now: params.now,
+      query: params.query,
+    }),
   ]);
 
-  const failedResult = queryResults.find((entry) => !entry.result.ok);
-  if (failedResult) {
+  if (!queryResult.ok) {
     console.warn("[mastra.memory.query.failed]", {
       requestId: params.requestId,
-      status: failedResult.result.status,
-      query: failedResult.candidate,
+      status: queryResult.status,
+      query: params.query,
     });
+    return {
+      used: false,
+      query: params.query,
+      supplementalContext: null,
+      reason: "synapse_error",
+    };
   }
 
-  let selectedQuery = candidates[0] ?? params.query;
-  let selectedFacts: string[] = [];
-  let selectedEntities: string[] = [];
-  let selectedFactRows: NormalizedRecallFact[] = [];
-
-  for (const entry of queryResults) {
-    if (!entry.result.ok || !entry.result.data) continue;
-    const { facts, entities, factRows } = normalizeMemoryQueryResponse(entry.result.data);
-    const recallFacts = factRows
-      .filter((fact) => fact.relevanceTier !== "stale")
-      .map((fact) => fact.text);
-    if (recallFacts.length > 0 || entities.length > 0) {
-      selectedQuery = entry.candidate;
-      selectedFacts = facts;
-      selectedEntities = entities;
-      selectedFactRows = factRows;
-      break;
-    }
-  }
-
+  const { facts, entities, factRows } = normalizeMemoryQueryResponse(queryResult.data);
   const profileMatches = extractRelevantUserModelLines({
     query: params.query,
-    candidates,
+    candidates: [params.query],
     userModel,
   });
 
-  const recallFacts = selectedFactRows
+  const recallFacts = factRows
     .filter((fact) => fact.relevanceTier !== "stale")
     .map((fact) => fact.text);
 
-  if (recallFacts.length === 0 && selectedEntities.length === 0 && profileMatches.length === 0) {
+  if (recallFacts.length === 0 && entities.length === 0 && profileMatches.length === 0) {
     return {
       used: false,
-      query: selectedQuery,
+      query: params.query,
       supplementalContext: null,
       reason: "no_results",
     };
@@ -433,12 +322,12 @@ export async function runMemoryLookup(params: {
 
   return {
     used: true,
-    query: selectedQuery,
+    query: params.query,
     supplementalContext: buildRecallSheet({
-      query: selectedQuery,
-      facts: selectedFacts,
-      factRows: selectedFactRows,
-      entities: selectedEntities,
+      query: params.query,
+      facts,
+      factRows,
+      entities,
       profileMatches,
       includeStaleFacts: false,
     }),

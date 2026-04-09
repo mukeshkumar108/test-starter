@@ -1,8 +1,6 @@
 import type { AISDKMessage } from "@/lib/llm/aiSdkCompletion";
 import { createMastraRuntime } from "@/mastra";
 import { env } from "@/env";
-import { runMemoryLookup } from "@/mastra/tools/memory";
-import { runWebSearch } from "@/mastra/tools/web";
 import type { MessageInput } from "@mastra/core/agent/message-list";
 
 function extractMemoryToolQuery(value: unknown): string | null {
@@ -26,144 +24,6 @@ function extractWebToolQuery(value: unknown): string | null {
   return extractMemoryToolQuery(value);
 }
 
-function looksLikeCurrentInfoQuestion(text: string) {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return false;
-  return (
-    normalized.includes("weather") ||
-    normalized.includes("news") ||
-    normalized.includes("headline") ||
-    normalized.includes("headlines") ||
-    normalized.includes("today") ||
-    normalized.includes("latest") ||
-    normalized.includes("right now") ||
-    normalized.includes("current") ||
-    normalized.includes("price") ||
-    normalized.includes("released") ||
-    normalized.includes("events in") ||
-    normalized.includes("what's happening in") ||
-    normalized.includes("what is happening in")
-  );
-}
-
-function looksLikeDeepResearchQuestion(text: string) {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return false;
-  return (
-    normalized.includes("deep research") ||
-    normalized.includes("deep dive") ||
-    normalized.includes("research") ||
-    normalized.includes("analyze") ||
-    normalized.includes("analysis") ||
-    normalized.includes("compare") ||
-    normalized.includes("comprehensive")
-  );
-}
-
-function isLikelyTemporalReminder(text: string) {
-  const normalized = text.trim().toLowerCase();
-  return (
-    normalized.includes("remember, it's") ||
-    normalized.includes("remember it is") ||
-    normalized.includes("remember, it is") ||
-    normalized.includes("remember - it's") ||
-    normalized.includes("remember that it's")
-  );
-}
-
-function shouldPrefetchWeb(text: string) {
-  return looksLikeCurrentInfoQuestion(text);
-}
-
-async function buildPrefetchedSupplementalContext(params: {
-  userId: string;
-  requestId: string;
-  now: Date;
-  lastUserMessage: string;
-}) {
-  const startedAt = Date.now();
-  const sections: string[] = [];
-  let memoryPrefetchUsed = false;
-  let webPrefetchUsed = false;
-  let memoryPrefetchQuery: string | null = null;
-  let webPrefetchQuery: string | null = null;
-  let memoryLookupAttempted = false;
-  let webLookupAttempted = false;
-  let memoryLookupReason: string | null = null;
-  let webLookupReason: string | null = null;
-  let memoryPrefetchMs = 0;
-  let webPrefetchMs = 0;
-  const shouldRunMemory = shouldPrefetchMemory(params.lastUserMessage);
-  const shouldRunWeb = shouldPrefetchWeb(params.lastUserMessage);
-  const webMode = looksLikeDeepResearchQuestion(params.lastUserMessage)
-    ? "deep_research"
-    : "voice_fast";
-
-  const tasks: Array<Promise<void>> = [];
-
-  if (shouldRunMemory) {
-    memoryLookupAttempted = true;
-    tasks.push(
-      (async () => {
-        const memoryStartedAt = Date.now();
-        const memoryResult = await runMemoryLookup({
-          userId: params.userId,
-          requestId: params.requestId,
-          now: params.now,
-          query: params.lastUserMessage,
-        });
-        memoryPrefetchMs = Math.max(0, Date.now() - memoryStartedAt);
-        if (memoryResult.used && memoryResult.supplementalContext) {
-          memoryPrefetchUsed = true;
-          memoryPrefetchQuery = memoryResult.query;
-          sections.push(`[VERIFIED_MEMORY]\n${memoryResult.supplementalContext}`);
-        } else {
-          memoryLookupReason = memoryResult.reason;
-        }
-      })()
-    );
-  }
-
-  if (shouldRunWeb) {
-    webLookupAttempted = true;
-    tasks.push(
-      (async () => {
-        const webStartedAt = Date.now();
-        const webResult = await runWebSearch({
-          requestId: params.requestId,
-          query: params.lastUserMessage,
-          mode: webMode,
-        });
-        webPrefetchMs = Math.max(0, Date.now() - webStartedAt);
-        if (webResult.used && webResult.supplementalContext) {
-          webPrefetchUsed = true;
-          webPrefetchQuery = webResult.query;
-          sections.push(`[VERIFIED_WEB]\n${webResult.supplementalContext}`);
-        } else {
-          webLookupReason = webResult.reason;
-        }
-      })()
-    );
-  }
-
-  await Promise.all(tasks);
-
-  return {
-    supplementalContext: sections.length > 0 ? sections.join("\n\n") : null,
-    memoryPrefetchUsed,
-    memoryPrefetchQuery,
-    webPrefetchUsed,
-    webPrefetchQuery,
-    memoryLookupAttempted,
-    webLookupAttempted,
-    memoryLookupReason,
-    webLookupReason,
-    prefetch_ms: Math.max(0, Date.now() - startedAt),
-    memory_prefetch_ms: memoryPrefetchMs,
-    web_prefetch_ms: webPrefetchMs,
-  };
-}
-
 function extractLastUserMessage(messages: AISDKMessage[]) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -172,49 +32,6 @@ function extractLastUserMessage(messages: AISDKMessage[]) {
     }
   }
   return "";
-}
-
-function looksLikeRecallQuestion(text: string) {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return false;
-  if (looksLikeCurrentInfoQuestion(text) && isLikelyTemporalReminder(text)) {
-    return false;
-  }
-  return (
-    normalized.includes("do you remember") ||
-    normalized.includes("can you remember") ||
-    normalized.includes("what do you remember") ||
-    normalized.includes("earlier") ||
-    normalized.includes("previous") ||
-    normalized.includes("what did i") ||
-    normalized.includes("who is") ||
-    normalized.includes("who was") ||
-    normalized.includes("told you") ||
-    normalized.includes("mentioned") ||
-    normalized.includes("my friend") ||
-    normalized.includes("my ex") ||
-    normalized.includes("my partner")
-  );
-}
-
-function shouldPrefetchMemory(text: string) {
-  const normalized = text.trim().toLowerCase();
-  const currentInfo = looksLikeCurrentInfoQuestion(text);
-  const recall = looksLikeRecallQuestion(text);
-  if (!recall) return false;
-  if (!currentInfo) return true;
-
-  const explicitMixedSignals = [
-    "what did i say",
-    "what was i saying",
-    "earlier",
-    "previously",
-    "before that",
-    "since then",
-    "what changed",
-    "and what's happened since",
-  ];
-  return explicitMixedSignals.some((signal) => normalized.includes(signal));
 }
 
 export async function runMastraTurn(params: {
@@ -227,42 +44,25 @@ export async function runMastraTurn(params: {
 }) {
   const startedAt = Date.now();
   const orchestrationModel = env.MASTRA_ORCHESTRATION_MODEL?.trim() || params.chosenModel;
-  const lastUserMessage = extractLastUserMessage(params.messages);
-  const prefetchedContext = await buildPrefetchedSupplementalContext({
-    userId: params.userId,
-    requestId: params.requestId,
-    now: params.now,
-    lastUserMessage,
-  });
+
   const { assistant } = createMastraRuntime({
     userId: params.userId,
     requestId: params.requestId,
     now: params.now,
-    instructions:
-      `${params.instructions}
+    instructions: `${params.instructions}
 
 This is a real-time push-to-talk voice turn. Do not expose tool-call markup, XML-like tags, or internal reasoning. Give one clean spoken answer only.
 
-If verified retrieval context is provided below, treat it as authoritative for this turn. Use it directly and naturally. Do not say you are checking or looking things up if the answer is already present here.
-
-If verified web results are provided, silently synthesize them into a natural spoken answer. Do not list sources, do not read URLs, do not mention citations, and do not read bullet points aloud unless the user explicitly asks for sources.
-
-For current-events, weather, headlines, and live-information answers, keep the spoken response concise by default: usually 1 to 3 short sentences.
-
 If CURRENT_SESSION_STATE indicates literal mode, respond with concrete low-inference wording. Start with a direct acknowledgment of the user's latest literal update. Avoid poetic, philosophical, or interpretive openings. Do not imply a scene is completed, arrived at, or already processed unless the user explicitly said so.
 
-If the user asks for live or current external information and no verified web result is provided, be honest that you do not have verified live data for this turn. Do not guess.
-
-If the user asks about prior conversations, relationships, or earlier events and no verified memory result is provided, be honest that you cannot verify that memory right now. Do not guess.
-
-${prefetchedContext.supplementalContext ?? ""}`.trim(),
+If a tool returns results, use them naturally without exposing tool names, internal structure, or raw data.`.trim(),
     model: orchestrationModel,
   });
 
   const generationStartedAt = Date.now();
   const result = await assistant.generate(params.messages as unknown as MessageInput[], {
-    maxSteps: 1,
-    toolChoice: "none",
+    maxSteps: 3,
+    toolChoice: "auto",
     model: {
       id: orchestrationModel as `${string}/${string}`,
       url: "https://openrouter.ai/api/v1",
@@ -279,31 +79,42 @@ ${prefetchedContext.supplementalContext ?? ""}`.trim(),
   });
 
   const memoryToolUsed =
-    result.toolCalls?.some((toolCall) =>
-      typeof toolCall === "object" &&
-      toolCall !== null &&
-      "toolName" in toolCall &&
-      toolCall.toolName === "memoryTool"
+    result.toolCalls?.some(
+      (toolCall) =>
+        typeof toolCall === "object" &&
+        toolCall !== null &&
+        "toolName" in toolCall &&
+        toolCall.toolName === "memoryTool"
     ) ?? false;
   const webToolUsed =
-    result.toolCalls?.some((toolCall) =>
-      typeof toolCall === "object" &&
-      toolCall !== null &&
-      "toolName" in toolCall &&
-      toolCall.toolName === "searchWeb"
+    result.toolCalls?.some(
+      (toolCall) =>
+        typeof toolCall === "object" &&
+        toolCall !== null &&
+        "toolName" in toolCall &&
+        toolCall.toolName === "searchWeb"
     ) ?? false;
   const memoryToolQuery =
     result.toolCalls?.map(extractMemoryToolQuery).find((query) => Boolean(query)) ?? null;
   const webToolQuery =
     result.toolCalls?.map(extractWebToolQuery).find((query) => Boolean(query)) ?? null;
-  if (!memoryToolUsed && looksLikeRecallQuestion(lastUserMessage)) {
+
+  if (memoryToolUsed) {
     console.log(
-      "[mastra.memory.decision]",
+      "[mastra.memory.tool.used]",
       JSON.stringify({
         requestId: params.requestId,
-        used_memory_tool: false,
+        query: memoryToolQuery,
         chosenModel: orchestrationModel,
-        user_message: lastUserMessage,
+      })
+    );
+  } else {
+    console.log(
+      "[mastra.memory.tool.skipped]",
+      JSON.stringify({
+        requestId: params.requestId,
+        user_message: extractLastUserMessage(params.messages),
+        chosenModel: orchestrationModel,
       })
     );
   }
@@ -316,17 +127,17 @@ ${prefetchedContext.supplementalContext ?? ""}`.trim(),
     llm_ms: finalGenerationMs,
     timings: {
       mastra_total_ms: totalMs,
-      prefetch_ms: prefetchedContext.prefetch_ms,
-      memory_prefetch_ms: prefetchedContext.memory_prefetch_ms,
-      web_prefetch_ms: prefetchedContext.web_prefetch_ms,
+      prefetch_ms: undefined,
+      memory_prefetch_ms: undefined,
+      web_prefetch_ms: undefined,
       final_generation_ms: finalGenerationMs,
     },
     toolCalls: result.toolCalls,
     toolResults: result.toolResults,
     modelUsed: orchestrationModel,
-    memoryToolUsed: memoryToolUsed || prefetchedContext.memoryPrefetchUsed,
-    memoryToolQuery: memoryToolQuery ?? prefetchedContext.memoryPrefetchQuery,
-    webToolUsed: webToolUsed || prefetchedContext.webPrefetchUsed,
-    webToolQuery: webToolQuery ?? prefetchedContext.webPrefetchQuery,
+    memoryToolUsed,
+    memoryToolQuery,
+    webToolUsed,
+    webToolQuery,
   };
 }
