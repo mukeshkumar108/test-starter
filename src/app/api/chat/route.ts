@@ -3791,6 +3791,7 @@ function extractCurrentSessionStatePatch(text: string) {
 
   patch["constraints.prefer_latest_literal_user_update"] = "true";
   patch["constraints.do_not_advance_scene"] = "true";
+  patch["constraints.first_sentence_anchor_latest_literal_user_update"] = "true";
   patch["assistant.response_mode"] = "literal";
 
   if (/\bi('m| am|m)\s+(finally\s+)?outside\b/.test(normalized)) {
@@ -3825,6 +3826,14 @@ function extractCurrentSessionStatePatch(text: string) {
       normalized.match(/today\s+was\s+([^.!?\n]+)/)?.[1] ?? "chicken";
     patch["meal.today"] = detectMealValue(todayChickenText) ?? "chicken";
   }
+  if (!patch["meal.today"] && /\b([^.!?\n]+?)\s+was\s+today\b/.test(normalized)) {
+    const trailingTodayText =
+      normalized.match(/\b([^.!?\n]+?)\s+was\s+today\b/)?.[1] ?? normalized;
+    const trailingTodayValue = detectMealValue(trailingTodayText);
+    if (trailingTodayValue) {
+      patch["meal.today"] = trailingTodayValue;
+    }
+  }
   if (!patch["meal.today"] && (normalized.includes("today") || normalized.includes("tonight"))) {
     const todayMealText = normalized.match(/(?:today|tonight)(?:\s+was|\s+is|\s+we made)?\s+([^.!?\n]+)/)?.[1] ?? normalized;
     const todayMealValue = detectMealValue(todayMealText);
@@ -3837,6 +3846,14 @@ function extractCurrentSessionStatePatch(text: string) {
     const yesterdayMealValue = detectMealValue(yesterdayMealText);
     if (yesterdayMealValue) {
       patch["meal.yesterday"] = yesterdayMealValue;
+    }
+  }
+  if (!patch["meal.yesterday"] && /\b([^.!?\n]+?)\s+was\s+yesterday\b/.test(normalized)) {
+    const trailingYesterdayText =
+      normalized.match(/\b([^.!?\n]+?)\s+was\s+yesterday\b/)?.[1] ?? normalized;
+    const trailingYesterdayValue = detectMealValue(trailingYesterdayText);
+    if (trailingYesterdayValue) {
+      patch["meal.yesterday"] = trailingYesterdayValue;
     }
   }
   if (normalized.includes("finished my dinner") || normalized.includes("had dinner")) {
@@ -3926,6 +3943,7 @@ function buildCurrentSessionTruthsBlock(params: {
     "prefer_over=bridge,handover,rolling_summary,prior_assistant_assumptions",
     "prefer_latest_literal_user_update=true",
     "do_not_advance_scene=true",
+    "first_sentence_anchor_latest_literal_user_update=true",
   ];
   for (const [key, value] of stateEntries) {
     lines.push(`${key}=${value}`);
