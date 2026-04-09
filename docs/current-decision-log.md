@@ -2,6 +2,91 @@
 
 This log records the important recent architectural decisions and why they were made.
 
+## 2026-04-09: Remove all per-turn session-state steering; fix Sophie conversation loop
+
+Decision:
+
+- remove unconditional `assistant.response_mode=literal` assignment from `extractCurrentSessionStatePatch`
+- stop calling `extractCurrentSessionStatePatch` on every turn in `route.ts`
+- remove hardcoded `do_not_advance_scene`, `prefer_latest_literal_user_update`, `first_sentence_anchor_latest_literal_user_update` flags from `buildCurrentSessionTruthsBlock`
+- tighten `detectSceneActivity` to require affirmative present-tense phrases only
+- remove the entire literal-mode reply checker/repair layer from `runAssistantTurn.ts`
+- remove literal-mode steering from `runMastraTurn.ts`
+
+Why:
+
+- Sophie was looping on "How's your walk going?" every turn regardless of user input
+- root cause: `response_mode=literal` was being set unconditionally on every message, locking the model into scene-anchored mode 100% of turns
+- the literal-mode reply guard was then reinforcing that anchor — it was designed for rare edge cases but was running on every turn
+- `detectSceneActivity` matched bare `\bwalk\b` anywhere in any message, writing `user.current_focus=walk` even on unrelated turns
+- general principle: never inject model-steering instructions as structured state; steering belongs in the system prompt
+
+Impact:
+
+- Sophie responds naturally to each turn without topic lock
+- `CURRENT_SESSION_STATE` block now contains only authoritative user-stated facts, not hidden steering flags
+- ~190 lines of literal-mode machinery deleted from `runAssistantTurn.ts`
+- `extractCurrentSessionStatePatch` is no longer called on the hot path
+
+## 2026-04-09: TTS fire-and-forget blob upload; audioBase64 hot path; remove TTS caps
+
+Decision:
+
+- make Vercel Blob upload fire-and-forget (drop `await` from `put()`)
+- return `audioBase64` (inline base64 MP3) in every response; `audioUrl` is always `null`
+- remove `MAX_TTS_SENTENCES = 3` (sentence cap) and `MAX_TTS_CHARS = 420` (char cap)
+
+Why:
+
+- awaiting the blob upload was adding blob-write latency to every voice turn; it is not needed for playback
+- the mobile client can play audio from a data URI without a second HTTP fetch — base64 is strictly faster for live turns
+- blob URL is still uploaded asynchronously for message history replay
+- both TTS caps were silently truncating responses mid-sentence; user experience was audio cutting off abruptly
+- correct fix for over-long responses is prompt-level conciseness instructions, not TTS truncation
+
+Impact:
+
+- every voice turn is faster by one blob-upload round-trip
+- audio is never truncated; responses play fully
+- `audioUrl: null` on live turns — clients must use `audioBase64` for live playback and blob URL (from history) for replay
+
+## 2026-04-09: Disable filler clips; preserve infrastructure
+
+Decision:
+
+- add filler clip infrastructure (`FILLER_CLIPS`, `startFillerTimer`, `stopFillerAudio`) but do not call `startFillerTimer()` in `stopRecording`
+
+Why:
+
+- filler clips were firing on nearly every single turn: typical turn latency is 3.5–8 s, and even a 4 s threshold fires ~90%+ of the time
+- firing on every turn degrades experience — the filler sounds interrupting before a real response feels worse than silence
+- the correct trigger is a signal that a tool call is in progress (i.e. that latency is unavoidable), not a time threshold
+- that signal does not exist yet; the infrastructure is kept for when it is added
+
+Impact:
+
+- no filler audio played currently
+- zero extra latency or side effects on the hot path
+
+## 2026-04-09: Never keyword-gate any LLM behavior
+
+Decision:
+
+- all keyword detection removed from both code and prompts
+- memory tool instruction uses purely semantic constraint, no keyword examples
+
+Why:
+
+- keyword gating is brittle and language-blind in any form — code or prompt
+- adding keyword examples to a prompt is the same problem as keyword-gating in code: it creates implicit blacklists/whitelists that are always incomplete
+- the LLM's semantic understanding is the right decisioning layer for "when should I call this tool"
+- every keyword gate found in this codebase has caused at least one observable failure
+
+Impact:
+
+- LLM decides tool use based on intent, not string matching
+- this principle applies to future changes: no keyword matching for routing, gating, or classification anywhere
+
 ## 2026-04-09: Remove keyword-gated memory prefetch, restore LLM tool-use decisioning
 
 Decision:
