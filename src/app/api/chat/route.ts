@@ -5404,10 +5404,6 @@ export async function POST(request: NextRequest) {
           ? { skip: true as const, reason: "session_warmup" as const }
           : baseOverlayPolicy;
     const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
-    overlayUser.currentSessionState = mergeCurrentSessionState(
-      overlayUser.currentSessionState,
-      extractCurrentSessionStatePatch(sttResult.transcript)
-    );
     const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
     const hasDailyReviewToday = overlayUser.lastDailyReviewDate === dayKey;
     const hasWeeklyCompass = overlayUser.weeklyNorthStarWeekStartDate === weekStartKey;
