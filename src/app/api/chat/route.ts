@@ -6463,7 +6463,6 @@ export async function POST(request: NextRequest) {
     });
     timings.tts_ms = ttsResult.duration_ms;
     timings.tts_synthesis_ms = ttsResult.synthesis_ms;
-    timings.tts_upload_ms = ttsResult.upload_ms;
     timings.tts_text_chars = ttsResult.text_chars;
 
     // Step 5: Store message with timing metadata
