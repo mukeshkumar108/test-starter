@@ -87,8 +87,8 @@ Two paths run in parallel:
   - Retry runs non-blocking on next `ensureActiveSession` pass
   - Retry attempts are capped at 3 with `lastError` and `lastAttemptAt`
 - **Session sweeper cron** (`/api/admin/run-session-sweeper`)
-  - Runs every 5 minutes in production (Vercel cron).
-  - Closes sessions where `endedAt IS NULL` and inactivity exceeds configured threshold (default 10m).
+  - Often run every 15 minutes in production.
+  - Closes sessions where `endedAt IS NULL` and inactivity exceeds configured threshold (default 30m).
   - Sets `endedAt = lastActivityAt` and triggers session ingest.
   - Auth accepts either `x-admin-secret` or `x-vercel-cron: 1`.
 

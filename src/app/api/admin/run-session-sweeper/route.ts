@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { env } from "@/env";
+import { getActiveWindowMinutes } from "@/lib/services/session/sessionConfig";
 import { closeInactiveSessionsBatch } from "@/lib/services/session/sessionService";
 
 function parsePositiveInt(value: string | null, fallback: number) {
@@ -111,7 +112,10 @@ async function handleSweep(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const inactivityMinutes = parsePositiveInt(searchParams.get("inactivityMinutes"), 10);
+  const inactivityMinutes = parsePositiveInt(
+    searchParams.get("inactivityMinutes"),
+    getActiveWindowMinutes()
+  );
   const limit = parsePositiveInt(searchParams.get("limit"), 100);
   const dryRun = parseBoolean(searchParams.get("dryRun"));
 

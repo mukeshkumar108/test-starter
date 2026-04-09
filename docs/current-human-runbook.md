@@ -15,6 +15,30 @@ Use these first:
 
 Many older docs in this repo are historical and do not describe the current session-start model.
 
+## 2026-04-09 continuity update
+
+Current default continuity model:
+
+- a session now stays active for 30 minutes after the last user message unless explicitly closed
+- the stale-session sweeper should use the same 30-minute inactivity threshold
+- active-turn prompt assembly now includes a separate `CURRENT_SESSION_TRUTHS` block
+
+`CURRENT_SESSION_TRUTHS` is not the same as rolling summary.
+
+It is for:
+
+- current scene state
+- recent factual corrections
+- "today vs yesterday" distinctions
+- active-session facts that must override stale handover or earlier assistant guesses
+
+It is intentionally higher priority than:
+
+- handover
+- bridge
+- rolling summary
+- older assistant assumptions
+
 ## What changed recently
 
 The big changes are:
@@ -216,6 +240,37 @@ Also required for continuity:
 
 - `SYNAPSE_BASE_URL`
 - `SYNAPSE_TENANT_ID`
+
+Session lifecycle:
+
+- `SESSION_ACTIVE_WINDOW_MS`
+  - defaults to 30 minutes if unset
+  - keep this aligned with the sweeper inactivity threshold unless you have a very deliberate reason not to
+
+## QStash / session sweeper
+
+If you are using a scheduled hit to:
+
+- `/api/admin/run-session-sweeper`
+
+the important value is the inactivity threshold, not an aggressive cron frequency.
+
+Recommended current schedule:
+
+- URL:
+  - `/api/admin/run-session-sweeper?inactivityMinutes=30&limit=100`
+- frequency:
+  - every 15 minutes is reasonable
+
+Why:
+
+- the inactivity threshold defines when a session is eligible to close
+- running the sweeper every 5 minutes is not wrong, but it is unnecessary once the inactivity threshold is 30 minutes
+- every 15 minutes is a cleaner operational default and still closes stale sessions promptly
+
+Explicit close remains stronger than the inactivity window:
+
+- if the frontend calls `/api/session/close`, the session closes immediately
 
 ## Mastra web search
 

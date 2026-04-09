@@ -6,8 +6,11 @@
 import {
   __test__buildChatMessages,
   __test__buildCorrectionGuardBlock,
+  __test__buildCurrentSessionTruthsBlock,
   __test__extractCorrectionFactClaims,
+  __test__extractCurrentSessionTruthClaims,
   __test__mergeCorrectionFacts,
+  __test__mergeCurrentSessionTruths,
   __test__nextCorrectionOverlayCooldownTurns,
 } from "../chat/route";
 
@@ -76,13 +79,29 @@ async function main() {
     expect(block ?? "").toContain("Do not reintroduce corrected assumptions");
   });
 
-  await runTest("does not inject correction block into prompt stack", () => {
-    const correctionBlock = __test__buildCorrectionGuardBlock([
-      "If uncertain, ask one clarifying question before asserting context.",
-    ]);
+  await runTest("extracts current session truths from literal scene updates", () => {
+    const truths = __test__extractCurrentSessionTruthClaims(
+      "I'm finally outside. The pasta bake was yesterday. Today was chicken and broccoli."
+    );
+    expect(truths.join(" | ")).toContain("I'm finally outside.");
+    expect(truths.join(" | ")).toContain("The pasta bake was yesterday.");
+  });
+
+  await runTest("merges current session truths with dedupe + cap", () => {
+    const existing = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    const merged = __test__mergeCurrentSessionTruths(existing, ["H", "I", "A"]);
+    expect(merged.length).toBe(8);
+    expect(merged.join("|")).toContain("I");
+  });
+
+  await runTest("injects current session truths block into prompt stack", () => {
+    const currentSessionTruthsBlock = __test__buildCurrentSessionTruthsBlock({
+      truths: ["Today was chicken and broccoli.", "I'm finally outside."],
+      corrections: ["Do not reintroduce pasta bake as today's meal."],
+    });
     const messages = __test__buildChatMessages({
       persona: "PERSONA",
-      correctionBlock,
+      currentSessionTruthsBlock,
       overlayBlock: null,
       supplementalContext: null,
       recentMessages: [],
@@ -90,10 +109,11 @@ async function main() {
     });
 
     const contents = messages.map((message) => message.content);
-    const correctionIndex = contents.findIndex((value) =>
-      value.startsWith("[SESSION_FACT_CORRECTIONS]")
+    const truthIndex = contents.findIndex((value) =>
+      value.startsWith("[CURRENT_SESSION_TRUTHS]")
     );
-    expect(correctionIndex).toBe(-1);
+    expect(truthIndex).toBe(1);
+    expect(contents[truthIndex] ?? "").toContain("Today was chicken and broccoli.");
   });
 
   const failed = results.filter((result) => !result.passed);

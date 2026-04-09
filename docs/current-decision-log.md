@@ -2,6 +2,27 @@
 
 This log records the important recent architectural decisions and why they were made.
 
+## 2026-04-09: Extend default session window to 30 minutes and add `CURRENT_SESSION_TRUTHS`
+
+Decision:
+
+- change the default active session window from 5 minutes to 30 minutes
+- align the background sweeper default with that same 30-minute threshold
+- add a separate `CURRENT_SESSION_TRUTHS` prompt block for active-scene facts and user corrections
+
+Why:
+
+- a 5-minute inactivity window was fragmenting natural voice conversations into many tiny sessions
+- stale handover/startbrief facts were being reintroduced too often because sessions rolled over too aggressively
+- rolling summary is useful for background continuity but is too weak for current-scene truth, corrections, and "today vs yesterday" distinctions
+- correction facts were being persisted in overlay state but were not actually injected into the prompt
+
+Impact:
+
+- voice conversations can continue naturally across short cooking/walking gaps without forced session rollover
+- the sweeper now matches the same inactivity model by default
+- fresh user-provided truths and corrections now have a dedicated higher-priority prompt lane
+
 ## 2026-04-08: Store one `resume_packet`, derive `handshake_view`
 
 Decision:

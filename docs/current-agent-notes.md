@@ -15,6 +15,25 @@ Use these first:
 
 Treat many older architecture/runtime docs as historical unless they are explicitly marked current.
 
+## 2026-04-09 continuity update
+
+Important current state:
+
+- default active session window is now 30 minutes unless `SESSION_ACTIVE_WINDOW_MS` overrides it
+- the stale-session sweeper default is aligned to the same active-window value
+- prompt assembly now has a dedicated `CURRENT_SESSION_TRUTHS` block
+
+`CURRENT_SESSION_TRUTHS` is separate from rolling summary.
+
+Use it for:
+
+- literal current-scene facts from the active session
+- explicit user corrections
+- "today vs yesterday" distinctions
+- facts that should override stale handover or older assistant narrative
+
+Do not collapse it back into rolling summary unless you are explicitly redesigning the session-state model.
+
 ## Current architecture boundaries
 
 ### Live turn
@@ -124,6 +143,12 @@ Recent optimizations:
 - added active-session composite DB index
 
 Do not casually expand synchronous work here.
+
+Important current detail:
+
+- session-window config now lives in:
+  - [sessionConfig.ts](/Users/mukeshkumar/play/test-starter/src/lib/services/session/sessionConfig.ts)
+- do not reintroduce duplicate `getActiveWindowMs()` helpers elsewhere
 
 ## Session-close maintenance
 

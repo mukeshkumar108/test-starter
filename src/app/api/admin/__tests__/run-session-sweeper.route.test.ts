@@ -150,6 +150,33 @@ async function main() {
     expect(payload.result.closed).toBe(2);
   });
 
+  await runTest("uses 30 minute inactivity default when query param is omitted", async () => {
+    (env as any).ADMIN_SECRET = "secret-123";
+    delete process.env.SESSION_ACTIVE_WINDOW_MS;
+    let capturedInactivityMs: number | null = null;
+    (globalThis as any).__closeInactiveSessionsBatchOverride = async (params: {
+      inactivityMs?: number;
+      limit?: number;
+    }) => {
+      capturedInactivityMs = params.inactivityMs ?? null;
+      return {
+        cutoffIso: "2026-02-28T00:00:00.000Z",
+        scanned: 1,
+        closed: 1,
+        skippedRace: 0,
+        sessions: [],
+      };
+    };
+    const response = await GET(
+      makeRequest("https://example.test/api/admin/run-session-sweeper", {
+        "x-admin-secret": "secret-123",
+      })
+    );
+    delete (globalThis as any).__closeInactiveSessionsBatchOverride;
+    expect(response.status).toBe(200);
+    expect(capturedInactivityMs).toBe(30 * 60 * 1000);
+  });
+
   await runTest("accepts Upstash-Signature auth", async () => {
     (env as any).ADMIN_SECRET = "secret-123";
     (env as any).QSTASH_CURRENT_SIGNING_KEY = currentSigningKey;

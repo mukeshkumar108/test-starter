@@ -84,7 +84,7 @@ This keeps LLM context tight while Synapse handles long‑term memory.
 ## Key Decisions The Orchestrator Makes
 ### 1) When is a new session started?
 - If **no active session** exists
-- Or if **last user message > 5 minutes ago** (configurable)
+- Or if **last user message > 30 minutes ago** by default (configurable)
 
 ### 2) When do we fetch Synapse context?
 - On session start, call `/session/startbrief` and cache by session

@@ -746,14 +746,6 @@ function getLibrarianTimeoutMs() {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LIBRARIAN_TIMEOUT_MS;
   return parsed;
 }
-function getActiveWindowMs() {
-  const raw = env.SESSION_ACTIVE_WINDOW_MS;
-  if (!raw) return 5 * 60 * 1000;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 5 * 60 * 1000;
-  return parsed;
-}
-
 function getPostureResetGapMinutes() {
   const raw = env.POSTURE_RESET_GAP_MINUTES;
   if (!raw) return DEFAULT_POSTURE_RESET_GAP_MINUTES;
@@ -914,6 +906,7 @@ type OverlayUserState = {
   weeklyNorthStarWeekStartDate?: string | null;
   weeklyPriorities?: string[];
   sessionFactCorrections?: string[];
+  currentSessionTruths?: string[];
 };
 
 type OverlayState = {
@@ -1326,6 +1319,16 @@ async function readOverlayState(userId: string, personaId: string): Promise<Over
             ? ((raw.user as OverlayUserState).weeklyPriorities as unknown[])
                 .filter((entry): entry is string => typeof entry === "string")
                 .slice(0, 3)
+            : undefined,
+          sessionFactCorrections: Array.isArray((raw.user as OverlayUserState).sessionFactCorrections)
+            ? ((raw.user as OverlayUserState).sessionFactCorrections as unknown[])
+                .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+                .slice(-6)
+            : undefined,
+          currentSessionTruths: Array.isArray((raw.user as OverlayUserState).currentSessionTruths)
+            ? ((raw.user as OverlayUserState).currentSessionTruths as unknown[])
+                .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+                .slice(-8)
             : undefined,
         }
       : undefined,
@@ -3092,6 +3095,8 @@ function buildChatMessages(params: {
   styleGuardBlock?: string | null;
   crisisResponseTemplateBlock?: string | null;
   userContextBlock?: string | null;
+  currentSessionTruthsBlock?: string | null;
+  correctionBlock?: string | null;
   signalPackBlock?: string | null;
   stanceOverlayBlock?: string | null;
   tacticOverlayBlock?: string | null;
@@ -3130,6 +3135,14 @@ function buildChatMessages(params: {
       ? [{ role: "system" as const, content: params.crisisResponseTemplateBlock }]
       : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
+    ...((params.currentSessionTruthsBlock ?? params.correctionBlock)
+      ? [
+          {
+            role: "system" as const,
+            content: params.currentSessionTruthsBlock ?? params.correctionBlock!,
+          },
+        ]
+      : []),
     ...(params.signalPackBlock ? [{ role: "system" as const, content: params.signalPackBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
     ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
@@ -3724,6 +3737,56 @@ function mergeCorrectionFacts(existing: string[] | undefined, next: string[]) {
   return Array.from(new Set(merged)).slice(-6);
 }
 
+function normalizeCurrentSessionTruthLine(line: string) {
+  const normalized = normalizeWhitespace(line).replace(/^[-*]\s*/, "").trim();
+  if (!normalized) return null;
+  if (normalized.length <= 180) return normalized;
+  return `${normalized.slice(0, 177).trimEnd()}...`;
+}
+
+function extractCurrentSessionTruthClaims(text: string) {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) return [];
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((sentence) => normalizeCurrentSessionTruthLine(sentence))
+    .filter((sentence): sentence is string => Boolean(sentence));
+
+  const truthySentences: string[] = [];
+  for (const sentence of sentences) {
+    const lowered = sentence.toLowerCase();
+    const hasTemporalMarker =
+      /\b(today|yesterday|tonight|this morning|this afternoon|this evening|right now|currently|still|just|finally)\b/.test(
+        lowered
+      );
+    const hasPresentSceneLead =
+      /^(i'm|i am|im|i've|i have|we're|we are|we've|we have)\b/.test(lowered);
+    const hasSceneState =
+      /\b(outside|inside|walking|walk|dinner|lunch|breakfast|sunset|washing|air fryer|chicken|broccoli|cabbage)\b/.test(
+        lowered
+      );
+    const hasLiteralOverride =
+      lowered.includes("was yesterday") ||
+      lowered.includes("is today") ||
+      lowered.includes("was today") ||
+      lowered.includes("hasn't set") ||
+      lowered.includes("hasnt set");
+
+    if (hasTemporalMarker || hasPresentSceneLead || hasSceneState || hasLiteralOverride) {
+      truthySentences.push(sentence);
+    }
+  }
+
+  return Array.from(new Set(truthySentences)).slice(-6);
+}
+
+function mergeCurrentSessionTruths(existing: string[] | undefined, next: string[]) {
+  const merged = [...(existing ?? []), ...next]
+    .map((line) => normalizeCurrentSessionTruthLine(line))
+    .filter((line): line is string => Boolean(line));
+  return Array.from(new Set(merged)).slice(-8);
+}
+
 function nextCorrectionOverlayCooldownTurns(current: number, correctionSignal: boolean) {
   if (correctionSignal) return Math.max(current, 2);
   if (current > 0) return current - 1;
@@ -3769,6 +3832,34 @@ function buildCorrectionGuardBlock(corrections: string[] | undefined) {
 Apply these corrections for this session:
 ${lines}
 Do not reintroduce corrected assumptions unless user explicitly confirms them again.`;
+}
+
+function buildCurrentSessionTruthsBlock(params: {
+  truths?: string[];
+  corrections?: string[];
+}) {
+  const truths = (params.truths ?? []).filter(Boolean).slice(-6);
+  const corrections = (params.corrections ?? []).filter(Boolean).slice(-4);
+  if (truths.length === 0 && corrections.length === 0) return null;
+  const lines: string[] = [
+    "[CURRENT_SESSION_TRUTHS]",
+    "Treat these as the authoritative live facts for this active session.",
+    "Prefer these over older handover, bridge, rolling summary, or prior assistant assumptions.",
+    "Prefer literal present-tense user updates. Do not advance the scene beyond what the user has said.",
+  ];
+  if (truths.length > 0) {
+    lines.push("Current facts:");
+    for (const truth of truths) {
+      lines.push(`- ${truth}`);
+    }
+  }
+  if (corrections.length > 0) {
+    lines.push("Corrections:");
+    for (const correction of corrections) {
+      lines.push(`- ${correction}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 async function clearStartBriefForSession(userId: string, personaId: string, sessionId: string) {
@@ -4997,7 +5088,7 @@ export async function POST(request: NextRequest) {
     let lastProbingTacticFired = overlayState.lastProbingTacticFired ?? false;
     const synapseSessionIngestOk = overlayState.synapseSessionIngestOk ?? null;
     const synapseSessionIngestError = overlayState.synapseSessionIngestError ?? null;
-    const overlayUser = overlayState.user ?? {};
+    const overlayUser: OverlayUserState = { ...(overlayState.user ?? {}) };
     // Trajectory rituals are day/week scoped to the user's configured local zone.
     const timeZone = "Europe/Zagreb";
     const zoned = getZonedParts(now, timeZone);
@@ -5031,6 +5122,8 @@ export async function POST(request: NextRequest) {
       cooldownTurnsRemaining = 0;
       cooldownLastReason = null;
       lastProbingTacticFired = false;
+      overlayUser.sessionFactCorrections = [];
+      overlayUser.currentSessionTruths = [];
     }
     if (context.isSessionStart && startbriefV2UserTurnsSeen === 0) {
       startbriefV2FirstUserLowSignal = isLowSignalFirstUserMessage(sttResult.transcript);
@@ -5231,6 +5324,10 @@ export async function POST(request: NextRequest) {
           ? { skip: true as const, reason: "session_warmup" as const }
           : baseOverlayPolicy;
     const overlaySkipReason = overlayPolicy.skip ? overlayPolicy.reason : null;
+    overlayUser.currentSessionTruths = mergeCurrentSessionTruths(
+      overlayUser.currentSessionTruths,
+      extractCurrentSessionTruthClaims(sttResult.transcript)
+    );
     const hasTodayFocus = overlayUser.todayFocusDate === dayKey;
     const hasDailyReviewToday = overlayUser.lastDailyReviewDate === dayKey;
     const hasWeeklyCompass = overlayUser.weeklyNorthStarWeekStartDate === weekStartKey;
@@ -5897,6 +5994,10 @@ export async function POST(request: NextRequest) {
     let turnResult:
       | Awaited<ReturnType<typeof runAssistantTurn>>
       | undefined;
+    const currentSessionTruthsBlock = buildCurrentSessionTruthsBlock({
+      truths: overlayUser.currentSessionTruths,
+      corrections: overlayUser.sessionFactCorrections,
+    });
 
     if (chatOrchestratorV2Enabled) {
       turnResult = await runAssistantTurn({
@@ -5914,6 +6015,7 @@ export async function POST(request: NextRequest) {
           endearmentCooldownTurns,
           cooldownActive: cooldownTurnsRemaining > 0,
           userContextLines,
+          currentSessionTruthsBlock,
           signalPackSourceBlock: context.signalPackBlock ?? null,
           stanceOverlayBlock,
           tacticOverlayBlock,
@@ -6046,6 +6148,7 @@ export async function POST(request: NextRequest) {
         styleGuardBlock,
         crisisResponseTemplateBlock,
         userContextBlock: governedContext.userContextBlock,
+        currentSessionTruthsBlock,
         signalPackBlock: governedContext.signalPackBlock,
         stanceOverlayBlock,
         tacticOverlayBlock,
@@ -6116,6 +6219,7 @@ export async function POST(request: NextRequest) {
         "persona",
         ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
         ...(governedContext.userContextBlock ? ["user_context"] : []),
+        ...(currentSessionTruthsBlock ? ["current_session_truths"] : []),
         ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
         ...(stanceOverlayBlock ? ["stance_overlay"] : []),
         ...(tacticOverlayBlock ? ["overlay"] : []),
@@ -6544,11 +6648,14 @@ export const __test__buildMomentumGuardBlock = buildMomentumGuardBlock;
 export const __test__extractTodayFocus = extractTodayFocus;
 export const __test__normalizeMemoryQueryResponse = normalizeMemoryQueryResponse;
 export const __test__extractCorrectionFactClaims = extractCorrectionFactClaims;
+export const __test__extractCurrentSessionTruthClaims = extractCurrentSessionTruthClaims;
 export const __test__mergeCorrectionFacts = mergeCorrectionFacts;
+export const __test__mergeCurrentSessionTruths = mergeCurrentSessionTruths;
 export const __test__nextCorrectionOverlayCooldownTurns = nextCorrectionOverlayCooldownTurns;
 export const __test__shouldForceSessionWarmupOverlaySkip = shouldForceSessionWarmupOverlaySkip;
 export const __test__shouldHoldOverlayUntilRunway = shouldHoldOverlayUntilRunway;
 export const __test__buildCorrectionGuardBlock = buildCorrectionGuardBlock;
+export const __test__buildCurrentSessionTruthsBlock = buildCurrentSessionTruthsBlock;
 export const __test__buildSessionStartSituationalContext = buildSessionStartSituationalContext;
 export const __test__buildDeferredProfileContextLines = buildDeferredProfileContextLines;
 export const __test__extractLocalTurnSignalLine = extractLocalTurnSignalLine;

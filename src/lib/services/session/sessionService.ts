@@ -5,8 +5,8 @@ import * as synapseClient from "@/lib/services/synapseClient";
 import { requestResumePacketRefresh } from "@/lib/services/session/resumePacket";
 import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
 import { recordTimingProbe } from "@/lib/debug/timingProbe";
+import { getActiveWindowMs } from "@/lib/services/session/sessionConfig";
 
-const DEFAULT_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
 const ROLLING_SUMMARY_TURN_INTERVAL = 4;
 const ROLLING_SUMMARY_RECENT_MESSAGES = 8;
 const ROLLING_SUMMARY_SESSION_KEY = "rollingSummarySessionId";
@@ -16,14 +16,6 @@ const SYNAPSE_SESSION_RETRY_BACKOFF_MS = 60_000;
 
 function isRollingSummaryEnabled() {
   return env.FEATURE_ROLLING_SUMMARY !== "false";
-}
-
-function getActiveWindowMs() {
-  const raw = env.SESSION_ACTIVE_WINDOW_MS;
-  if (!raw) return DEFAULT_ACTIVE_WINDOW_MS;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_ACTIVE_WINDOW_MS;
-  return parsed;
 }
 
 function isSummaryEnabled() {
@@ -757,7 +749,6 @@ type CloseInactiveSessionsBatchResult = {
   }>;
 };
 
-const DEFAULT_INACTIVE_CLOSE_MS = 10 * 60 * 1000;
 const DEFAULT_INACTIVE_CLOSE_LIMIT = 100;
 const MAX_INACTIVE_CLOSE_LIMIT = 500;
 
@@ -770,7 +761,7 @@ export async function closeInactiveSessionsBatch(
     Number.isFinite(params.inactivityMs) &&
     params.inactivityMs > 0
       ? params.inactivityMs
-      : DEFAULT_INACTIVE_CLOSE_MS;
+      : getActiveWindowMs();
   const requestedLimit =
     typeof params.limit === "number" &&
     Number.isFinite(params.limit) &&

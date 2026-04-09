@@ -3,6 +3,7 @@
 ## Working Memory (Local)
 - Last 8 turns in the active session (session-scoped)
 - Optional rolling session summary (older turns only)
+- `CURRENT_SESSION_TRUTHS` for active-scene facts and explicit corrections
 - `SessionState.rollingSummary` is used only when `SessionState.state.rollingSummarySessionId`
   matches the active `sessionId`
 - New session start clears summary and stamps a new `rollingSummarySessionId`
@@ -14,8 +15,17 @@
   `dailyAnalysisSessionId` + `dailyAnalysisData`
 
 ## Session Model
-- A session is open until **5 minutes after the last user message** (configurable)
+- A session is open until **30 minutes after the last user message** by default (configurable)
 - On close, the full transcript is sent to Synapse `/session/ingest`
+
+## `CURRENT_SESSION_TRUTHS`
+- Separate from rolling summary
+- Higher priority than handover, bridge, and stale assistant assumptions
+- Intended for:
+  - present-tense session facts
+  - explicit user corrections
+  - "today vs yesterday" distinctions
+  - small live-scene truths like current activity or location
 
 ## Long‑Term Memory (Synapse / Graphiti)
 - Synapse stores complete sessions and builds narrative memory

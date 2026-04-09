@@ -61,6 +61,7 @@ export type AssistantTurnPromptPayload = {
   endearmentCooldownTurns: number;
   cooldownActive: boolean;
   userContextLines?: string[];
+  currentSessionTruthsBlock?: string | null;
   signalPackSourceBlock?: string | null;
   stanceOverlayBlock?: string | null;
   tacticOverlayBlock?: string | null;
@@ -160,6 +161,7 @@ function buildChatMessages(params: {
   styleGuardBlock?: string | null;
   crisisResponseTemplateBlock?: string | null;
   userContextBlock?: string | null;
+  currentSessionTruthsBlock?: string | null;
   signalPackBlock?: string | null;
   stanceOverlayBlock?: string | null;
   tacticOverlayBlock?: string | null;
@@ -195,6 +197,9 @@ function buildChatMessages(params: {
       ? [{ role: "system" as const, content: params.crisisResponseTemplateBlock }]
       : []),
     ...(params.userContextBlock ? [{ role: "system" as const, content: params.userContextBlock }] : []),
+    ...(params.currentSessionTruthsBlock
+      ? [{ role: "system" as const, content: params.currentSessionTruthsBlock }]
+      : []),
     ...(params.signalPackBlock ? [{ role: "system" as const, content: params.signalPackBlock }] : []),
     ...(params.stanceOverlayBlock ? [{ role: "system" as const, content: params.stanceOverlayBlock }] : []),
     ...(params.tacticOverlayBlock ? [{ role: "system" as const, content: params.tacticOverlayBlock }] : []),
@@ -666,6 +671,7 @@ async function runCustomAssistantTurn(params: {
     "persona",
     ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
     ...(governedContext.userContextBlock ? ["user_context"] : []),
+    ...(params.prompt.currentSessionTruthsBlock ? ["current_session_truths"] : []),
     ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
     ...(params.prompt.stanceOverlayBlock ? ["stance_overlay"] : []),
     ...(params.prompt.tacticOverlayBlock ? ["overlay"] : []),
@@ -862,6 +868,7 @@ export async function runAssistantTurn(params: {
     "persona",
     ...(crisisResponseTemplateBlock ? ["crisis_response_template"] : []),
     ...(governedContext.userContextBlock ? ["user_context"] : []),
+    ...(params.prompt.currentSessionTruthsBlock ? ["current_session_truths"] : []),
     ...(governedContext.signalPackBlock ? ["signal_pack"] : []),
     ...(params.prompt.stanceOverlayBlock ? ["stance_overlay"] : []),
     ...(params.prompt.tacticOverlayBlock ? ["overlay"] : []),
