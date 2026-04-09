@@ -22,8 +22,6 @@ type VoiceSettings = {
 };
 
 const DEFAULT_TTS_MODEL = "eleven_turbo_v2_5";
-const MAX_TTS_CHARS = 420;
-
 function stripUrls(text: string) {
   return text.replace(/https?:\/\/\S+/gi, "");
 }
@@ -56,12 +54,11 @@ function capVoiceText(text: string, maxChars: number) {
 function sanitizeForVoice(text: string): string {
   const withoutReadouts = stripReadoutSections(text);
   const withoutUrls = stripUrls(withoutReadouts);
-  const normalized = withoutUrls
+  return withoutUrls
     .replace(/[*_`#\[\]]/g, "")
     .replace(/^[\-\u2022]\s+/gm, "")
     .replace(/\s{2,}/g, " ")
     .trim();
-  return capVoiceText(normalized, MAX_TTS_CHARS);
 }
 
 function isNightVoiceWindow(localHour?: number) {
