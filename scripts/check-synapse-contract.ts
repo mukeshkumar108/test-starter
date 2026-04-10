@@ -75,7 +75,9 @@ async function main() {
       userId,
       query: "what should we follow up on next",
       limit: 10,
+      memoryIntent: "hybrid",
       referenceTime: now,
+      includeContext: false,
     }),
   });
 
@@ -86,14 +88,25 @@ async function main() {
   const memoryData = (await memoryRes.json()) as Record<string, unknown>;
 
   assert(Array.isArray(memoryData.facts), "memory/query facts must be array");
-  assert(Array.isArray(memoryData.openLoops), "memory/query openLoops must be array");
-  assert(Array.isArray(memoryData.commitments), "memory/query commitments must be array");
-  assert("contextAnchors" in memoryData, "memory/query missing contextAnchors");
-  assert("currentFocus" in memoryData, "memory/query missing currentFocus");
   assert(Array.isArray(memoryData.factItems), "memory/query factItems must be array");
   assert(Array.isArray(memoryData.entities), "memory/query entities must be array");
-  assert("supplementalContext" in memoryData, "memory/query missing supplementalContext");
+  assert(Array.isArray(memoryData.episodes), "memory/query episodes must be array");
   assert("metadata" in memoryData, "memory/query missing metadata");
+
+  const metadata = (memoryData.metadata ?? {}) as Record<string, unknown>;
+  assert(
+    metadata.memoryIntent === "exact" ||
+      metadata.memoryIntent === "episodic" ||
+      metadata.memoryIntent === "hybrid" ||
+      metadata.memoryIntent === undefined,
+    "memory/query metadata.memoryIntent must be exact|episodic|hybrid when present"
+  );
+  assert(
+    metadata.responseMode === "recall" ||
+      metadata.responseMode === "context" ||
+      metadata.responseMode === undefined,
+    "memory/query metadata.responseMode must be recall|context when present"
+  );
 
   console.log(
     JSON.stringify(
@@ -106,9 +119,13 @@ async function main() {
         },
         memoryQuery: {
           facts: (memoryData.facts as unknown[]).length,
+          factItems: (memoryData.factItems as unknown[]).length,
           entities: (memoryData.entities as unknown[]).length,
-          hasSupplementalContext:
-            typeof memoryData.supplementalContext === "string" && memoryData.supplementalContext.length > 0,
+          episodes: (memoryData.episodes as unknown[]).length,
+          memoryIntent: metadata.memoryIntent ?? null,
+          responseMode: metadata.responseMode ?? null,
+          episodicWeakRecall:
+            typeof metadata.episodicWeakRecall === "boolean" ? metadata.episodicWeakRecall : null,
         },
       },
       null,
