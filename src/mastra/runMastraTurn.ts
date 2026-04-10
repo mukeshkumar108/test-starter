@@ -1,5 +1,6 @@
 import type { AISDKMessage } from "@/lib/llm/aiSdkCompletion";
 import { createMastraRuntime } from "@/mastra";
+import { runMemoryLookup } from "@/mastra/tools/memory";
 import { env } from "@/env";
 import type { MessageInput } from "@mastra/core/agent/message-list";
 
@@ -34,6 +35,20 @@ function extractLastUserMessage(messages: AISDKMessage[]) {
   return "";
 }
 
+function looksLikeRecallQuestion(message: string) {
+  const lowered = message.toLowerCase();
+  const signals = [
+    "remember",
+    "who is",
+    "what do you remember",
+    "what was i saying",
+    "what did we decide",
+    "continue that thread",
+    "from before",
+  ];
+  return signals.some((signal) => lowered.includes(signal));
+}
+
 export async function runMastraTurn(params: {
   userId: string;
   requestId: string;
@@ -44,6 +59,44 @@ export async function runMastraTurn(params: {
 }) {
   const startedAt = Date.now();
   const orchestrationModel = env.MASTRA_ORCHESTRATION_MODEL?.trim() || params.chosenModel;
+  const lastUserMessage = extractLastUserMessage(params.messages);
+
+  let memoryPrefetchMs: number | undefined;
+  let prefetchMs: number | undefined;
+  let prefetchSupplementalContext: string | null = null;
+  const shouldPrefetchMemory = looksLikeRecallQuestion(lastUserMessage);
+  if (shouldPrefetchMemory) {
+    const memoryPrefetchStartedAt = Date.now();
+    const prefetch = await runMemoryLookup({
+      userId: params.userId,
+      requestId: params.requestId,
+      now: params.now,
+      query: lastUserMessage || "recent user context",
+    }).catch(() => null);
+    memoryPrefetchMs = Math.max(0, Date.now() - memoryPrefetchStartedAt);
+    prefetchMs = memoryPrefetchMs;
+    if (prefetch?.used && prefetch.supplementalContext) {
+      prefetchSupplementalContext = prefetch.supplementalContext;
+      console.log(
+        "[mastra.memory.prefetch.used]",
+        JSON.stringify({
+          requestId: params.requestId,
+          query: prefetch.query,
+          chosenModel: orchestrationModel,
+        })
+      );
+    } else {
+      console.log(
+        "[mastra.memory.prefetch.skipped]",
+        JSON.stringify({
+          requestId: params.requestId,
+          query: lastUserMessage || null,
+          reason: prefetch?.reason ?? "no_results",
+          chosenModel: orchestrationModel,
+        })
+      );
+    }
+  }
 
   const { assistant } = createMastraRuntime({
     userId: params.userId,
@@ -55,10 +108,21 @@ This is a real-time push-to-talk voice turn. Do not expose tool-call markup, XML
 
 If a tool returns results, use them naturally without exposing tool names, internal structure, or raw data.`.trim(),
     model: orchestrationModel,
+    fallbackMemoryQuery: lastUserMessage,
   });
 
+  const messagesWithPrefetch = prefetchSupplementalContext
+    ? ([
+        {
+          role: "system",
+          content: `[PREFETCHED_MEMORY_CONTEXT]\n${prefetchSupplementalContext}`,
+        },
+        ...params.messages,
+      ] as AISDKMessage[])
+    : params.messages;
+
   const generationStartedAt = Date.now();
-  const result = await assistant.generate(params.messages as unknown as MessageInput[], {
+  const result = await assistant.generate(messagesWithPrefetch as unknown as MessageInput[], {
     maxSteps: 3,
     toolChoice: "auto",
     model: {
@@ -111,7 +175,7 @@ If a tool returns results, use them naturally without exposing tool names, inter
       "[mastra.memory.tool.skipped]",
       JSON.stringify({
         requestId: params.requestId,
-        user_message: extractLastUserMessage(params.messages),
+        user_message: lastUserMessage,
         chosenModel: orchestrationModel,
       })
     );
@@ -125,8 +189,8 @@ If a tool returns results, use them naturally without exposing tool names, inter
     llm_ms: finalGenerationMs,
     timings: {
       mastra_total_ms: totalMs,
-      prefetch_ms: undefined,
-      memory_prefetch_ms: undefined,
+      prefetch_ms: prefetchMs,
+      memory_prefetch_ms: memoryPrefetchMs,
       web_prefetch_ms: undefined,
       final_generation_ms: finalGenerationMs,
     },

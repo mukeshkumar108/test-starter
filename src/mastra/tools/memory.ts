@@ -339,6 +339,17 @@ export function buildFocusQuery(params: { query: string; memoryIntent: MemoryInt
   return normalized.length > 100 ? normalized.slice(0, 100).trim() : normalized;
 }
 
+export function normalizeMemoryToolQuery(params: {
+  query: string | null | undefined;
+  fallbackQuery: string | null | undefined;
+}) {
+  const primary = typeof params.query === "string" ? params.query.trim() : "";
+  if (primary) return primary.slice(0, 120);
+  const fallback = typeof params.fallbackQuery === "string" ? params.fallbackQuery.trim() : "";
+  if (fallback) return fallback.slice(0, 120);
+  return "recent user context";
+}
+
 export function shouldFetchMemoryLoops(params: { query: string; memoryIntent: MemoryIntent }) {
   const lowered = params.query.toLowerCase();
   const loopSignals = [
@@ -601,13 +612,19 @@ export function createMemoryTool(params: {
   userId: string;
   requestId: string;
   now: Date;
+  fallbackQuery?: string | null;
 }) {
   return createTool({
     id: "get-memory-context",
     description:
       "Retrieves relevant past user information and conversation history. Use this tool when answering questions about people, relationships, past events, what the user said previously, or when you need to verify user-specific facts so the answer stays accurate and up to date.",
     inputSchema: z.object({
-      query: z.string().min(1).max(120).describe("A short semantic memory retrieval query."),
+      query: z
+        .string()
+        .min(1)
+        .max(120)
+        .optional()
+        .describe("A short semantic memory retrieval query."),
       memoryIntent: z
         .enum(["exact", "episodic", "hybrid"])
         .optional()
@@ -631,7 +648,10 @@ export function createMemoryTool(params: {
         userId: params.userId,
         requestId: params.requestId,
         now: params.now,
-        query,
+        query: normalizeMemoryToolQuery({
+          query,
+          fallbackQuery: params.fallbackQuery,
+        }),
         memoryIntent: memoryIntent ?? null,
       }),
   });

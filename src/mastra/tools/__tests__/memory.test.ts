@@ -62,6 +62,7 @@ async function main() {
     runMemoryLookup,
     shouldSoftenMemoryClaims,
     shouldFetchMemoryLoops,
+    normalizeMemoryToolQuery,
   } = await import("../memory");
 
   await runTest("user model extraction surfaces exact profile sentence", () => {
@@ -220,6 +221,14 @@ async function main() {
     } finally {
       global.fetch = originalFetch;
     }
+  });
+
+  await runTest("normalizeMemoryToolQuery falls back when query is missing", () => {
+    const query = normalizeMemoryToolQuery({
+      query: undefined,
+      fallbackQuery: "do you remember who Ashley is?",
+    });
+    expect(query).toBe("do you remember who Ashley is?");
   });
 
   await runTest("shouldSoftenMemoryClaims softens episodic weak recall", () => {

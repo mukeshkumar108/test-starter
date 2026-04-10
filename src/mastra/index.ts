@@ -10,11 +10,13 @@ export function createMastraRuntime(params: {
   now: Date;
   instructions: string;
   model: string;
+  fallbackMemoryQuery?: string | null;
 }) {
   const memoryTool = createMemoryTool({
     userId: params.userId,
     requestId: params.requestId,
     now: params.now,
+    fallbackQuery: params.fallbackMemoryQuery ?? null,
   });
   const webSearchTool = createWebSearchTool({
     requestId: params.requestId,
