@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-22
+
+### vNext harness checkpoint
+
+- Added side-by-side vNext runtime skeleton under `src/lib/runtime/vnext`.
+- Added canonical contracts for turn events, decisions, retrieval plans/outputs, turn packets, execution results, postprocess results, writeback results, and prompt previews.
+- Added disabled route-side preparation bridge behind `FEATURE_CHAT_VNEXT_PREPARE_EVENT=false`; live `/api/chat` still does not call `handleUserTurn`.
+- Added local-only replay/parity tooling: `scripts/vnext-turn-replay.ts` and `scripts/vnext-section-compare.ts`.
+- Added fixture-backed `recent_turns` parity bridge.
+- Added checkpoint doc: `docs/runtime/VNEXT_MIGRATION_CHECKPOINT_2026-04-22.md`.
+- Verified on 2026-04-22: `pnpm build` passed and `pnpm test` passed all selected tests.
+
+### Harness refactor planning initiated
+
+- Added runtime audit: `docs/runtime/RUNTIME_AUDIT_2026-04-22.md`.
+- Added vNext harness architecture spec: `docs/runtime/HARNESS_VNEXT_ARCHITECTURE_2026-04-22.md`.
+- Added migration roadmap: `docs/runtime/HARNESS_MIGRATION_ROADMAP_2026-04-22.md`.
+- Direction set: preserve current capabilities, introduce a single explicit turn-control plane, migrate side-by-side without big-bang rewrite.
+
 ## 2026-04-09 (3)
 
 ### TTS pipeline

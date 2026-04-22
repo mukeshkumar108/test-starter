@@ -113,6 +113,34 @@ async function main() {
     expect(byName[0] ?? "").toContain("Ashley");
   });
 
+  await runTest("preferred name injects only for explicit identity questions", () => {
+    const baseProfile = {
+      preferredName: "Mukesh",
+      preferredNameLine: "User's preferred name is Mukesh.",
+    };
+    const none = __test__buildDeferredProfileContextLines({
+      isSessionStart: false,
+      profile: baseProfile,
+      posture: "COMPANION",
+      intent: "companion",
+      isDirectRequest: false,
+      transcript: "how's it going",
+      avoidanceOrDrift: false,
+    });
+    expect(none.length).toBe(0);
+
+    const byIdentity = __test__buildDeferredProfileContextLines({
+      isSessionStart: false,
+      profile: baseProfile,
+      posture: "COMPANION",
+      intent: "companion",
+      isDirectRequest: false,
+      transcript: "Do you know my name?",
+      avoidanceOrDrift: false,
+    });
+    expect(byIdentity[0] ?? "").toContain("Mukesh");
+  });
+
   await runTest("patterns and work context follow explicit triggers", () => {
     const lines = __test__buildDeferredProfileContextLines({
       isSessionStart: false,

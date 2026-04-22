@@ -60,6 +60,7 @@ export type ResumePacket = {
     last_seen_at: string | null;
   }>;
   profile_snapshot: {
+    preferred_name: string | null;
     relationships_line: string | null;
     pattern_line: string | null;
     work_context_line: string | null;
@@ -139,6 +140,10 @@ function normalizeUserModelLines(userModel: SynapseUserModelResponse | null) {
   }
 
   const model = userModel.model as Record<string, unknown>;
+  const preferredName =
+    cleanString(model.preferred_name) ??
+    cleanString((model.preferred_name as Record<string, unknown> | null)?.text) ??
+    cleanString((model.preferred_name as Record<string, unknown> | null)?.name);
   const relationships = Array.isArray(model.key_relationships)
     ? (model.key_relationships as Array<Record<string, unknown>>)
         .map((entry) => cleanString(entry?.name))
@@ -198,6 +203,7 @@ function normalizeUserModelLines(userModel: SynapseUserModelResponse | null) {
     : null;
 
   return {
+    preferred_name: preferredName,
     relationships_line:
       relationships.length > 0 ? `Known relationships: ${relationships.slice(0, 3).join(", ")}.` : null,
     pattern_line: patterns[0] ? `Pattern: ${patterns[0]}.` : null,

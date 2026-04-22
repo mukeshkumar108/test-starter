@@ -51,6 +51,7 @@ const envSchema = z.object({
   FEATURE_LIBRARIAN_TRACE: z.string().optional(),
   FEATURE_CHAT_ORCHESTRATOR_V2: z.string().optional(),
   FEATURE_CHAT_ORCHESTRATOR_V2_PARITY: z.string().optional(),
+  FEATURE_CHAT_VNEXT_PREPARE_EVENT: z.string().optional(),
   FEATURE_MASTRA_ENABLED: z.string().optional(),
   FEATURE_BOUNCER_AUTHORITY_REMAP_V1: z.string().optional(),
   FEATURE_BOUNCER_AUTHORITY_SHADOW_LOG: z.string().optional(),

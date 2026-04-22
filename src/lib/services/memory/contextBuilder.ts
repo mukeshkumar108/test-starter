@@ -35,6 +35,8 @@ export type SessionStartHandoff = {
 };
 
 export type DeferredProfileContext = {
+  preferredName?: string;
+  preferredNameLine?: string;
   relationshipNames?: string[];
   relationshipsLine?: string;
   patternLine?: string;
@@ -601,7 +603,10 @@ function getOverlayContextFromStartBrief(
 function buildDeferredProfileContextFromResumePacket(packet: ResumePacket): DeferredProfileContext | undefined {
   const snapshot = packet.profile_snapshot;
   if (!snapshot) return undefined;
+  const preferredName = snapshot.preferred_name ?? undefined;
   return {
+    preferredName,
+    preferredNameLine: preferredName ? `User's preferred name is ${preferredName}.` : undefined,
     relationshipNames: packet.entity_profiles.map((profile) => profile.name).slice(0, 6),
     relationshipsLine: snapshot.relationships_line ?? undefined,
     patternLine: snapshot.pattern_line ?? undefined,
@@ -1227,6 +1232,14 @@ function toDeferredProfileContext(userModel: SynapseUserModelResponse | null): D
   const score = userModel.completenessScore ?? {};
   const model = userModel.model;
   const output: DeferredProfileContext = {};
+  const preferredName =
+    (typeof model.preferred_name === "string" && model.preferred_name.trim()
+      ? model.preferred_name.trim()
+      : extractText(model.preferred_name)) ?? null;
+  if (preferredName) {
+    output.preferredName = preferredName;
+    output.preferredNameLine = `User's preferred name is ${preferredName}.`;
+  }
 
   if (toScoreValue(score, "north_star") >= 40) {
     const northStarRaw = chooseNorthStarLine({
@@ -1549,9 +1562,12 @@ export async function buildContextFromSynapse(
       ? await handshakeMetaPromise
       : { userName: null, sessionsToday: null, firstSessionToday: null };
     if (cachedResumePacket) {
+      const cachedResumeProfile = buildDeferredProfileContextFromResumePacket(cachedResumePacket);
+      const preferredName =
+        deferredProfileContext.preferredName ?? cachedResumeProfile?.preferredName ?? null;
       const handshakeView = deriveHandshakeView({
         resumePacket: cachedResumePacket,
-        userName: handshakeMeta.userName,
+        userName: handshakeMeta.userName ?? preferredName,
         sessionsToday: handshakeMeta.sessionsToday,
         firstSessionToday: handshakeMeta.firstSessionToday,
         now: new Date(),
@@ -1622,7 +1638,7 @@ export async function buildContextFromSynapse(
           situationalContext: undefined,
           signalPackBlock: undefined,
           sessionStartHandoff: undefined,
-          deferredProfileContext: buildDeferredProfileContextFromResumePacket(cachedResumePacket),
+          deferredProfileContext: cachedResumeProfile,
           startbriefPacket,
           startbriefFetch: "hit",
           rollingSummary,
@@ -1658,7 +1674,7 @@ export async function buildContextFromSynapse(
       });
       const handshakeView = deriveHandshakeView({
         resumePacket: null,
-        userName: handshakeMeta.userName,
+        userName: handshakeMeta.userName ?? deferredProfileContext.preferredName ?? null,
         sessionsToday: handshakeMeta.sessionsToday,
         firstSessionToday: handshakeMeta.firstSessionToday,
         now: new Date(),

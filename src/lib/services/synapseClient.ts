@@ -123,6 +123,12 @@ export type SynapseUserModelResponse = {
     preferences?: Record<string, unknown> | null;
     daily_anchors?: unknown;
     recent_signals?: unknown[];
+    preferred_name?: unknown;
+    narrative_current?: unknown;
+    narrative_stable?: unknown;
+    age?: unknown;
+    sex?: unknown;
+    location?: unknown;
     health?: unknown;
     spirituality?: unknown;
   } | null;

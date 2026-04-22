@@ -49,6 +49,9 @@ import { clearResumePacketInState } from "@/lib/services/session/resumePacket";
 import * as synapseClient from "@/lib/services/synapseClient";
 import type { SynapseStartBriefResponse } from "@/lib/services/synapseClient";
 import { SYNAPSE_CANONICAL_TENANT_ID } from "@/lib/services/synapseTenant";
+import { buildTurnEventFromChatRouteInput } from "@/lib/runtime/vnext/buildTurnEventFromChatRouteInput";
+import { mapLegacyDecisionSignalsFromChatRoute } from "@/lib/runtime/vnext/mapLegacyDecisionSignalsFromChatRoute";
+import { mapLegacySessionToSessionContext } from "@/lib/runtime/vnext/sessionMapping";
 
 export const runtime = "nodejs";
 
@@ -4045,6 +4048,14 @@ function isStyleRequest(transcript: string) {
   );
 }
 
+function isIdentityRequest(transcript: string) {
+  const lowered = normalizeWhitespace(transcript).toLowerCase();
+  return (
+    /\b(do you know my name|what(?:'s| is) my name|who am i|what do you know about me)\b/i.test(lowered) ||
+    (lowered.includes("my name") && /\b(know|remember|recall|what)\b/i.test(lowered))
+  );
+}
+
 function buildDeferredProfileContextLines(params: {
   isSessionStart: boolean;
   profile?: DeferredProfileContext;
@@ -4055,6 +4066,7 @@ function buildDeferredProfileContextLines(params: {
   avoidanceOrDrift: boolean;
 }) {
   // Deterministic policy:
+  // - identity: only when the user explicitly asks who they are / what their name is
   // - relationships: posture=RELATIONSHIP OR user names a tracked person
   // - patterns: only when bouncer signals avoidance/drift
   // - work context: only for momentum/output_task intent
@@ -4066,6 +4078,11 @@ function buildDeferredProfileContextLines(params: {
   const lines: string[] = [];
   const profile = params.profile;
   const trackedNames = Array.isArray(profile.relationshipNames) ? profile.relationshipNames : [];
+
+  const includeIdentity = isIdentityRequest(params.transcript);
+  if (includeIdentity && profile.preferredNameLine) {
+    lines.push(profile.preferredNameLine);
+  }
 
   const includeRelationships =
     params.posture === "RELATIONSHIP" ||
@@ -5085,6 +5102,8 @@ export async function POST(request: NextRequest) {
 
     const now = new Date();
     const session = await ensureActiveSession(user.id, personaId, now);
+    const timeZone = "Europe/Zagreb";
+    const zoned = getZonedParts(now, timeZone);
 
     // Step 2: Build conversation context
     const contextStart = Date.now();
@@ -5205,8 +5224,6 @@ export async function POST(request: NextRequest) {
     const synapseSessionIngestError = overlayState.synapseSessionIngestError ?? null;
     const overlayUser: OverlayUserState = { ...(overlayState.user ?? {}) };
     // Trajectory rituals are day/week scoped to the user's configured local zone.
-    const timeZone = "Europe/Zagreb";
-    const zoned = getZonedParts(now, timeZone);
     const dayKey = zoned.dayKey;
     const weekStartKey = getWeekStartKey(zoned.dayKey, zoned.weekday);
 
@@ -5960,6 +5977,82 @@ export async function POST(request: NextRequest) {
     }
 
     const model = getChatModelForTurn({ tier: tierForModel });
+
+    // vNext preparation path only: captures the legacy route's already-computed
+    // decision signals into a TurnEvent without executing the vNext runtime.
+    if (env.FEATURE_CHAT_VNEXT_PREPARE_EVENT === "true") {
+      const legacyDecisionSignals = mapLegacyDecisionSignalsFromChatRoute({
+        riskLevel,
+        intent: overlayIntent,
+        pressure,
+        posture,
+        stanceSelected: stanceOverlayType,
+        moment: routingMoment,
+        isDirectRequest: effectiveSignals.isDirectRequest,
+        isUrgent: effectiveSignals.isUrgent,
+        gateAction,
+        gateConfidence,
+        tierSelected,
+        routingReason,
+        safetyModelOverride,
+      });
+      const vnextTurnEvent = buildTurnEventFromChatRouteInput({
+        userId: user.id,
+        personaId,
+        sessionId: session.id,
+        transcript: sttResult.transcript,
+        audio: {
+          mimeType: audioFile.type || undefined,
+          sizeBytes: audioFile.size,
+        },
+        timestampUtc: now.toISOString(),
+        timezone: timeZone,
+        localTime: {
+          date: zoned.dayKey,
+          hour: zoned.hour,
+          weekday: zoned.weekday,
+        },
+        requestId,
+        legacyDecisionSignals,
+      });
+      const vnextSessionContext = mapLegacySessionToSessionContext(
+        session,
+        vnextTurnEvent.sessionId
+      );
+
+      if (
+        env.FEATURE_CONTEXT_DEBUG === "true" &&
+        request.headers.get("x-debug-context") === "1"
+      ) {
+        console.log(
+          "[chat.vnext.prepare]",
+          JSON.stringify({
+            requestId,
+            sessionId: vnextTurnEvent.sessionId,
+            modality: vnextTurnEvent.modality,
+            hasTranscript: Boolean(vnextTurnEvent.transcript),
+            attachments: vnextTurnEvent.attachments?.length ?? 0,
+            legacy_decision_signals: legacyDecisionSignals,
+            session_compare: {
+              legacySessionId: session.id,
+              vnextSessionId: vnextSessionContext.sessionId,
+              sessionIdMatches: session.id === vnextSessionContext.sessionId,
+              inferredIsNewSession: vnextSessionContext.isNewSession,
+              turnCount: {
+                legacy: session.turnCount,
+                vnext: vnextSessionContext.turnCount,
+              },
+              timestamps: {
+                legacyStartedAt: session.startedAt?.toISOString() ?? null,
+                vnextStartedAt: vnextSessionContext.startedAt ?? null,
+                legacyLastActivityAt: session.lastActivityAt?.toISOString() ?? null,
+                vnextLastActivityAt: vnextSessionContext.lastActivityAt ?? null,
+              },
+            },
+          })
+        );
+      }
+    }
 
     await writeOverlayState(user.id, personaId, {
       overlayUsed,
